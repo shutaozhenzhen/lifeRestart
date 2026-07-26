@@ -1,0 +1,7 @@
+{
+  "name": "lifeRestart",
+  "private": true,
+  "scripts": {
+    "test": "pnpm -r test"
+  }
+}
