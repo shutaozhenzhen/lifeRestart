@@ -1,0 +1,34 @@
+node_modules/
+dist/
+docs/
+*.log
+.env
+.env.local
+.DS_Store
+Thumbs.db
+
+# Build output
+out/
+release/
+
+# IDE
+.vscode/
+.idea/
+
+# Test
+coverage/
+
+# pnpm
+.pnpm-store/
+
+# Electron
+electron-builder.yml
+
+# Capacitor
+android/
+ios/
+
+# OS
+*.swp
+*.swo
+*~
