@@ -1,34 +1,43 @@
+# ============================================
+# 人生重开模拟器 — Git 忽略规则
+# ============================================
+
+# 依赖
 node_modules/
+
+# 构建产物
 dist/
 docs/
-*.log
-.env
-.env.local
-.DS_Store
-Thumbs.db
-
-# Build output
 out/
 release/
+
+# 日志
+*.log
+
+# 环境变量（含 API Key）
+.env
+.env.local
 
 # IDE
 .vscode/
 .idea/
 
-# Test
+# 测试覆盖率报告
 coverage/
 
-# pnpm
+# pnpm store（避免提交缓存）
 .pnpm-store/
 
-# Electron
+# Electron 打包配置
 electron-builder.yml
 
-# Capacitor
+# Capacitor 原生壳（自动生成，不提交）
 android/
 ios/
 
-# OS
+# 操作系统文件
+.DS_Store
+Thumbs.db
 *.swp
 *.swo
 *~
