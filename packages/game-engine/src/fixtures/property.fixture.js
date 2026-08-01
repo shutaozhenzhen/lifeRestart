@@ -14,16 +14,44 @@
 //   天赋为字符串 ID 数组（新项目约束）。
 export const AGE_DATA = {
   0: {
-    event: ['10001'],
+    event: ['ev_001'],
     talent: [],
   },
   1: {
-    event: ['10003', '10004'],
+    event: ['ev_001', 'ev_002'],
     talent: [],
   },
   2: {
-    event: ['10005', '10006*2', '10007*0.5', 10008],
+    event: ['ev_002*2', 'ev_003*0.5', 'ev_004'],
     talent: ['t_001', 't_002'],
+  },
+  3: {
+    event: ['ev_001'],
+    talent: [],
+  },
+  4: {
+    event: ['ev_002'],
+    talent: [],
+  },
+  5: {
+    event: ['ev_003', 'ev_004'],
+    talent: [],
+  },
+  6: {
+    event: ['ev_005'],
+    talent: [],
+  },
+  7: {
+    event: ['ev_006'],
+    talent: [],
+  },
+  8: {
+    event: ['ev_001', 'ev_002'],
+    talent: [],
+  },
+  9: {
+    event: ['ev_003'],
+    talent: ['t_002'],
   },
 }
 

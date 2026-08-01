@@ -598,6 +598,7 @@ class Property {
 
   // #ageNext
   // 年龄+1，返回该年龄的事件/天赋列表。
+  // 缺失的年龄（age 数据未覆盖）返回空列表，游戏继续推进。
   //
   // @returns {{age: number, event: Array, talent: Array}}
   ageNext() {
@@ -605,17 +606,22 @@ class Property {
     this.change(this.TYPES.AGE, 1)
     // 读取新年龄。
     const age = this.get(this.TYPES.AGE)
-    // 读取该年龄数据。
-    const { event, talent } = this.getAgeData(age)
+    // 读取该年龄数据（缺失返回空）。
+    const data = this.getAgeData(age)
+    // 事件列表（缺失年龄用空数组）。
+    const event = data ? data.event : []
+    // 天赋列表（缺失年龄用空数组）。
+    const talent = data ? data.talent : []
     // 返回。
     return { age, event, talent }
   }
 
   // #getAgeData
   // 读取指定年龄的事件/天赋数据（深拷贝）。
+  // 缺失的年龄返回 undefined（调用方需自行处理）。
   //
   // @param {number} age - 年龄
-  // @returns {{event: Array, talent: Array}}
+  // @returns {{event: Array, talent: Array}|undefined} 该年龄数据；缺失返回 undefined
   getAgeData(age) {
     // 深拷贝该年龄的数据。
     return this.#clone(this.#ageData[age])

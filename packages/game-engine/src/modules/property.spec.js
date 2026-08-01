@@ -58,12 +58,12 @@ describe('property - initial', () => {
     restartGame()
     // 2 岁的数据（在 initial 时已解析）。
     const data = prop.getAgeData(2)
-    // 事件 10006*2 → ['10006', 2]。
-    expect(data.event).toContainEqual(['10006', 2])
-    // 事件 10007*0.5 → ['10007', 0.5]。
-    expect(data.event).toContainEqual(['10007', 0.5])
-    // 纯数字事件 → ['10008', 1]（默认权重 1）。
-    expect(data.event).toContainEqual(['10008', 1])
+    // 事件 ev_002*2 → ['ev_002', 2]。
+    expect(data.event).toContainEqual(['ev_002', 2])
+    // 事件 ev_003*0.5 → ['ev_003', 0.5]。
+    expect(data.event).toContainEqual(['ev_003', 0.5])
+    // 纯 ID 事件 → ['ev_004', 1]（默认权重 1）。
+    expect(data.event).toContainEqual(['ev_004', 1])
   })
 
   test('keeps talent ids as strings', () => {
@@ -523,9 +523,25 @@ describe('property - isEnd/ageNext', () => {
     const r = prop.ageNext()
     // 年龄 0。
     expect(r.age).toBe(0)
-    // 0 岁的事件列表（AGE_DATA[0].event 解析后为 [['10001', 1]]）。
-    expect(r.event).toEqual([['10001', 1]])
+    // 0 岁的事件列表（AGE_DATA[0].event 解析后为 [['ev_001', 1]]）。
+    expect(r.event).toEqual([['ev_001', 1]])
     // 0 岁的天赋列表为空。
+    expect(r.talent).toEqual([])
+  })
+
+  test('ageNext handles missing age gracefully', () => {
+    // 开局。
+    restartGame()
+    // 推进到超过数据覆盖的年龄（9 岁后）。
+    // 直接推进多次。
+    for (let i = 0; i < 10; i++) prop.ageNext()
+    // 年龄 9（AGE_DATA 覆盖到 9）。
+    // 再推一次到 10（无数据）。
+    const r = prop.ageNext()
+    // 年龄 10。
+    expect(r.age).toBe(10)
+    // 缺失年龄返回空列表而非崩溃。
+    expect(r.event).toEqual([])
     expect(r.talent).toEqual([])
   })
 })

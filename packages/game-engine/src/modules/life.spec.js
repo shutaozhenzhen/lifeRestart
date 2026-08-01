@@ -142,6 +142,8 @@ describe('life - next', () => {
     // 开局。
     life.remake([])
     life.start({})
+    // 拉满生命，防止 0 岁 ev_001 致死干扰断言。
+    life.request('PROPERTY').set('LIF', 100)
     // 推进。
     const r = life.next()
     // 年龄 0。
