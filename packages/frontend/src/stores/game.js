@@ -37,12 +37,22 @@ export const useGameStore = defineStore('game', {
     selectedTalents: [],
     // 每岁事件/天赋流水（响应式）。
     content: [],
+    // 属性分配（CHR/INT/STR/MNY）。
+    allocation: { CHR: 0, INT: 0, STR: 0, MNY: 0 },
+    // 分配边界 [min, max]。
+    allocLimit: [0, 10],
   }),
 
   // 计算属性。
   getters: {
     // 已初始化。
     isReady: (state) => state.initialized && state.life !== null,
+    // 总可用点数（默认 20 + 天赋加成）。
+    propertyPoints: (state) => state.life ? state.life.getPropertyPoints() : 0,
+    // 已分配点数。
+    allocatedTotal: (state) => state.allocation.CHR + state.allocation.INT + state.allocation.STR + state.allocation.MNY,
+    // 剩余点数。
+    leftPoints: (state) => (state.life ? state.life.getPropertyPoints() : 0) - state.allocatedTotal,
   },
 
   // 动作。
@@ -144,6 +154,65 @@ export const useGameStore = defineStore('game', {
       this.content = []
       // 同步。
       this.sync()
+    },
+
+    // 调整单个属性分配。
+    // @param {string} key - 属性键（CHR/INT/STR/MNY）
+    // @param {number} delta - 增量（±1）
+    // @returns {{ok: boolean, message?: string}} 结果
+    adjustAllocation(key, delta) {
+      // 计算新值。
+      const newValue = this.allocation[key] + delta
+      // 单属性边界 [0, max]。
+      const [, max] = this.allocLimit
+      // 超出单属性上限。
+      if (newValue < 0 || newValue > max) return { ok: false, message: `单属性范围 0-${max}` }
+      // 剩余点数不足。
+      if (this.leftPoints - delta < 0) return { ok: false, message: '点数不足' }
+      // 更新分配。
+      this.allocation[key] = newValue
+      // 成功。
+      return { ok: true }
+    },
+
+    // 随机分配全部点数。
+    randomAllocate() {
+      // 可用点数。
+      let t = this.propertyPoints
+      // 每项剩余可加空间（从上限倒扣）。
+      const [, max] = this.allocLimit
+      // 四项初始为剩余空间。
+      const remain = new Array(4).fill(max)
+      // 逐点分配。
+      while (t > 0) {
+        // 随机子步长（1 到 min(t, max)）。
+        const sub = Math.round(Math.random() * (Math.min(t, max) - 1)) + 1
+        // 尝试随机选择一项。
+        while (true) {
+          // 随机项。
+          const select = Math.floor(Math.random() * 4) % 4
+          // 该项剩余空间不足则重选。
+          if (remain[select] - sub < 0) continue
+          // 扣减空间。
+          remain[select] -= sub
+          // 扣减点数。
+          t -= sub
+          // 本子步完成。
+          break
+        }
+      }
+      // 写入四项分配（上限 - 剩余 = 已分配）。
+      const keys = ['CHR', 'INT', 'STR', 'MNY']
+      // 逐项写入。
+      keys.forEach((k, i) => { this.allocation[k] = max - remain[i] })
+      // 成功。
+      return { ok: true }
+    },
+
+    // 重置分配。
+    resetAllocation() {
+      // 全部归零。
+      this.allocation = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
     },
   },
 })

@@ -16,8 +16,12 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import HomeView from '../views/HomeView.vue'
 // 天赋选择页（Step 8）。
 import TalentView from '../views/TalentView.vue'
-// 游戏页占位（Step 9 实现）。
+// 属性分配页（Step 9）。
+import PropertyView from '../views/PropertyView.vue'
+// 人生轨迹页（Step 9）。
 import GameView from '../views/GameView.vue'
+// 人生总结页（Step 10）。
+import SummaryView from '../views/SummaryView.vue'
 
 // 路由表。
 export const router = createRouter({
@@ -29,8 +33,12 @@ export const router = createRouter({
     { path: '/', name: 'home', component: HomeView },
     // 天赋选择页。
     { path: '/talent', name: 'talent', component: TalentView },
-    // 游戏页。
+    // 属性分配页。
+    { path: '/property', name: 'property', component: PropertyView },
+    // 人生轨迹页。
     { path: '/game', name: 'game', component: GameView },
+    // 人生总结页。
+    { path: '/summary', name: 'summary', component: SummaryView },
     // 未知路径回主页。
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],

@@ -53,7 +53,7 @@ function toggle(index) {
   message.value = ''
 }
 
-// 下一步：进入游戏页。
+// 下一步：进入属性分配页。
 function next() {
   // 未选满 3 个。
   if (store.selectedTalents.length < store.life.talentSelectLimit) {
@@ -61,8 +61,8 @@ function next() {
     message.value = `请选择 ${store.life.talentSelectLimit} 个天赋`
     return
   }
-  // 跳转游戏页。
-  router.push('/game')
+  // 跳转属性分配页。
+  router.push('/property')
 }
 </script>
 
