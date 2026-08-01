@@ -126,7 +126,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 初始化。
   event.initial({ events: clone(EVENTS) })
   // 交互循环。
-  runInteractive('event> ', createHandler(
+  runInteractive('> event ', createHandler(
     event,
     () => props,
     p => { props = p },

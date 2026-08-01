@@ -36,13 +36,14 @@ export function parseCommand(line) {
 // #runInteractive
 // 交互主循环：读取一行命令 → 传给 handler → 打印输出 → 直到 handler 返回 {exit:true}。
 // handler 可以是同步或异步（async 时 await 其结果）。
+// prompt 传给 readline，交互时每行前显示（如 "> "）。
 //
-// @param {string} prompt - 命令行提示符
+// @param {string} prompt - 命令行提示符（建议以 "> " 开头）
 // @param {(args: string[]) => {text?: string, exit?: boolean}|Promise<{text?: string, exit?: boolean}>} handler - 命令处理函数
 // @returns {Promise<void>}
 export async function runInteractive(prompt, handler) {
-  // 创建 readline 接口。
-  const rl = createInterface({ input, output })
+  // 创建 readline 接口（传入 prompt，交互时逐行显示）。
+  const rl = createInterface({ input, output, prompt })
   // 循环读取。
   for await (const line of rl) {
     // 解析命令。

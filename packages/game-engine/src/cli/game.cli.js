@@ -262,5 +262,5 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 创建游戏。
   const { handlers } = createGame({ data, random, locale, log: makeCliLogger(process.argv.slice(2), 'game') })
   // 交互循环（handler 是异步的，逐行处理）。
-  runInteractive('人生> ', handlers)
+  runInteractive('> 人生 ', handlers)
 }

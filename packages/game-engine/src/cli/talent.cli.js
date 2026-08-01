@@ -160,5 +160,5 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 配置。
   talent.config()
   // 交互循环。
-  runInteractive('talent> ', createHandler(talent, makeCliLogger(process.argv.slice(2), 'talent')))
+  runInteractive('> talent ', createHandler(talent, makeCliLogger(process.argv.slice(2), 'talent')))
 }

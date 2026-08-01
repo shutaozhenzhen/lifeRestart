@@ -157,5 +157,5 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 注入基础 age 数据（空，原型演示属性操作为主）。
   property.initial({ age: {}, total: {} })
   // 交互循环。
-  runInteractive('property> ', createHandler(property, makeCliLogger(process.argv.slice(2), 'property')))
+  runInteractive('> property ', createHandler(property, makeCliLogger(process.argv.slice(2), 'property')))
 }
