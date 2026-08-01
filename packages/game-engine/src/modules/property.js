@@ -149,6 +149,11 @@ class Property {
     for (const a in age) {
       // 取出该年龄的事件与天赋列表。
       let { event, talent } = age[a]
+      // 幂等保护：event 已是解析后的 [id, weight] 二维数组时跳过。
+      if (Array.isArray(event) && Array.isArray(event[0])) {
+        // 已解析，保留原样。
+        continue
+      }
       // 事件：非数组时按逗号拆分（支持字符串形式）。
       if (!Array.isArray(event)) event = event?.split(',') || []
       // 解析每条事件：可能带 *权重 后缀。

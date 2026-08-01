@@ -61,23 +61,30 @@ class Talent {
       talent.maxTriggers = talent.maxTriggers || 1
       // 处理 replacement（替换链）。
       if (talent.replacement) {
-        // 遍历 replacement 的每个键（grade / talent）。
-        for (const key in talent.replacement) {
-          // 转换结果对象：{ 目标ID: 权重 }。
-          const obj = {}
-          // 遍历该键下的目标数组。
-          for (const value of talent.replacement[key]) {
-            // 支持 "ID*权重" 形式。
-            const parts = `${value}`.split('*')
-            // 目标 ID 保留字符串（原版 Number(value[0]) 已移除）。
-            const targetId = parts[0] || ''
-            // 权重：缺省 1。
-            const weight = Number(parts[1]) || 1
-            // 写入映射。
-            obj[targetId] = weight
+        // 幂等保护：replacement 已是对象映射形式（initial 被多次调用），跳过。
+        const needsParse = (key) => Array.isArray(talent.replacement[key])
+        // 只有 grade/talent 仍是数组才需解析。
+        if (needsParse('grade') || needsParse('talent')) {
+          // 遍历 replacement 的每个键（grade / talent）。
+          for (const key in talent.replacement) {
+            // 非数组跳过（已解析）。
+            if (!Array.isArray(talent.replacement[key])) continue
+            // 转换结果对象：{ 目标ID: 权重 }。
+            const obj = {}
+            // 遍历该键下的目标数组。
+            for (const value of talent.replacement[key]) {
+              // 支持 "ID*权重" 形式。
+              const parts = `${value}`.split('*')
+              // 目标 ID 保留字符串（原版 Number(value[0]) 已移除）。
+              const targetId = parts[0] || ''
+              // 权重：缺省 1。
+              const weight = Number(parts[1]) || 1
+              // 写入映射。
+              obj[targetId] = weight
+            }
+            // 覆盖原 replacement 键为转换后的映射。
+            talent.replacement[key] = obj
           }
-          // 覆盖原 replacement 键为转换后的映射。
-          talent.replacement[key] = obj
         }
       }
     }

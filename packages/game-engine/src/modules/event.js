@@ -44,6 +44,8 @@ class Event {
       const event = events[id]
       // 无 branch 跳过。
       if (!event.branch) continue
+      // 幂等保护：branch 已被解析成二维数组时（initial 被多次调用），直接跳过。
+      if (Array.isArray(event.branch[0])) continue
       // 解析每条分支。
       event.branch = event.branch.map(b => {
         // 按冒号拆分为 [条件, 目标ID]。
