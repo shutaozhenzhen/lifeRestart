@@ -36,26 +36,36 @@ export function parseCommand(line) {
 // #runInteractive
 // 交互主循环：读取一行命令 → 传给 handler → 打印输出 → 直到 handler 返回 {exit:true}。
 // handler 可以是同步或异步（async 时 await 其结果）。
-// prompt 传给 readline，交互时每行前显示（如 "> "）。
+// prompt 通过 setPrompt 设置，并在每次循环后手动 rl.prompt() 重绘（TTY 下显示）。
 //
 // @param {string} prompt - 命令行提示符（建议以 "> " 开头）
 // @param {(args: string[]) => {text?: string, exit?: boolean}|Promise<{text?: string, exit?: boolean}>} handler - 命令处理函数
 // @returns {Promise<void>}
 export async function runInteractive(prompt, handler) {
-  // 创建 readline 接口（传入 prompt，交互时逐行显示）。
-  const rl = createInterface({ input, output, prompt })
+  // 创建 readline 接口。
+  const rl = createInterface({ input, output })
+  // 设置提示符文本。
+  rl.setPrompt(prompt)
+  // 显示首个提示符（TTY 下立即绘制）。
+  rl.prompt()
   // 循环读取。
   for await (const line of rl) {
     // 解析命令。
     const args = parseCommand(line)
-    // 空命令跳过。
-    if (args.length === 0) continue
+    // 空命令跳过（仅重绘提示符）。
+    if (args.length === 0) {
+      // 重新显示提示符。
+      rl.prompt()
+      continue
+    }
     // 调用处理器（await 支持 async handler）。
     const result = await handler(args)
     // 打印输出（如有）。
     if (result.text) console.log(result.text)
     // 请求退出。
     if (result.exit) break
+    // 重新显示提示符。
+    rl.prompt()
   }
   // 关闭接口。
   rl.close()
