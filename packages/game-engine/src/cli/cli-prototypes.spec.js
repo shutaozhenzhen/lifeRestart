@@ -31,6 +31,7 @@ import { check } from '../condition/index.js'
 // fixture。
 import { AGE_DATA, TOTAL } from '../fixtures/property.fixture.js'
 import { TALENTS, EVENTS } from '../fixtures/talent-event.fixture.js'
+import { ACHIEVEMENTS } from '../fixtures/achievement-character.fixture.js'
 
 // 演示属性快照。
 const DEMO_PROPS = { CHR: 10, INT: 8, STR: 5, MNY: 1000, SPR: 60, LIF: 1, AGE: 25, TLT: [], EVT: [] }
@@ -314,83 +315,104 @@ describe('event.cli', () => {
 describe('game.cli', () => {
   // 游戏状态机。
   let game
+  // 构建测试数据。
+  function makeGameData() {
+    // 返回完整数据。
+    return {
+      age: clone(AGE_DATA),
+      total: TOTAL,
+      talents: clone(TALENTS),
+      events: clone(EVENTS),
+      achievements: clone(ACHIEVEMENTS),
+      characters: {},
+    }
+  }
   beforeEach(() => {
     // 创建游戏（固定种子保证可复现）。
     game = createGame({
-      data: { age: clone(AGE_DATA), total: TOTAL, talents: clone(TALENTS), events: clone(EVENTS) },
+      data: makeGameData(),
       random: createRng(7),
     })
   })
 
-  test('draw produces a pool', () => {
+  test('draw produces a pool', async () => {
     // 抽取。
-    const r = game.handlers(['draw'])
+    const r = await game.handlers(['draw'])
     // 天赋池。
     expect(r.text).toContain('天赋池')
     // 池非空。
     expect(game.state.pool.length).toBeGreaterThan(0)
   })
 
-  test('select limits to 3 talents', () => {
+  test('select limits to 3 talents', async () => {
     // 选 4 个。
-    const r = game.handlers(['select', 't_001', 't_002', 't_003', 't_004'])
+    const r = await game.handlers(['select', 't_001', 't_002', 't_003', 't_004'])
     // 超限。
     expect(r.text).toContain('最多选择 3 个')
   })
 
-  test('select detects mutual exclusion', () => {
+  test('select detects mutual exclusion', async () => {
     // 互斥天赋。
-    const r = game.handlers(['select', 't_003', 't_004'])
+    const r = await game.handlers(['select', 't_003', 't_004'])
     // 冲突。
     expect(r.text).toContain('互斥')
   })
 
-  test('full game loop plays one life', () => {
+  test('full game loop plays one life', async () => {
     // 抽取。
-    game.handlers(['draw'])
+    await game.handlers(['draw'])
     // 选中。
-    game.handlers(['select', 't_001', 't_002'])
+    await game.handlers(['select', 't_001', 't_002'])
     // 分配。
-    game.handlers(['alloc', '{"CHR":5,"INT":3}'])
+    await game.handlers(['alloc', '{"CHR":5,"INT":3}'])
     // 开局。
-    game.handlers(['start'])
+    await game.handlers(['start'])
     // 阶段为 play。
     expect(game.state.phase).toBe('play')
     // 推进几年。
     for (let i = 0; i < 3; i++) {
-      const r = game.handlers(['next'])
+      const r = await game.handlers(['next'])
       // 输出年龄。
       expect(r.text).toMatch(/岁/)
     }
     // 总结。
-    const s = game.handlers(['summary'])
-    // 含最终年龄。
-    expect(s.text).toContain('最终年龄')
+    const s = await game.handlers(['summary'])
+    // 含人生总结。
+    expect(s.text).toContain('人生总结')
   })
 
-  test('next before start is blocked', () => {
+  test('next before start is blocked', async () => {
     // 未开局直接推进。
-    const r = game.handlers(['next'])
+    const r = await game.handlers(['next'])
     // 提示先开局。
     expect(r.text).toContain('start')
   })
 
-  test('exit flag set', () => {
+  test('again increments times', async () => {
+    // 开局。
+    await game.handlers(['start'])
+    // 重开。
+    const r = await game.handlers(['again'])
+    // 次数递增。
+    expect(r.text).toContain('重开次数: 1')
+  })
+
+  test('exit flag set', async () => {
     // 退出。
-    const r = game.handlers(['exit'])
+    const r = await game.handlers(['exit'])
     // 退出标记。
     expect(r.exit).toBe(true)
   })
 
-  test('deterministic with same seed', () => {
+  test('deterministic with same seed', async () => {
     // 同种子另一局。
     const game2 = createGame({
-      data: { age: clone(AGE_DATA), total: TOTAL, talents: clone(TALENTS), events: clone(EVENTS) },
+      data: makeGameData(),
       random: createRng(7),
     })
     // 两局走相同命令。
-    game.handlers(['draw'])
-    game2.handlers(['draw'])
+    await game.handlers(['draw'])
+    await game2.handlers(['draw'])
     // 天赋池一致。
     expect(game.state.pool).toEqual(game2.state.pool)
   })

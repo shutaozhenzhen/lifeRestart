@@ -33,9 +33,10 @@ export function parseCommand(line) {
 
 // #runInteractive
 // 交互主循环：读取一行命令 → 传给 handler → 打印输出 → 直到 handler 返回 {exit:true}。
+// handler 可以是同步或异步（async 时 await 其结果）。
 //
 // @param {string} prompt - 命令行提示符
-// @param {(args: string[]) => {text?: string, exit?: boolean}} handler - 命令处理函数
+// @param {(args: string[]) => {text?: string, exit?: boolean}|Promise<{text?: string, exit?: boolean}>} handler - 命令处理函数
 // @returns {Promise<void>}
 export async function runInteractive(prompt, handler) {
   // 创建 readline 接口。
@@ -46,8 +47,8 @@ export async function runInteractive(prompt, handler) {
     const args = parseCommand(line)
     // 空命令跳过。
     if (args.length === 0) continue
-    // 调用处理器。
-    const result = handler(args)
+    // 调用处理器（await 支持 async handler）。
+    const result = await handler(args)
     // 打印输出（如有）。
     if (result.text) console.log(result.text)
     // 请求退出。
