@@ -21,9 +21,8 @@
 // manifest 必填字段。
 const REQUIRED_FIELDS = ['name', 'version']
 
-// #VALID_PERMISSIONS
-// 合法权限集合。
-const VALID_PERMISSIONS = ['ai', 'network', 'storage', 'hooks']
+// 合法权限集合（共享常量）。
+import { VALID_PERMISSIONS } from './permissions.js'
 
 // #validateManifest
 // 校验 manifest 是否合法。

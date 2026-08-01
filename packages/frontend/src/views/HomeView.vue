@@ -82,6 +82,9 @@ async function startGame() {
     <button class="btn" :disabled="loading" @click="startGame">
       {{ loading ? '加载中...' : '↻ 立即重开' }}
     </button>
+
+    <!-- Mod 管理入口 -->
+    <button class="btn ghost" @click="router.push('/mods')">Mod 管理</button>
   </div>
 </template>
 
@@ -145,6 +148,10 @@ async function startGame() {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.btn.ghost {
+  background: transparent;
+  border: 1px solid #2a3a5e;
 }
 </style>
 

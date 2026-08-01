@@ -22,6 +22,8 @@ import PropertyView from '../views/PropertyView.vue'
 import GameView from '../views/GameView.vue'
 // 人生总结页（Step 10）。
 import SummaryView from '../views/SummaryView.vue'
+// Mod 管理页（Step 14）。
+import ModManageView from '../views/ModManageView.vue'
 
 // 路由表。
 export const router = createRouter({
@@ -39,6 +41,8 @@ export const router = createRouter({
     { path: '/game', name: 'game', component: GameView },
     // 人生总结页。
     { path: '/summary', name: 'summary', component: SummaryView },
+    // Mod 管理页。
+    { path: '/mods', name: 'mods', component: ModManageView },
     // 未知路径回主页。
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
