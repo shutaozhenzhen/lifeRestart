@@ -66,8 +66,8 @@ export function createHandler(talent, log) {
         const count = rest[0] ? Number(rest[0]) : 10
         // 抽取天赋池（trace 级追踪）。
         const pool = logger.traceFn('talentRandom', () => talent.talentRandom(null, {}))
-        // 格式化展示（过滤空占位）。
-        const lines = pool.filter(Boolean).map((t, i) => `  [${i}] ${t.name} (${t.grade}级)`)
+        // 格式化展示（索引 + ID 前置，过滤空占位）。
+        const lines = pool.filter(Boolean).map((t, i) => `  [${i}] ${t.id}  ${t.name} (${t.grade}级)`)
         // 输出。
         return { text: `天赋池(${count}):\n${lines.join('\n')}` }
       }

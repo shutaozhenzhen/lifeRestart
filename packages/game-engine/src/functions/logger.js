@@ -38,11 +38,12 @@ const DEFAULT_SINK = {
 
 // #serializeArg
 // 把函数参数序列化为可读文本。
-// 大对象截断，避免日志刷屏。
+// 超过 maxArgLength 截断（默认 200，避免刷屏）；trace 级设为 Infinity 完整显示。
 //
 // @param {*} arg - 任意参数
+// @param {number} maxArgLength - 最大长度；Infinity 不截断
 // @returns {string} 序列化结果
-function serializeArg(arg) {
+function serializeArg(arg, maxArgLength) {
   // 字符串直接返回（加引号）。
   if (typeof arg === 'string') return `"${arg}"`
   // 函数显示为 [Function]。
@@ -51,8 +52,10 @@ function serializeArg(arg) {
   try {
     // JSON 序列化。
     const str = JSON.stringify(arg)
-    // 超长截断。
-    return str && str.length > 200 ? `${str.slice(0, 200)}...` : str
+    // 超长截断（maxArgLength 为 Infinity 时永不截断）。
+    return str && maxArgLength !== Infinity && str.length > maxArgLength
+      ? `${str.slice(0, maxArgLength)}...`
+      : str
   } catch {
     // 无法序列化。
     return String(arg)
@@ -66,8 +69,9 @@ function serializeArg(arg) {
 // @param {string} [params.level] - 最低输出级别（trace/debug/info/warn/error）
 // @param {object} [params.sink] - 输出目标，默认 console
 // @param {string} [params.prefix] - 日志前缀（如模块名）
+// @param {number} [params.maxArgLength] - trace 参数最大显示长度，默认 200
 // @returns {object} 日志器 { trace, debug, info, warn, error, traceFn, setLevel, getLevel }
-export function createLogger({ level = 'info', sink = DEFAULT_SINK, prefix = '' } = {}) {
+export function createLogger({ level = 'info', sink = DEFAULT_SINK, prefix = '', maxArgLength = 200 } = {}) {
   // 当前级别权重。
   let currentLevel = LOG_LEVELS[level] !== undefined ? LOG_LEVELS[level] : LOG_LEVELS.info
 
@@ -122,6 +126,7 @@ export function createLogger({ level = 'info', sink = DEFAULT_SINK, prefix = '' 
     // #traceFn
     // 包装函数并记录每次调用：函数名 + 全部参数（最低级追踪）。
     // 返回原函数的结果（同步/异步均支持）。
+    // 注意：trace 级参数按 maxArgLength 显示（默认 200 截断，设 Infinity 完整）。
     //
     // @param {string} name - 被追踪的函数名
     // @param {Function} fn - 原函数
@@ -129,7 +134,7 @@ export function createLogger({ level = 'info', sink = DEFAULT_SINK, prefix = '' 
     // @returns {*} 原函数返回结果
     traceFn: (name, fn, ...args) => {
       // 记录调用（参数序列化）。
-      emit('trace', `→ ${name}(${args.map(serializeArg).join(', ')})`)
+      emit('trace', `→ ${name}(${args.map(a => serializeArg(a, maxArgLength)).join(', ')})`)
       // 调用原函数。
       const result = fn(...args)
       // 异步函数：追加返回日志。
@@ -139,7 +144,7 @@ export function createLogger({ level = 'info', sink = DEFAULT_SINK, prefix = '' 
           // 成功：记录返回。
           (value) => {
             // 记录返回。
-            emit('trace', `← ${name} → ${serializeArg(value)}`)
+            emit('trace', `← ${name} → ${serializeArg(value, maxArgLength)}`)
             // 透传。
             return value
           },
@@ -153,7 +158,7 @@ export function createLogger({ level = 'info', sink = DEFAULT_SINK, prefix = '' 
         )
       }
       // 同步函数：记录返回。
-      emit('trace', `← ${name} → ${serializeArg(result)}`)
+      emit('trace', `← ${name} → ${serializeArg(result, maxArgLength)}`)
       // 透传。
       return result
     },

@@ -141,6 +141,32 @@ describe('logger - traceFn', () => {
     expect(lines[0]).toContain('[Function]')
   })
 
+  test('truncates long args by default', () => {
+    // trace 级（默认 maxArgLength 200）。
+    const { logger, lines } = makeCapturedLogger('trace')
+    // 长对象参数。
+    const big = Array.from({ length: 50 }, (_, i) => ({ i }))
+    // 调用。
+    logger.traceFn('fn', (x) => x.length, big)
+    // 被截断。
+    expect(lines[0]).toContain('...')
+  })
+
+  test('maxArgLength Infinity shows full args', () => {
+    // trace 级 + 完整显示。
+    const lines = []
+    // 自定义 sink。
+    const sink = { trace: (m) => lines.push(m), debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }
+    // 完整显示 logger。
+    const logger = createLogger({ level: 'trace', sink, maxArgLength: Infinity })
+    // 长对象参数。
+    const big = Array.from({ length: 50 }, (_, i) => ({ i }))
+    // 调用。
+    logger.traceFn('fn', (x) => x.length, big)
+    // 完整显示无省略号。
+    expect(lines[0]).not.toContain('...')
+  })
+
   test('propagates sync exceptions', () => {
     // trace 级。
     const { logger, lines } = makeCapturedLogger('trace')

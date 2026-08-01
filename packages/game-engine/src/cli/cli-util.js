@@ -92,6 +92,7 @@ export function makeRng(argv) {
 
 // #makeCliLogger
 // 创建 CLI 日志器：从 argv 解析 --log-level。
+// trace 级默认完整显示函数参数（maxArgLength=Infinity），其他级别默认 200 截断。
 //
 // @param {string[]} argv - CLI 参数
 // @param {string} [prefix] - 日志前缀（模块名）
@@ -99,6 +100,8 @@ export function makeRng(argv) {
 export function makeCliLogger(argv, prefix = '') {
   // 解析级别。
   const level = parseLogLevel(argv)
+  // trace 级完整显示参数，其他级别默认 200 截断。
+  const maxArgLength = level === 'trace' ? Infinity : 200
   // 创建日志器。
-  return createLogger({ level, prefix })
+  return createLogger({ level, prefix, maxArgLength })
 }
