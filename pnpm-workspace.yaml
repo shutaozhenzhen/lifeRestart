@@ -7,3 +7,6 @@
 packages:
   - 'packages/*'
   - 'platforms/*'
+allowBuilds:
+  esbuild: true
+  vue-demi: true
