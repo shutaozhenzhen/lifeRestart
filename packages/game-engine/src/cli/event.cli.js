@@ -22,7 +22,7 @@ import { clone } from '../functions/util.js'
 // 条件引擎。
 import { check } from '../condition/index.js'
 // 共享交互辅助。
-import { runInteractive } from './cli-util.js'
+import { runInteractive, makeCliLogger } from './cli-util.js'
 
 // #HELP
 // 帮助文本。
@@ -40,20 +40,25 @@ const HELP = `event 原型命令：
 // @param {Event} event - Event 实例
 // @param {() => object} getProps - 获取当前属性快照
 // @param {(p: object) => void} setProps - 更新属性快照
+// @param {object} [log] - 日志器
 // @returns {(args: string[]) => {text: string, exit?: boolean}}
-export function createHandler(event, getProps, setProps) {
+export function createHandler(event, getProps, setProps, log) {
+  // 日志器（缺省 info）。
+  const logger = log || makeCliLogger([], 'event')
   // 返回处理函数。
   return (args) => {
     // 取命令与参数。
     const [cmd, ...rest] = args
+    // 记录命令。
+    logger.debug(`命令: ${cmd} ${rest.join(' ')}`)
     // 按命令分发。
     switch (cmd) {
       case 'get': {
         // 需要一个 ID。
         if (rest.length < 1) return { text: '用法: get <id>' }
-        // 读取事件。
+        // 读取事件（trace 级追踪，捕获缺失错误）。
         try {
-          const e = event.get(rest[0])
+          const e = logger.traceFn('get', () => event.get(rest[0]))
           // 展示摘要。
           const branch = e.branch ? `, 分支: ${e.branch.length}条` : ''
           return { text: `${e.id}: ${e.event}${e.effect ? `, 效果: ${JSON.stringify(e.effect)}` : ''}${branch}` }
@@ -125,5 +130,6 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
     event,
     () => props,
     p => { props = p },
+    makeCliLogger(process.argv.slice(2), 'event'),
   ))
 }

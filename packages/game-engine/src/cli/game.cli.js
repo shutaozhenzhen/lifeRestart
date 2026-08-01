@@ -29,7 +29,7 @@ import { loadLocale, t } from '../i18n/index.js'
 // 数据加载层。
 import { prepareForEngine, convertConditions } from '../data-loader.js'
 // 共享交互辅助。
-import { runInteractive, makeRng, parseCommand } from './cli-util.js'
+import { runInteractive, makeRng, parseCommand, makeCliLogger } from './cli-util.js'
 
 // #buildData
 // 加载默认 fixture 数据（原型用）。
@@ -47,8 +47,11 @@ function buildData() {
 // @param {() => number} [deps.random] - 随机源
 // @param {string} [deps.locale] - 语言名
 // @param {object} [deps.storage] - storage 适配器
+// @param {object} [deps.log] - 日志器
 // @returns {{ state: object, handlers: (args: string[]) => {text: string, exit?: boolean} }}
-export function createGame({ data, random = Math.random, locale = 'zh-cn', storage }) {
+export function createGame({ data, random = Math.random, locale = 'zh-cn', storage, log }) {
+  // 日志器（缺省 info 级）。
+  const logger = log || makeCliLogger([], 'game')
   // 当前语言。
   const localeObj = loadLocale(locale)
   // 事件总线：成就弹窗（原型直接打印）。
@@ -67,6 +70,8 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
     await life.initial()
     // 配置（含属性 judge，供 summary）。
     life.config({ propertyConfig: { judge: makeJudgeConfig() } })
+    // 记录初始化完成。
+    logger.debug('Life 初始化完成')
   })()
 
   // 游戏状态。
@@ -102,11 +107,13 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
     await ready
     // 取命令与参数。
     const [cmd, ...rest] = args
+    // 记录命令调用。
+    logger.debug(`命令: ${cmd} ${rest.join(' ')}`)
     // 按命令分发。
     switch (cmd) {
       case 'draw': {
-        // 抽取天赋池。
-        state.pool = life.talentRandom()
+        // 抽取天赋池（trace 级追踪函数参数）。
+        state.pool = logger.traceFn('talentRandom', () => life.talentRandom())
         // 格式化。
         const lines = state.pool.filter(Boolean).map((x, i) => `  [${i}] ${x.name} (${x.grade}级)`)
         // 输出。
@@ -155,16 +162,20 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
         life.start(state.allocation)
         // 阶段切换。
         state.phase = 'play'
+        // 记录开局。
+        logger.info(`开局: ${JSON.stringify(life.propertys)}`)
         // 输出。
         return { text: `${t(localeObj, 'GAME_Start')} 属性: ${JSON.stringify(life.propertys)}` }
       }
       case 'next': {
         // 未开局。
         if (state.phase !== 'play') return { text: '请先 start 开局' }
-        // 推进一年。
-        const { age, content, isEnd } = life.next()
+        // 推进一年（trace 级追踪）。
+        const { age, content, isEnd } = logger.traceFn('next', () => life.next())
         // 结束。
         state.over = isEnd
+        // 记录推进。
+        logger.debug(`推进到 ${age} 岁，事件 ${content.length} 条`)
         // 格式化流水。
         const lines = content.map(c => {
           // 事件。
@@ -249,7 +260,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
     characters: {},
   }
   // 创建游戏。
-  const { handlers } = createGame({ data, random, locale })
+  const { handlers } = createGame({ data, random, locale, log: makeCliLogger(process.argv.slice(2), 'game') })
   // 交互循环（handler 是异步的，逐行处理）。
   runInteractive('人生> ', handlers)
 }

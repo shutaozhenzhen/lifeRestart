@@ -24,7 +24,7 @@
 import Property from '../modules/property.js'
 import { createRng, clone } from '../functions/util.js'
 // 共享交互辅助。
-import { runInteractive, makeRng, parseCommand } from './cli-util.js'
+import { runInteractive, makeRng, parseCommand, makeCliLogger } from './cli-util.js'
 
 // #HELP
 // 帮助文本。
@@ -44,12 +44,17 @@ const HELP = `property 原型命令：
 // #createHandler
 // 创建命令处理函数（纯逻辑，供 CLI 与测试共用）。
 // @param {Property} property - Property 实例
+// @param {object} [log] - 日志器
 // @returns {(args: string[]) => {text: string, exit?: boolean}}
-export function createHandler(property) {
+export function createHandler(property, log) {
+  // 日志器（缺省 info）。
+  const logger = log || makeCliLogger([], 'property')
   // 返回处理函数。
   return (args) => {
     // 取命令与参数。
     const [cmd, ...rest] = args
+    // 记录命令。
+    logger.debug(`命令: ${cmd} ${rest.join(' ')}`)
     // 按命令分发。
     switch (cmd) {
       case 'restart': {
@@ -62,10 +67,12 @@ export function createHandler(property) {
           // 数字值转数字，否则字符串。
           data[k] = isNaN(Number(v)) ? v : Number(v)
         }
-        // 重启。
-        property.restart(data)
+        // 重启（trace 级追踪）。
+        logger.traceFn('restart', () => property.restart(data))
         // 记录开局基准。
-        property.restartLastStep()
+        logger.traceFn('restartLastStep', () => property.restartLastStep())
+        // 记录。
+        logger.info(`开局: ${JSON.stringify(property.getAll())}`)
         // 输出。
         return { text: `已开局: ${JSON.stringify(property.getAll())}` }
       }
@@ -150,5 +157,5 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 注入基础 age 数据（空，原型演示属性操作为主）。
   property.initial({ age: {}, total: {} })
   // 交互循环。
-  runInteractive('property> ', createHandler(property))
+  runInteractive('property> ', createHandler(property, makeCliLogger(process.argv.slice(2), 'property')))
 }

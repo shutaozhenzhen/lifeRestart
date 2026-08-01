@@ -15,6 +15,7 @@
  *   -l, --legacy <cond>       旧语法条件，可多次（自动 convertLegacy）
  *   -t, --types <json>        数组属性标注，如 '{"TLT":"array"}'
  *   -j, --json                输出 JSON
+ *       --log-level <level>   日志级别（trace/debug/info/warn/error）
  *   -h, --help                帮助
  *
  * 参数解析使用 Node 内置 util.parseArgs，零依赖。
@@ -28,6 +29,8 @@ import { check } from './index.js' // check() — 条件求值
 import { convertLegacy } from './compat.js' // convertLegacy() — 旧语法转换
 // Node 内置：命令行参数解析器（Node 18.3+ 可用）。
 import { parseArgs } from 'node:util'
+// 日志系统。
+import { createLogger, parseLogLevel } from '../functions/logger.js'
 // Node 内置：同步文件读取（属性 JSON 文件）。
 import { readFileSync } from 'node:fs'
 // Node 内置：把文件路径转为 file:// URL，用于判断是否直接运行本文件。
@@ -174,9 +177,13 @@ export function runCli(argv) {
         legacy: { type: 'string', short: 'l', multiple: true },
         types: { type: 'string', short: 't' },
         json: { type: 'boolean', short: 'j' },
+        'log-level': { type: 'string' },
         help: { type: 'boolean', short: 'h' },
       },
     })
+
+    // 创建日志器（从 --log-level 解析级别）。
+    const logger = createLogger({ level: parseLogLevel(argv), prefix: 'condition' })
 
     // 是否要求 JSON 输出。
     const json = values.json === true
@@ -235,8 +242,12 @@ export function runCli(argv) {
       switch (command) {
         case 'check': {
           // check：逐个求值新语法和旧语法条件。
+          // 记录命令。
+          logger.debug(`check: 新语法 ${(values.check ?? []).length} 条, 旧语法 ${(values.legacy ?? []).length} 条`)
           // 新语法条件直接 check()。
           for (const cond of values.check ?? []) {
+            // trace 级记录条件。
+            logger.trace(`条件: ${cond}`)
             // 求值并加入结果。
             results.push(evaluateCondition(cond, cond, props))
           }
@@ -244,6 +255,8 @@ export function runCli(argv) {
           for (const cond of values.legacy ?? []) {
             // 转换为新语法。
             const converted = convertLegacy(cond, types)
+            // trace 级记录转换。
+            logger.trace(`转换: ${cond} → ${converted}`)
             // 求值转换后的表达式。
             results.push(evaluateCondition(cond, converted, props))
           }
@@ -253,8 +266,12 @@ export function runCli(argv) {
         case 'convert': {
           // convert：只转换旧语法为新语法，不求值，不需要属性。
           for (const cond of values.legacy ?? []) {
+            // 转换。
+            const converted = convertLegacy(cond, types)
+            // trace 级记录。
+            logger.trace(`转换: ${cond} → ${converted}`)
             // 转换并加入结果（无求值，result 为 null）。
-            results.push({ source: cond, converted: convertLegacy(cond, types), result: null, error: null })
+            results.push({ source: cond, converted, result: null, error: null })
           }
           // 返回结果，无属性字段。
           return { command, results, json, errors }

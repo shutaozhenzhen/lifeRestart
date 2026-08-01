@@ -25,7 +25,7 @@ import { clone } from '../functions/util.js'
 // 条件引擎（talent 条件用新语法）。
 import { check } from '../condition/index.js'
 // 共享交互辅助。
-import { runInteractive, makeRng } from './cli-util.js'
+import { runInteractive, makeRng, makeCliLogger } from './cli-util.js'
 
 // #HELP
 // 帮助文本。
@@ -48,19 +48,24 @@ const DEMO_PROPS = { CHR: 10, INT: 8, STR: 5, MNY: 1000, SPR: 60, LIF: 1, AGE: 2
 // #createHandler
 // 创建命令处理函数（纯逻辑，供 CLI 与测试共用）。
 // @param {Talent} talent - Talent 实例
+// @param {object} [log] - 日志器
 // @returns {(args: string[]) => {text: string, exit?: boolean}}
-export function createHandler(talent) {
+export function createHandler(talent, log) {
+  // 日志器（缺省 info）。
+  const logger = log || makeCliLogger([], 'talent')
   // 返回处理函数。
   return (args) => {
     // 取命令与参数。
     const [cmd, ...rest] = args
+    // 记录命令。
+    logger.debug(`命令: ${cmd} ${rest.join(' ')}`)
     // 按命令分发。
     switch (cmd) {
       case 'pool': {
         // 池大小：缺省 10。
         const count = rest[0] ? Number(rest[0]) : 10
-        // 抽取天赋池。
-        const pool = talent.talentRandom(null, {})
+        // 抽取天赋池（trace 级追踪）。
+        const pool = logger.traceFn('talentRandom', () => talent.talentRandom(null, {}))
         // 格式化展示（过滤空占位）。
         const lines = pool.filter(Boolean).map((t, i) => `  [${i}] ${t.name} (${t.grade}级)`)
         // 输出。
@@ -155,5 +160,5 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 配置。
   talent.config()
   // 交互循环。
-  runInteractive('talent> ', createHandler(talent))
+  runInteractive('talent> ', createHandler(talent, makeCliLogger(process.argv.slice(2), 'talent')))
 }

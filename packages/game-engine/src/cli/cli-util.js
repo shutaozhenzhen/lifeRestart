@@ -15,6 +15,8 @@ import { createInterface } from 'node:readline'
 import { stdin as input, stdout as output } from 'node:process'
 // 种子随机源（CLI 可注入固定 seed 复现）。
 import { createRng } from '../functions/util.js'
+// 日志系统。
+import { createLogger, parseLogLevel } from '../functions/logger.js'
 
 // #parseCommand
 // 把用户输入的行拆成 [命令, 参数...]。
@@ -75,4 +77,17 @@ export function makeRng(argv) {
   }
   // 无 seed：用真随机。
   return { random: Math.random, seed: null }
+}
+
+// #makeCliLogger
+// 创建 CLI 日志器：从 argv 解析 --log-level。
+//
+// @param {string[]} argv - CLI 参数
+// @param {string} [prefix] - 日志前缀（模块名）
+// @returns {object} 日志器实例
+export function makeCliLogger(argv, prefix = '') {
+  // 解析级别。
+  const level = parseLogLevel(argv)
+  // 创建日志器。
+  return createLogger({ level, prefix })
 }
