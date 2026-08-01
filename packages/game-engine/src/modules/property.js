@@ -563,7 +563,7 @@ class Property {
     // 取当前值。
     const value = this.get(prop)
     // 取该属性的分档配置。
-    const d = this.#judge[prop]
+    const d = this.#judge && this.#judge[prop]
     // 无配置直接返回。
     if (!d) return undefined
     // 分档数量。
