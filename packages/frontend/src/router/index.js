@@ -14,6 +14,8 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 // 导入视图组件。
 import HomeView from '../views/HomeView.vue'
+// 天赋选择页（Step 8）。
+import TalentView from '../views/TalentView.vue'
 // 游戏页占位（Step 9 实现）。
 import GameView from '../views/GameView.vue'
 
@@ -25,6 +27,8 @@ export const router = createRouter({
   routes: [
     // 主页。
     { path: '/', name: 'home', component: HomeView },
+    // 天赋选择页。
+    { path: '/talent', name: 'talent', component: TalentView },
     // 游戏页。
     { path: '/game', name: 'game', component: GameView },
     // 未知路径回主页。

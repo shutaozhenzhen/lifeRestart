@@ -22,21 +22,17 @@ const propsList = [
 const lif = computed(() => (store.life ? store.life.request('PROPERTY').get('LIF') : 1))
 // 是否结束。
 const isEnd = computed(() => (store.life ? store.life.request('PROPERTY').isEnd() : false))
-// 事件流水。
-const content = computed(() => (store.life ? store.life.request('PROPERTY') && store._content || [] : []))
 
-// 简单开局：直接 start。
+// 简单开局：使用已选天赋（从天赋页带入）。
 function startSimple() {
-  // remake 空天赋。
-  store.life.remake([])
-  // 开局。
-  store.start({})
+  // 用 store 的 begin（remake 已选天赋 + start）。
+  store.begin({})
 }
 
 // 推进一年。
 function advance() {
-  // 推进并记录流水。
-  store._content = store.next().content
+  // 推进（store 内记录流水）。
+  store.next()
 }
 </script>
 
@@ -64,10 +60,10 @@ function advance() {
 
     <!-- 事件流水 -->
     <div class="content">
-      <div v-for="(c, i) in content" :key="i" class="event">
+      <div v-for="(c, i) in store.content" :key="i" class="event">
         {{ c.type === 'EVT' ? `[事件] ${c.description}` : `[天赋] ${c.name}` }}
       </div>
-      <p v-if="content.length === 0" class="empty">（无事发生）</p>
+      <p v-if="store.content.length === 0" class="empty">（无事发生）</p>
     </div>
   </div>
 </template>

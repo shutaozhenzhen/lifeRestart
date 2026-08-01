@@ -29,6 +29,14 @@ export const useGameStore = defineStore('game', {
     propertys: {
       AGE: 0, CHR: 0, INT: 0, STR: 0, MNY: 0, SPR: 0,
     },
+    // 游戏模式（custom 自定义 / celebrity 名人）。
+    mode: 'custom',
+    // 天赋池（抽取结果）。
+    talentPool: [],
+    // 已选天赋（ID 数组）。
+    selectedTalents: [],
+    // 每岁事件/天赋流水（响应式）。
+    content: [],
   }),
 
   // 计算属性。
@@ -77,8 +85,65 @@ export const useGameStore = defineStore('game', {
       const result = this.life.next()
       // 同步属性。
       this.sync()
+      // 记录流水。
+      this.content = result.content
       // 返回结果（供组件渲染事件卡片）。
       return result
+    },
+
+    // 设置游戏模式。
+    setMode(mode) {
+      // 记录模式。
+      this.mode = mode
+    },
+
+    // 抽取天赋池。
+    drawTalents() {
+      // 调用引擎抽取。
+      this.talentPool = this.life.talentRandom()
+    },
+
+    // 选中一个天赋（互斥校验 + 限 3 个）。
+    // @param {number} index - 天赋池索引
+    // @returns {{ok: boolean, message?: string}} 结果
+    selectTalent(index) {
+      // 池中天赋。
+      const talent = this.talentPool[index]
+      // 无效索引。
+      if (!talent) return { ok: false, message: '无效索引' }
+      // 已选则取消。
+      if (this.selectedTalents.includes(talent.id)) {
+        // 移除。
+        this.selectedTalents = this.selectedTalents.filter(id => id !== talent.id)
+        // 成功。
+        return { ok: true }
+      }
+      // 限 3 个。
+      if (this.selectedTalents.length >= this.life.talentSelectLimit) {
+        return { ok: false, message: `最多选择 ${this.life.talentSelectLimit} 个天赋` }
+      }
+      // 互斥校验。
+      const conflict = this.life.exclude(this.selectedTalents, talent.id)
+      // 有冲突。
+      if (conflict !== null) {
+        return { ok: false, message: `与 ${conflict} 互斥` }
+      }
+      // 加入选中。
+      this.selectedTalents.push(talent.id)
+      // 成功。
+      return { ok: true }
+    },
+
+    // 开局（remake + start）。
+    begin(allocation = {}) {
+      // 触发替换链。
+      this.life.remake(this.selectedTalents)
+      // 开局。
+      this.life.start(allocation)
+      // 清空流水。
+      this.content = []
+      // 同步。
+      this.sync()
     },
   },
 })
