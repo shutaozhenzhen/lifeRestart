@@ -439,6 +439,26 @@ class Property {
     })
   }
 
+  // #getAll
+  // 返回全部本局属性快照（供 condition 引擎作为 params 求值）。
+  // 包含基础属性 + 派生属性 + 数组属性。
+  //
+  // @returns {object} 全部属性对象
+  getAll() {
+    // 基础属性键列表。
+    const baseKeys = [
+      this.TYPES.AGE, this.TYPES.CHR, this.TYPES.INT,
+      this.TYPES.STR, this.TYPES.MNY, this.TYPES.SPR,
+      this.TYPES.LIF, this.TYPES.TLT, this.TYPES.EVT,
+    ]
+    // 构建快照对象。
+    const all = {}
+    // 逐键取值。
+    for (const key of baseKeys) all[key] = this.get(key)
+    // 返回快照。
+    return all
+  }
+
   // #change
   // 增量修改属性值（游戏中的加减变化都走这里）。
   // 数组属性（TLT/EVT）：
