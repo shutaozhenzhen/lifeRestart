@@ -354,4 +354,39 @@ describe('condition engine', () => {
       expect(check('params.MNY / 2 + 100 < 500', props)).toBe(false)
     })
   })
+
+  // === 测试组 12：允许修改 params ===
+  // 设计约定：check() 传 properties 原引用，不拷贝不冻结。
+  // 条件表达式可以在求值时改写游戏属性（如 params.CHR += 10），这是有意为之。
+  describe('params mutation is allowed', () => {
+    test('scalar property mutation takes effect', () => {
+      // 条件里写 params.CHR = 0，求值后调用方对象的 CHR 被真实改写为 0。
+      expect(() => check('params.CHR = 0', props)).not.toThrow()
+      expect(props.CHR).toBe(0)
+    })
+
+    test('arithmetic mutation takes effect', () => {
+      // params.CHR += 1 在求值后使 CHR 递增。
+      check('params.CHR += 1', props)
+      expect(props.CHR).toBe(1)
+    })
+
+    test('array element mutation takes effect', () => {
+      // push 修改 params.TLT 会真实作用于调用方的原数组。
+      expect(() => check('params.TLT.push("talent_999")', props)).not.toThrow()
+      expect(props.TLT).toEqual(['talent_001', 'talent_002', 'talent_999'])
+    })
+
+    test('original object is passed by reference', () => {
+      // 由于传原引用，写入后原对象立即变化（非快照）。
+      check('params.CHR = 10', props)
+      expect(props.CHR).toBe(10)
+    })
+
+    test('read-only conditions still evaluate', () => {
+      // 不写属性的纯读取条件不受影响。
+      expect(check('params.CHR > 5', props)).toBe(true)
+      expect(check('params.TLT.includes("talent_001")', props)).toBe(true)
+    })
+  })
 })
