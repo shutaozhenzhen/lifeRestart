@@ -259,8 +259,9 @@ describe('life - random/talentRandom', () => {
   test('talentRandom returns pool', () => {
     // 抽取。
     const pool = life.talentRandom()
-    // 池大小 10。
-    expect(pool).toHaveLength(10)
+    // 不超过池大小 10，且全是有效天赋。
+    expect(pool.length).toBeLessThanOrEqual(10)
+    expect(pool.every(t => t && t.id)).toBe(true)
   })
 })
 

@@ -151,11 +151,13 @@ describe('talent - exclude', () => {
 
 // ========== 测试组 5：talentRandom ==========
 describe('talent - talentRandom', () => {
-  test('returns talentPullCount talents', () => {
+  test('returns at most talentPullCount talents', () => {
     // 默认池大小 10。
     const pool = talent.talentRandom(null, {})
-    // 长度。
-    expect(pool).toHaveLength(10)
+    // 不超过 10 个。
+    expect(pool.length).toBeLessThanOrEqual(10)
+    // 所有元素都是有效天赋（无 null/undefined 占位）。
+    expect(pool.every(t => t && t.id)).toBe(true)
   })
 
   test('excludes exclusive talents', () => {
@@ -163,8 +165,8 @@ describe('talent - talentRandom', () => {
     for (let i = 0; i < 20; i++) {
       // 抽池。
       const pool = talent.talentRandom(null, {})
-      // 不含 exclusive 天赋（过滤空占位后断言）。
-      expect(pool.filter(Boolean).every(t => t.id !== 't_005')).toBe(true)
+      // 不含 exclusive 天赋。
+      expect(pool.every(t => t.id !== 't_005')).toBe(true)
     }
   })
 
@@ -180,8 +182,8 @@ describe('talent - talentRandom', () => {
   test('produces no duplicate talent in a pool', () => {
     // 抽池。
     const pool = talent.talentRandom(null, {})
-    // 过滤掉空池占位的 undefined。
-    const ids = pool.filter(Boolean).map(t => t.id)
+    // ID 列表。
+    const ids = pool.map(t => t.id)
     // 去重后长度相同 → 无重复。
     expect(new Set(ids).size).toBe(ids.length)
   })

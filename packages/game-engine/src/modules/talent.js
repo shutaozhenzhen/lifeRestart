@@ -280,27 +280,35 @@ class Talent {
       else talentList[grade].push({ grade, name, description, id })
     }
 
-    // 生成 talentPullCount 个天赋。
-    return new Array(this.#talentPullCount).fill(1).map((v, i) => {
-      // 第一格放继承天赋。
-      if (!i && include) return include
+    // 从数组中按随机下标取出一个并移除（splice 去重）。
+    const pickFrom = (pool) => {
+      // 该池长度。
+      const len = pool.length
+      // 随机下标。
+      const random = Math.floor(this.#random() * len) % len
+      // 取出并移除。
+      return pool.splice(random, 1)[0]
+    }
+
+    // 生成结果：逐格抽取，池空即停（返回实际抽到的数量，不用 null 占位）。
+    const result = []
+    // 第一格放继承天赋。
+    if (include) result.push(include)
+    // 逐格抽取直到满额或池空。
+    while (result.length < this.#talentPullCount) {
       // 随机等级。
       let grade = randomGrade()
-      // 该等级池为空（或不存在）则降级；降到 0 仍为空则用空兜底。
-      // 注意：talentList[grade] 可能 undefined（该等级没有非 exclusive 天赋），
-      // 用 (talentList[grade] || []) 防御；grade<0 时回到 0。
+      // 该等级池为空（或不存在）则降级。
       while (grade > 0 && (talentList[grade] || []).length == 0) grade--
       // 取该等级池（可能为空数组）。
       const pool = talentList[grade] || []
-      // 池为空时返回 undefined 占位（调用方需过滤）。
-      if (pool.length === 0) return undefined
-      // 该等级池长度。
-      const length = pool.length
-      // 随机下标。
-      const random = Math.floor(this.#random() * length) % length
-      // 取出并移除（不重复抽取）。
-      return pool.splice(random, 1)[0]
-    })
+      // 所有等级池都空了 → 停止抽取。
+      if (pool.length === 0) break
+      // 抽出一个。
+      result.push(pickFrom(pool))
+    }
+    // 返回结果。
+    return result
   }
 
   // #random

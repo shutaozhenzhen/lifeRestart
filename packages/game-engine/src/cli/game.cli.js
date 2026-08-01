@@ -134,7 +134,7 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
         // 抽取天赋池（trace 级追踪函数参数）。
         state.pool = logger.traceFn('talentRandom', () => life.talentRandom())
         // 格式化（索引 + ID 前置醒目显示，便于 select 引用）。
-        const lines = state.pool.filter(Boolean).map((x, i) => `  [${i}] ${x.id}  ${x.name} (${x.grade}级)`)
+        const lines = state.pool.map((x, i) => `  [${i}] ${x.id}  ${x.name} (${x.grade}级)`)
         // 输出。
         return { text: `天赋池:\n${lines.join('\n')}` }
       }
