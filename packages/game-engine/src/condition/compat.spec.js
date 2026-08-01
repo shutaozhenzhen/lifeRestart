@@ -1,9 +1,9 @@
 /**
  * compat.js 单元测试 — compat.spec.js
  *
- * 覆盖范围：15 个测试用例，分为两组：
- *   1. 语法转换组（12 用例）：验证每个旧语法模式到 JS 的转换字符串是否正确。
- *   2. 正确性验证组（3 用例）：验证转换后的 JS 表达式在 check() 中求值正确。
+ * 覆盖范围：19 个测试用例，分为两组：
+ *   1. 语法转换组（15 用例）：验证每个旧语法模式到 JS 的转换字符串是否正确。
+ *   2. 正确性验证组（4 用例）：验证转换后的 JS 表达式在 check() 中求值正确。
  *
  * 核心验证点：
  *   - 运算符映射（&→&&、|→||、=→===、!=→!==）
@@ -81,11 +81,34 @@ describe('compat.js - legacy conversion', () => {
     expect(result).toBe('params.CHR === 5')
   })
 
+  // 测试 8b：= 接字符串值（回归测试，与 != 相同的漏洞）。
+  test('= with string value', () => {
+    // CHR=abc 应转换为 params.CHR === "abc"。
+    expect(convertLegacy('CHR=abc')).toBe('params.CHR === "abc"')
+  })
+
   // 测试 9：旧语法 != → JS 的 !==（严格不等）。
   test('!= stays !==', () => {
     // CHR!=5 应转换为 params.CHR !== 5（不是 ===，也不是 !=）。
     const result = convertLegacy('CHR!=5')
     expect(result).toBe('params.CHR !== 5')
+  })
+
+  // 测试 9b：!= 接字符串值（回归测试，修复旧规则只匹配数字的漏洞）。
+  test('!= with string value', () => {
+    // CHR!=abc 应转换为 params.CHR !== "abc"：
+    // 字符串值必须加引号，否则 abc 会变成未定义变量导致 ReferenceError。
+    expect(convertLegacy('CHR!=abc')).toBe('params.CHR !== "abc"')
+    // 带下划线的 ID 值同样要加引号。
+    expect(convertLegacy('CHR!=talent_001')).toBe('params.CHR !== "talent_001"')
+  })
+
+  // 测试 9c：!= 接布尔与浮点值保持字面量。
+  test('!= with boolean and float values', () => {
+    // 布尔字面量不加引号，保留 true/false 语义。
+    expect(convertLegacy('CHR!=true')).toBe('params.CHR !== true')
+    // 浮点数不加引号，按数字解析。
+    expect(convertLegacy('CHR!=5.5')).toBe('params.CHR !== 5.5')
   })
 
   // 测试 10：>= 不变。
@@ -143,5 +166,16 @@ describe('compat.js - conversion correctness', () => {
     // 同时验证非数字值（t_001）被正确加引号，否则 JS 会报未定义变量错误。
     const cond = convertLegacy('TLT?[t_001,t_003]', { TLT: 'array' })
     expect(check(cond, props)).toBe(true)
+  })
+
+  // 测试 16：字符串 != 转换后可在 check() 中正确求值（回归测试）。
+  test('converted string != evaluates correctly', () => {
+    // props.CHR = 10，不是 "abc"，所以 params.CHR !== "abc" → true。
+    const cond = convertLegacy('CHR!=abc')
+    expect(check(cond, props)).toBe(true)
+    // 用字符串属性验证：构造一个 CHR 恰好等于字符串的场景。
+    const stringProps = { CHR: 'abc', TLT: ['t_001'] }
+    const same = convertLegacy('CHR!=abc')
+    expect(check(same, stringProps)).toBe(false)
   })
 })

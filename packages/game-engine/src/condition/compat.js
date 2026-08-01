@@ -64,6 +64,22 @@ function quoteIfNeeded(val) {
   return `"${trimmed}"`
 }
 
+// #formatCmpValue
+// 将比较操作符（=、!=）右侧的值格式化为合法的 JS 字面量。
+// 与 parseValues 的区别：这里是单个值，且需要保留布尔字面量。
+//
+// @param {string} val - 原始值字符串（如 5、true、abc）
+// @returns {string} 格式化后的 JS 字面量
+function formatCmpValue(val) {
+  // 纯数字（含负数和浮点）不加引号，JS 引擎按数字解析。
+  if (/^-?\d+(\.\d+)?$/.test(val)) return val
+  // 布尔字面量不加引号，保留 true/false 语义。
+  if (val === 'true' || val === 'false') return val
+  // 其余一律视为字符串字面量，加双引号。
+  // 这修复了旧规则只认数字导致的 `CHR!=abc` 漏转（abc 既无引号也无前缀）。
+  return `"${val}"`
+}
+
 // #parseValues
 // 将逗号分隔的值列表字符串拆分为数组，逐项处理后再拼合。
 // 输入："1001,talent_001,1002"
@@ -127,19 +143,29 @@ export function convertLegacy(condition, propTypes = {}) {
   // 旧语法用单个 | 表示逻辑或，JS 需要双 ||。
   result = result.replace(/\|/g, ' || ')
 
-  // === 规则 5：!= → !== （不相等） ===
-  // 匹配大写属性名（含可选的 !? 后缀，用于已转换的表达式）后紧接 !=。
-  // 捕获操作符和操作数，重组为 !==。
-  result = result.replace(/([A-Z][A-Z0-9!?]*) *!= *(\d+|true|false)/g, '$1 !== $2')
+  // === 规则 5：!= → !==（不相等） ===
+  // 匹配大写属性名后接 != 再接任意值（数字/布尔/字符串）。
+  // 旧版只匹配 \d+|true|false，导致 CHR!=abc（字符串比较）被漏掉：
+  //   abc 既不加引号也不加 params. 前缀，运行时必然 ReferenceError。
+  // 现在值统一经 formatCmpValue() 格式化：数字/布尔原样，字符串加引号。
+  // 值排除 [\s&|():,[\]] 防止误吞分支格式中的 : 与目标 ID、或数组字面量。
+  result = result.replace(/([A-Z][A-Z0-9!?]*) *!= *([^\s&|():,[\]]+)/g, (_m, prop, val) => {
+    return `${prop} !== ${formatCmpValue(val)}`
+  })
 
   // === 规则 6：>=、<= — 只加空格，不改变操作符 ===
   // 匹配大写属性名后接 >= 或 <= 再接数字。加空格使表达式可读。
   result = result.replace(/([A-Z][A-Z0-9!?]*) *(>=|<=) *(\d+)/g, '$1 $2 $3')
 
   // === 规则 7：= → ===（相等判断） ===
-  // 匹配大写属性名后接 = 再前瞻数字，排除 >=、<=、!= 等。
-  // (?=\d+) 前瞻保证只匹配 = 后面是数字的简单相等情况。
-  result = result.replace(/([A-Z][A-Z0-9!?]*) *= *(?=\d+)/g, '$1 === ')
+  // 匹配大写属性名后接 = 再接任意值（数字/布尔/字符串）。
+  // 与规则 5 同理，值统一经 formatCmpValue() 格式化。
+  // 与 >=、<=、!= 不冲突：它们已在规则 5/6 中处理为带空格的双字符操作符，
+  // 其后的 = 前面是空格而非大写属性名，不会误匹配。
+  // 值排除 [\s&|():,[\]]，理由同规则 5。
+  result = result.replace(/([A-Z][A-Z0-9!?]*) *= *([^\s&|():,[\]]+)/g, (_m, prop, val) => {
+    return `${prop} === ${formatCmpValue(val)}`
+  })
 
   // === 规则 8：> 和 < — 加空格 ===
   // 为 > 和 < 操作符周围添加空格，确保表达式可读。
