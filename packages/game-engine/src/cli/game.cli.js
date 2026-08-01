@@ -12,7 +12,7 @@
  *
  * 交互命令：
  *   draw          抽取天赋池
- *   select <id...> 选中天赋（限3个，互斥校验）
+ *   select <id|索引...> 选中天赋（限3个，索引对应 draw 的 [n]，互斥校验）
  *   alloc <json>  分配属性点
  *   start         开局
  *   next          推进一年
@@ -101,6 +101,25 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
     return judge
   }
 
+  // #resolveTalentId
+  // 解析用户输入为天赋 ID：数字 → 天赋池索引；其他 → 原样当 ID。
+  //
+  // @param {string} input - 用户输入（索引或 ID）
+  // @returns {string|null} 天赋 ID；池中无对应索引返回 null
+  const resolveTalentId = (input) => {
+    // 纯数字：按天赋池索引查找。
+    if (/^\d+$/.test(input)) {
+      // 取池中对应项。
+      const item = state.pool[Number(input)]
+      // 池中无该项。
+      if (!item) return null
+      // 返回其 ID。
+      return item.id
+    }
+    // 非数字：原样当 ID。
+    return input
+  }
+
   // 命令处理器（返回 Promise，因为 Life 初始化是异步的）。
   const handlers = async (args) => {
     // 等待 Life 初始化完成。
@@ -114,18 +133,22 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
       case 'draw': {
         // 抽取天赋池（trace 级追踪函数参数）。
         state.pool = logger.traceFn('talentRandom', () => life.talentRandom())
-        // 格式化。
-        const lines = state.pool.filter(Boolean).map((x, i) => `  [${i}] ${x.name} (${x.grade}级)`)
+        // 格式化（显示索引 + ID + 名称，便于 select 引用）。
+        const lines = state.pool.filter(Boolean).map((x, i) => `  [${i}] ${x.name} (${x.grade}级, id=${x.id})`)
         // 输出。
         return { text: `天赋池:\n${lines.join('\n')}` }
       }
       case 'select': {
         // 需要至少一个 ID。
-        if (rest.length < 1) return { text: '用法: select <id...>' }
+        if (rest.length < 1) return { text: '用法: select <id|索引...>' }
         // 限制 3 个。
         if (rest.length > 3) return { text: '最多选择 3 个天赋' }
+        // 解析所有参数为天赋 ID（支持索引）。
+        const ids = rest.map(resolveTalentId)
+        // 无效索引。
+        if (ids.some(id => id === null)) return { text: '无效的天赋索引（先 draw 抽取）' }
         // 组合候选。
-        const combined = [...state.selected, ...rest]
+        const combined = [...state.selected, ...ids]
         // 互斥校验。
         for (const id of combined) {
           // 冲突。
@@ -134,15 +157,15 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
           if (conflict) return { text: `${id} 与 ${conflict} 互斥` }
         }
         // 记录选中。
-        state.selected = rest
+        state.selected = ids
         // 替换链。
-        const replaced = life.talentReplace([...rest])
+        const replaced = life.talentReplace([...ids])
         // 有替换。
         if (replaced.length > 0) {
-          return { text: `已选: ${rest.join(', ')}\n替换: ${replaced.map(r => `${r.source.name}→${r.target.name}`).join(', ')}` }
+          return { text: `已选: ${ids.join(', ')}\n替换: ${replaced.map(r => `${r.source.name}→${r.target.name}`).join(', ')}` }
         }
         // 无替换。
-        return { text: `已选: ${rest.join(', ')}` }
+        return { text: `已选: ${ids.join(', ')}` }
       }
       case 'alloc': {
         // 需要 JSON。
@@ -228,7 +251,7 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
 // 帮助文本。
 const HELP = `可玩版命令：
   draw               抽取天赋池
-  select <id...>     选中天赋（限3个）
+  select <id|索引...> 选中天赋（限3个）
   alloc <json>       分配属性点
   start              开局
   next               推进一年

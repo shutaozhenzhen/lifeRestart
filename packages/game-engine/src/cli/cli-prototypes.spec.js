@@ -358,6 +358,24 @@ describe('game.cli', () => {
     expect(r.text).toContain('互斥')
   })
 
+  test('select supports pool index', async () => {
+    // 先抽取天赋池。
+    await game.handlers(['draw'])
+    // 取池中第一项的 ID。
+    const firstId = game.state.pool.find(Boolean).id
+    // 用索引 0 选中。
+    const r = await game.handlers(['select', '0'])
+    // 已选中第一项。
+    expect(r.text).toContain(firstId)
+  })
+
+  test('select rejects invalid index', async () => {
+    // 未抽取时用索引。
+    const r = await game.handlers(['select', '999'])
+    // 提示无效索引。
+    expect(r.text).toContain('无效')
+  })
+
   test('full game loop plays one life', async () => {
     // 抽取。
     await game.handlers(['draw'])
