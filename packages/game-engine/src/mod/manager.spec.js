@@ -219,6 +219,37 @@ describe('datamod - buildDataMod', () => {
     expect(mod.events.e1.branch[0][0]).toBe('params.CHR > 7')
   })
 
+  test('stringifies exclude and parses age event weights', () => {
+    // 原始数据（exclude 混合数字/字符串，age 事件混合数字与 "id*权重" 字符串）。
+    const raw = {
+      talents: { t1: { id: 't1', exclude: [1004, '1025'] } },
+      age: { 0: { event: ['10001*110', 10110, '10494*999999'] }, 1: { event: [10111] } },
+    }
+    // 打包。
+    const mod = buildDataMod(raw)
+    // exclude 全部字符串化。
+    expect(mod.talents.t1.exclude).toEqual(['1004', '1025'])
+    // age 事件解析为 [id, weight] 二维数组（标准结构）。
+    expect(mod.age['0'].event).toEqual([['10001', 110], ['10110', 1], ['10494', 999999]])
+    expect(mod.age['1'].event).toEqual([['10111', 1]])
+  })
+
+  test('parses talent replacement into weight map', () => {
+    // 原始数据（replacement.talent 混合数字 ID 与 "ID*权重" DSL）。
+    const raw = {
+      talents: {
+        t1: { id: 't1', replacement: { talent: [1141, '1033*6'], grade: [2] } },
+      },
+    }
+    // 打包。
+    const mod = buildDataMod(raw)
+    // 数组解析为对象映射。
+    expect(mod.talents.t1.replacement).toEqual({
+      talent: { '1141': 1, '1033': 6 },
+      grade: { '2': 1 },
+    })
+  })
+
   test('does not mutate original data', () => {
     // 原始数据。
     const raw = { talents: { t1: { id: 't1', condition: 'CHR>5' } } }

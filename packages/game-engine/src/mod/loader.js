@@ -10,7 +10,7 @@
  *   6. 合并所有 Mod 的数据（后加载覆盖）
  *
  * 数据文件约定（Mod 包结构 6.2）：
- *   talents.json / events.json / achievements.json / characters.json
+ *   age.json / talents.json / events.json / achievements.json / characters.json
  *   manifest.json / code.js（可选入口）
  */
 
@@ -96,7 +96,7 @@ export function loadMod(mod, log) {
   // 数据结果。
   const data = {}
   // 数据文件名列表。
-  const files = ['talents.json', 'events.json', 'achievements.json', 'characters.json']
+  const files = ['age.json', 'talents.json', 'events.json', 'achievements.json', 'characters.json']
   // 逐个读取。
   for (const file of files) {
     // 文件路径。
@@ -149,9 +149,13 @@ export function createModLoader({ modsDir, log }) {
 
     // #loadAll
     // 按序加载所有 Mod，合并数据（后加载覆盖）。
+    // 可选执行每个 Mod 的 code.js：传 createAPI(name, data) 回调，返回该 Mod 的 gameAPI。
+    // code.js 通过 gameAPI 注册钩子/操作数据；执行异常被隔离（不影响其他 Mod）。
     //
+    // @param {object} [deps]
+    // @param {(name: string, data: object) => object} [deps.createAPI] - 创建 gameAPI 的回调
     // @returns {{data: object, codeList: Array<{name: string, code: string|null}>}} 合并数据
-    loadAll() {
+    loadAll({ createAPI } = {}) {
       // 合并数据。
       const merged = {}
       // 代码列表。
@@ -169,6 +173,21 @@ export function createModLoader({ modsDir, log }) {
         }
         // 记录代码。
         codeList.push({ name, code })
+        // 有代码入口且提供了 createAPI：执行 code.js。
+        if (code && createAPI) {
+          // 创建该 Mod 的 gameAPI（共享合并数据）。
+          const gameAPI = createAPI(name, merged)
+          // 执行代码（异常隔离）。
+          try {
+            // new Function 编译并执行，注入 gameAPI（作用域隔离）。
+            new Function('gameAPI', '"use strict";\n' + code)(gameAPI)
+            // 日志。
+            logger.debug(`执行 ${name}/code.js`)
+          } catch (e) {
+            // 记录。
+            logger.error(`执行 ${name}/code.js 失败: ${e.message}`)
+          }
+        }
       }
       // 返回。
       return { data: merged, codeList }

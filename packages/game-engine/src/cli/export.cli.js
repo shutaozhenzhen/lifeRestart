@@ -2,12 +2,14 @@
  * 人生轨迹导出 CLI（Step 11：冒烟对比基础）
  *
  * 用法：
- *   node src/cli/export.cli.js --seed <n> [--years <n>] [--talents t_001,t_002]
+ *   node src/cli/export.cli.js --seed <n> [--years <n>] [--talents t_001,t_002] [--data <dir>]
  *
  * 功能：
  *   1. 用固定 seed 跑完整一局，导出每岁的属性/事件/天赋流水为 JSON。
  *   2. 同 seed 两次运行输出必须完全一致（可复现性验证）。
  *   3. 为 Step 26 跨平台一致性对比提供标准输出格式。
+ *
+ * --data <dir> 加载原版 JSON（如 remake 的 public/data）；缺省用 fixture。
  *
  * 输出格式：
  *   { seed, mode, years: [{ age, props, events, talents }], end: { age, reason } }
@@ -18,25 +20,8 @@ import Life from '../modules/life.js'
 import { clone, createRng } from '../functions/util.js'
 // 共享辅助。
 import { makeRng, makeCliLogger } from './cli-util.js'
-// fixture 数据（静态导入，避免顶层 await）。
-import { AGE_DATA, TOTAL } from '../fixtures/property.fixture.js'
-import { TALENTS, EVENTS } from '../fixtures/talent-event.fixture.js'
-import { ACHIEVEMENTS } from '../fixtures/achievement-character.fixture.js'
-
-// #buildData
-// 组装演示数据（与 game.cli 一致）。
-// @returns {object} 数据
-function buildData() {
-  // 返回完整数据。
-  return {
-    age: clone(AGE_DATA),
-    total: TOTAL,
-    talents: clone(TALENTS),
-    events: clone(EVENTS),
-    achievements: clone(ACHIEVEMENTS),
-    characters: {},
-  }
-}
+// 数据加载（--data 原版 JSON / 缺省 fixture）。
+import { loadData } from './game.cli.js'
 
 // #runLife
 // 用给定 seed 跑完整一局，返回可复现的轨迹 JSON。
@@ -47,13 +32,16 @@ function buildData() {
 // @param {Array<string>} [params.talents] - 已选天赋
 // @param {object} [params.allocation] - 属性分配
 // @param {number} [params.startLif] - 起始生命（默认 1，设大便于长轨迹对比）
+// @param {string} [params.dataDir] - --data 数据目录（原版 JSON）
 // @param {object} [params.log] - 日志器
 // @returns {Promise<object>} 轨迹 JSON
-export async function runLife({ seed, years = 100, talents = [], allocation = {}, startLif = 1, log }) {
+export async function runLife({ seed, years = 100, talents = [], allocation = {}, startLif = 1, dataDir, log }) {
   // 日志器。
   const logger = log || makeCliLogger([], 'export')
+  // 加载数据（--data → 原版 JSON，缺省 → fixture）。
+  const data = await loadData({ dataDir })
   // 创建 Life（固定种子 RNG）。
-  const life = new Life({ data: buildData(), random: createRng(seed) })
+  const life = new Life({ data, random: createRng(seed) })
   // 初始化。
   await life.initial()
   // 配置（含 judge）。
@@ -131,7 +119,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
     // 无 seed 报错。
     if (seed === null) {
       // 提示。
-      console.error('用法: node export.cli.js --seed <n> [--years <n>] [--start-lif <n>]')
+      console.error('用法: node export.cli.js --seed <n> [--years <n>] [--start-lif <n>] [--data <dir>]')
       // 退出。
       process.exit(1)
     }
@@ -144,8 +132,11 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
     // 起始生命。
     const lifIdx = argv.indexOf('--start-lif')
     const startLif = lifIdx !== -1 ? Number(argv[lifIdx + 1]) : 1
+    // 数据目录（原版 JSON）。
+    const dataIdx = argv.indexOf('--data')
+    const dataDir = dataIdx !== -1 ? argv[dataIdx + 1] : undefined
     // 运行。
-    const result = await runLife({ seed, years, talents, startLif })
+    const result = await runLife({ seed, years, talents, startLif, dataDir })
     // 输出 JSON。
     console.log(JSON.stringify(result, null, 2))
   })()

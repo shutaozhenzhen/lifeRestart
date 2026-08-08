@@ -2,13 +2,18 @@
  * 人生重开模拟器 — 可玩版 CLI 原型（Step 5：Life 编排器版）
  *
  * 用法：
- *   node src/cli/game.cli.js [--seed <n>] [--locale zh-cn|en-us] [--data <json>]
+ *   node src/cli/game.cli.js [--seed <n>] [--locale zh-cn|en-us] [--data <dir>]
  *
  * 相比旧版 game.cli.js，本次重构：
  *   1. 用 Life 编排器整合全部模块（property/talent/event/achievement）。
  *   2. 支持 i18n 切换（--locale）。
  *   3. times 重开次数递增。
- *   4. 支持 --data 传入 JSON 数据（Step 6 数据加载层对接点）。
+ *   4. 支持 --data 加载原版 JSON（Step 6 数据加载层对接点）。
+ *
+ * --data <dir> 指向数据目录（内含 {locale}/talents.json 等），
+ * 例如 remake 的 public/data：node src/cli/game.cli.js --data ../remake/public/data
+ * 加载后经 prepareForEngine（ID 字符串化）+ convertConditions（旧语法→新语法）再进引擎。
+ * 缺省 --data 时使用内置 fixture 数据（原型演示）。
  *
  * 交互命令：
  *   draw          抽取天赋池
@@ -26,17 +31,62 @@
 import Life from '../modules/life.js'
 import { clone, createRng } from '../functions/util.js'
 import { loadLocale, t } from '../i18n/index.js'
-// 数据加载层。
-import { prepareForEngine, convertConditions } from '../data-loader.js'
+// 数据加载层：createLoader（真实数据）/ prepareForEngine / convertConditions。
+import { createLoader, prepareForEngine, convertConditions } from '../data-loader.js'
 // 共享交互辅助。
 import { runInteractive, makeRng, parseCommand, makeCliLogger } from './cli-util.js'
+// Node 内置：本地文件读取（实现注入式 fetch，浏览器端用原生 fetch）。
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
-// #buildData
-// 加载默认 fixture 数据（原型用）。
-// @returns {object} 数据
-function buildData() {
-  // 引用 fixture（Node 运行时动态加载）。
-  return { source: 'fixture' }
+// #makeNodeFetch
+// 创建本地文件 fetch：把 (baseUrl/locale/file) 拼成真实路径读取 JSON。
+// 浏览器端无需此函数（原生 fetch 直接可用）。
+//
+// @param {string} dataDir - 数据目录根路径（如 ../remake/public/data）
+// @returns {(url: string) => Promise<{ok: boolean, json: () => Promise<object>}>}
+function makeNodeFetch(dataDir) {
+  // 返回 fetch 实现。
+  return async (url) => {
+    // 拼成文件路径（url 形如 /zh-cn/talents.json）。
+    const file = join(dataDir, url.replace(/^\/+/, ''))
+    // 读取 JSON（缺失文件抛错由调用方处理）。
+    const json = JSON.parse(await readFile(file, 'utf8'))
+    // 返回 { ok, json }。
+    return { ok: true, json: async () => json }
+  }
+}
+
+// #loadData
+// 加载引擎数据：有 --data 用原版 JSON（走加载层 + 转换），否则用 fixture。
+//
+// @param {object} params
+// @param {string|undefined} params.dataDir - --data 指向的数据目录
+// @param {string} [params.locale] - 语言目录名
+// @returns {Promise<object>} 引擎数据 { age, talents, events, achievements, characters }
+export async function loadData({ dataDir, locale = 'zh-cn' }) {
+  // 指定了数据目录：加载原版 JSON。
+  if (dataDir) {
+    // 创建加载器（注入本地文件 fetch）。
+    const loader = createLoader({ fetch: makeNodeFetch(dataDir), baseUrl: '', locale })
+    // 加载全部数据文件。
+    const raw = await loader.loadAll()
+    // ID 字符串化 + 旧语法转新语法。
+    return convertConditions(prepareForEngine(raw))
+  }
+  // 缺省：加载内置 fixture 数据（原型演示）。
+  const { AGE_DATA, TOTAL } = await import('../fixtures/property.fixture.js')
+  const { TALENTS, EVENTS } = await import('../fixtures/talent-event.fixture.js')
+  const { ACHIEVEMENTS } = await import('../fixtures/achievement-character.fixture.js')
+  // 组装引擎数据。
+  return {
+    age: clone(AGE_DATA),
+    total: TOTAL,
+    talents: clone(TALENTS),
+    events: clone(EVENTS),
+    achievements: clone(ACHIEVEMENTS),
+    characters: {},
+  }
 }
 
 // #createGame
@@ -269,19 +319,11 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 解析语言。
   const localeArg = process.argv.findIndex(a => a === '--locale')
   const locale = localeArg !== -1 ? process.argv[localeArg + 1] : 'zh-cn'
-  // 加载 fixture 数据（与 Step 6 数据加载层对接）。
-  const { AGE_DATA, TOTAL } = await import('../fixtures/property.fixture.js')
-  const { TALENTS, EVENTS } = await import('../fixtures/talent-event.fixture.js')
-  const { ACHIEVEMENTS } = await import('../fixtures/achievement-character.fixture.js')
-  // 组装引擎数据。
-  const data = {
-    age: clone(AGE_DATA),
-    total: TOTAL,
-    talents: clone(TALENTS),
-    events: clone(EVENTS),
-    achievements: clone(ACHIEVEMENTS),
-    characters: {},
-  }
+  // 解析 --data（指向数据目录，如 remake 的 public/data）。
+  const dataArg = process.argv.findIndex(a => a === '--data')
+  const dataDir = dataArg !== -1 ? process.argv[dataArg + 1] : undefined
+  // 加载引擎数据（--data → 原版 JSON；缺省 → fixture）。
+  const data = await loadData({ dataDir, locale })
   // 创建游戏。
   const { handlers } = createGame({ data, random, locale, log: makeCliLogger(process.argv.slice(2), 'game') })
   // 交互循环（handler 是异步的，逐行处理）。

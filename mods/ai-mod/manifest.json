@@ -1,0 +1,13 @@
+{
+  "name": "ai-mod",
+  "version": "1.0.0",
+  "author": "lifeRestart",
+  "description": "AI 增强 Mod（系统内置，可通过 gameAPI.ai 调用生成天赋/事件）",
+  "system": true,
+  "permissions": ["ai", "network", "storage", "hooks"],
+  "ai": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "baseUrl": "https://api.openai.com/v1"
+  }
+}

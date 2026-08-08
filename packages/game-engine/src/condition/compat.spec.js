@@ -56,8 +56,9 @@ describe('compat.js - legacy conversion', () => {
   // 测试 5：?[ 用于数组属性。
   test('? with array prop', () => {
     // TLT 是数组，转换结果应为 TLT.some(id => [...].includes(id))。
+    // 数组元素是字符串 ID（运行时 prepareForEngine 字符串化），所以值加引号。
     const result = convertLegacy('TLT?[1001,1002]', { TLT: 'array' })
-    expect(result).toBe('params.TLT.some(id => [1001,1002].includes(id))')
+    expect(result).toBe('params.TLT.some(id => ["1001","1002"].includes(id))')
   })
 
   // 测试 6：![ 用于标量属性（非成员判断）。
@@ -70,8 +71,9 @@ describe('compat.js - legacy conversion', () => {
   // 测试 7：![ 用于数组属性。
   test('! with array prop', () => {
     // TLT 是数组，!TLT.some(id => [...].includes(id)) 表示 TLT 与列表无交集。
+    // 数组元素是字符串 ID，值加引号。
     const result = convertLegacy('TLT![1001]', { TLT: 'array' })
-    expect(result).toBe('!params.TLT.some(id => [1001].includes(id))')
+    expect(result).toBe('!params.TLT.some(id => ["1001"].includes(id))')
   })
 
   // 测试 8：旧语法 = → JS 的 ===（严格相等）。
@@ -133,7 +135,7 @@ describe('compat.js - legacy conversion', () => {
       CHR: 'scalar', AGE: 'scalar', TLT: 'array'
     })
     expect(result).toBe(
-      'params.CHR > 5 && [18,30].includes(params.AGE) || params.TLT.some(id => [1001].includes(id))'
+      'params.CHR > 5 && [18,30].includes(params.AGE) || params.TLT.some(id => ["1001"].includes(id))'
     )
   })
 })

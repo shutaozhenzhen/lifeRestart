@@ -1,0 +1,17 @@
+{
+  "name": "ai-mod",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AI Mod：以 Mod 形态提供 AI 增强（钩子注册 + 生成 + 校验）",
+  "main": "src/ai-mod.js",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "game-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  }
+}

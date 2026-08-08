@@ -446,20 +446,21 @@ class Property {
 
   // #getAll
   // 返回全部本局属性快照（供 condition 引擎作为 params 求值）。
-  // 包含基础属性 + 派生属性 + 数组属性。
+  // 覆盖 TYPES 中所有可求值属性：基础 + 派生 + 统计 + 特殊。
+  // 原版 checkProp 用 property.get(prop) 取任意属性，这里等价地全部展开，
+  // 保证旧数据条件（如 HAGE>79、TMS>99、ATLT?[1023]）能正确求值。
   //
   // @returns {object} 全部属性对象
   getAll() {
-    // 基础属性键列表。
-    const baseKeys = [
-      this.TYPES.AGE, this.TYPES.CHR, this.TYPES.INT,
-      this.TYPES.STR, this.TYPES.MNY, this.TYPES.SPR,
-      this.TYPES.LIF, this.TYPES.TLT, this.TYPES.EVT,
-    ]
     // 构建快照对象。
     const all = {}
-    // 逐键取值。
-    for (const key of baseKeys) all[key] = this.get(key)
+    // 遍历所有属性类型键。
+    for (const key in this.TYPES) {
+      // 跳过特殊随机属性（RDM 无固定值，条件中不使用）。
+      if (key === this.TYPES.RDM) continue
+      // 逐个求值（get() 内部处理派生/统计/特殊逻辑）。
+      all[this.TYPES[key]] = this.get(this.TYPES[key])
+    }
     // 返回快照。
     return all
   }

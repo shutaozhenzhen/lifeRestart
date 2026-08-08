@@ -11,6 +11,9 @@ docs/
 out/
 release/
 
+# Data Mod 生成产物（由 data-mod.cli.js 落盘生成，勿提交）
+mods/lifeRestart-data/
+
 # 日志
 *.log
 

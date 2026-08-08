@@ -17,6 +17,11 @@
 // 兼容层（旧语法转换，Data Mod 打包用）。
 import { convertLegacy } from './condition/compat.js'
 
+// #ARRAY_PROPS
+// 默认数组属性集合（成员判断用 .some()，值转字符串 ID）。
+// 属性系统 TYPES 中，TLT/EVT/ATLT/AEVT/ACHV 都是数组（ID 列表）。
+export const ARRAY_PROPS = ['TLT', 'EVT', 'ATLT', 'AEVT', 'ACHV']
+
 // #createLoader
 // 创建数据加载器。
 //
@@ -116,30 +121,41 @@ export function prepareForEngine(data) {
 
 // #convertConditions
 // 把数据中的旧语法条件转换为新语法（构建期 Data Mod 打包用）。
+// branch 的解析与运行时 event.js 保持一致：扁平字符串 "cond:目标ID" 拆成 [条件, 目标]。
+// 转换后 branch 保持扁平格式，运行时 initial() 自行拆分（幂等保护已覆盖）。
 //
 // @param {object} data - 准备后的数据
 // @param {object} propTypes - 属性类型映射 { TLT: 'array', ... }
 // @returns {object} 转换后的数据
 export function convertConditions(data, propTypes = {}) {
+  // 合并默认数组属性标注（调用方可覆盖）。
+  const types = { ...Object.fromEntries(ARRAY_PROPS.map(p => [p, 'array'])), ...propTypes }
   // 深拷贝。
   const result = structuredClone(data)
   // 转换 talents 的 condition。
   const convertTalent = (talent) => {
     // 有 condition 则转换。
-    if (talent.condition) talent.condition = convertLegacy(talent.condition, propTypes)
+    if (talent.condition) talent.condition = convertLegacy(talent.condition, types)
     // 返回。
     return talent
   }
   // 转换 events 的 include/exclude/branch 条件。
   const convertEvent = (event) => {
     // include 条件。
-    if (event.include) event.include = convertLegacy(event.include, propTypes)
+    if (event.include) event.include = convertLegacy(event.include, types)
     // exclude 条件。
-    if (event.exclude) event.exclude = convertLegacy(event.exclude, propTypes)
-    // branch 数组：每项 [条件, 目标]。
+    if (event.exclude) event.exclude = convertLegacy(event.exclude, types)
+    // branch：扁平字符串数组 ["条件:目标ID", ...]，逐条拆分后转换条件部分。
     if (event.branch) {
-      // 转换每条分支条件。
-      event.branch = event.branch.map(([cond, target]) => [convertLegacy(cond, propTypes), target])
+      // 拆分并转换每条分支。
+      event.branch = event.branch.map(b => {
+        // 幂等：已是 [条件, 目标] 二维数组则直接转换条件部分。
+        if (Array.isArray(b)) return [convertLegacy(b[0], types), b[1]]
+        // 按最后一个冒号拆分 [条件, 目标ID]（条件本身不含冒号，目标 ID 是纯数字/ID）。
+        const idx = b.lastIndexOf(':')
+        // 转换条件部分。
+        return `${convertLegacy(b.slice(0, idx), types)}:${b.slice(idx + 1)}`
+      })
     }
     // 返回。
     return event
@@ -147,7 +163,7 @@ export function convertConditions(data, propTypes = {}) {
   // 转换 achievements 的 condition。
   const convertAchievement = (ach) => {
     // 有 condition 则转换。
-    if (ach.condition) ach.condition = convertLegacy(ach.condition, propTypes)
+    if (ach.condition) ach.condition = convertLegacy(ach.condition, types)
     // 返回。
     return ach
   }

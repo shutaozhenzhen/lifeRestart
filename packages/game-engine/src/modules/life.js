@@ -31,14 +31,17 @@ class Life {
   // @param {() => number} [deps.random] - 随机源
   // @param {object} [deps.storage] - storage 适配器
   // @param {() => number} [deps.now] - 时间戳函数
-  // @param {(tag: string, data: *) => void} [deps.emit] - 事件总线
-  constructor({ data, random = Math.random, storage, now, emit = () => {} } = {}) {
+  // @param {(tag: string, data: *) => void} [deps.emit] - 事件总线（成就通知等业务事件）
+  // @param {object} [deps.hooks] - Mod 钩子总线（{ emit }），AI Mod 等通过它介入游戏流程
+  constructor({ data, random = Math.random, storage, now, emit = () => {}, hooks } = {}) {
     // 保存数据。
     this.#data = data || {}
     // 保存随机源。
     this.#random = random
     // 保存事件总线。
     this.#emit = emit
+    // 保存 Mod 钩子总线（缺省空操作）。
+    this.#hooks = hooks || { emit: () => [], emitSync: () => [] }
     // 属性实例。
     this.#property = new Property({ clone: cloneUtil, storage, random })
     // 条件求值闭包：用当前属性快照（所有模块共享）。
@@ -80,6 +83,7 @@ class Life {
   #data
   #random
   #emit
+  #hooks
   #triggerTalents      // 天赋触发计数
   #defaultPropertyPoints // 默认属性点数
   #talentSelectLimit   // 天赋选择上限
@@ -236,6 +240,7 @@ class Life {
 
   // #next
   // 推进一年：触发天赋 + 随机事件。
+  // 触发 onYearAdvance 钩子（payload 引用传递，钩子可向 content 注入额外内容）。
   //
   // @returns {{age: number, content: Array, isEnd: boolean}}
   next() {
@@ -249,6 +254,8 @@ class Life {
     const isEnd = this.#property.isEnd()
     // 汇总流水。
     const content = [talentContent, eventContent].flat()
+    // Mod 钩子：翻年时机（可注入 AI 生成事件/天赋）。
+    this.#hooks.emitSync('onYearAdvance', { age, content, isEnd })
     // 轨迹成就检测。
     this.#achievement.achieve(this.AchievementOpportunity.TRAJECTORY)
     // 返回。
@@ -370,16 +377,21 @@ class Life {
 
   // #talentRandom
   // 随机天赋池。
+  // 触发 onTalentPoolGenerate 钩子（payload.pool 引用传递，钩子可追加 AI 天赋）。
   //
   // @returns {Array<object>} 天赋对象列表
   talentRandom() {
     // 调用天赋模块。
-    return this.#talent.talentRandom(
+    const pool = this.#talent.talentRandom(
       // 继承天赋。
       this.lastExtendTalent,
       // 加成属性值。
       this.#getPropertys(this.PropertyTypes.TMS, this.PropertyTypes.CACHV)
     )
+    // Mod 钩子：天赋池生成（AI 可向 pool 注入生成的天赋）。
+    this.#hooks.emitSync('onTalentPoolGenerate', { pool })
+    // 返回。
+    return pool
   }
 
   // #characterRandom
@@ -445,12 +457,14 @@ class Life {
 
   // #format
   // 格式化模板字符串（{age} {charm} 等占位符）。
+  // 触发 onEventRender 钩子：AI 可在占位符替换后润色描述文本。
+  // 钩子返回值若为字符串，则覆盖格式化结果。
   //
   // @param {string} description - 含占位符的文本
   // @returns {string} 格式化结果
   format(description) {
     // 替换所有 {xxx} 占位符。
-    return `${description}`.replaceAll(/\{\s*[0-9a-zA-Z_-]+\s*?\}/g, (match) => {
+    const formatted = `${description}`.replaceAll(/\{\s*[0-9a-zA-Z_-]+\s*?\}/g, (match) => {
       // 取占位符内部键名。
       const key = match.slice(1, -1).trim().toLowerCase()
       // 按键名映射为属性值。
@@ -466,6 +480,15 @@ class Life {
         default: return match
       }
     })
+    // Mod 钩子：渲染时机（AI 可润色描述）。返回字符串则覆盖。
+    const results = this.#hooks.emitSync('onEventRender', { text: formatted })
+    // 首个返回字符串的钩子覆盖结果。
+    for (const r of results) {
+      // 钩子返回字符串。
+      if (typeof r === 'string') return r
+    }
+    // 返回格式化结果。
+    return formatted
   }
 
   // #getters

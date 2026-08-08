@@ -86,13 +86,24 @@ function formatCmpValue(val) {
 // 输出：'1001,"talent_001",1002'
 //
 // @param {string} values - 逗号分隔的原始值字符串
+// @param {boolean} asString - 是否强制全部转为字符串字面量（数组属性专用）
 // @returns {string} 处理后的值列表字符串
-function parseValues(values) {
+function parseValues(values, asString = false) {
   // split(',') 按逗号拆分。
   // filter(Boolean) 过滤掉空字符串（如尾部多余逗号产生的）。
   // map(quoteIfNeeded) 逐项判断是否需要加引号。
   // join(',') 重新拼合为逗号分隔字符串。
-  return values.split(',').filter(Boolean).map(quoteIfNeeded).join(',')
+  return values
+    .split(',')
+    .filter(Boolean)
+    .map(v => {
+      // 数组属性：元素是字符串 ID，统一加引号。
+      // 否则数字 ID（如 20001）转成数字字面量，与运行时字符串 ID 严格不等 → 永远 false。
+      if (asString) return `"${v.trim()}"`
+      // 标量属性：数字不加引号，其余加引号。
+      return quoteIfNeeded(v)
+    })
+    .join(',')
 }
 
 // #convertLegacy
@@ -110,10 +121,12 @@ export function convertLegacy(condition, propTypes = {}) {
   //   \]      匹配 ] 字面量
   // "g" 标志：全局替换（一条件字符串中可能出现多个）。替换发生在 = 之前，避免损坏 .some(id => ...) 中的 =。
   result = result.replace(/(\w+)\?\[([^\]]*)\]/g, (_m, prop, values) => {
-    // 将原始值列表解析为 JS 数组元素格式（含引号处理）。
-    const parsed = parseValues(values)
+    // 是否为数组属性（成员判断语义不同）。
+    const isArray = propTypes[prop] === 'array'
+    // 数组属性值转字符串（运行时 ID 是字符串）；标量按数字/字符串智能处理。
+    const parsed = parseValues(values, isArray)
     // 根据 propTypes 中声明的属性类型，选择不同的转换策略。
-    if (propTypes[prop] === 'array') {
+    if (isArray) {
       // 数组属性（如 TLT、EVT）：用 .some() 方法判断交集。
       // some() 对数组的每个元素执行回调，只要有一个返回 true 则整体为 true。
       return `${prop}.some(id => [${parsed}].includes(id))`
@@ -125,9 +138,11 @@ export function convertLegacy(condition, propTypes = {}) {
   // === 规则 2：![values] — 非成员判断（NOT IN） ===
   // 逻辑与规则 1 相同，只是在整个结果前加 ! 取反。
   result = result.replace(/(\w+)\!\[([^\]]*)\]/g, (_m, prop, values) => {
-    // 同样解析值列表。
-    const parsed = parseValues(values)
-    if (propTypes[prop] === 'array') {
+    // 是否为数组属性。
+    const isArray = propTypes[prop] === 'array'
+    // 同样解析值列表（数组属性值转字符串）。
+    const parsed = parseValues(values, isArray)
+    if (isArray) {
       // 数组属性：!some() — 没有任何一个元素在目标列表中。
       return `!${prop}.some(id => [${parsed}].includes(id))`
     }

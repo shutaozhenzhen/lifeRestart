@@ -192,6 +192,43 @@ describe('mod - createModLoader', () => {
     expect(data.talents.t1.name).toBe('覆盖')
   })
 
+  test('executes code.js with gameAPI', () => {
+    // Mod 含 code.js：注册钩子 + 注入天赋。
+    const dir = makeMod('code-mod', { name: 'code-mod', version: '1' })
+    // 写 code.js（原生 JS，非 JSON）。
+    writeFileSync(join(dir, 'code.js'),
+      'gameAPI.on("onYearAdvance", (p) => { p.content.push({ type: "EVT", description: "code注入" }) });\n' +
+      'gameAPI.addTalent({ id: "code_t1", name: "代码天赋", grade: 1 });'
+    )
+    // 加载器。
+    const loader = createModLoader({ modsDir: tempDir })
+    // 记录钩子触发。
+    const bus = createHookBus()
+    // 加载并执行。
+    const { data } = loader.loadAll({
+      createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus }),
+    })
+    // code.js 注入的天赋。
+    expect(data.talents.code_t1.name).toBe('代码天赋')
+    // 注册的钩子可触发。
+    const payload = { content: [] }
+    return bus.emit('onYearAdvance', payload).then(() => {
+      // 钩子注入内容。
+      expect(payload.content.some(c => c.description === 'code注入')).toBe(true)
+    })
+  })
+
+  test('code.js exception is isolated', () => {
+    // Mod code.js 抛错。
+    const dir = makeMod('bad-mod', { name: 'bad-mod', version: '1' })
+    // 抛错代码。
+    writeFileSync(join(dir, 'code.js'), 'throw new Error("boom")')
+    // 加载器。
+    const loader = createModLoader({ modsDir: tempDir })
+    // 加载不抛（异常被隔离）。
+    expect(() => loader.loadAll({ createAPI: () => createGameAPI({ data: {} }) })).not.toThrow()
+  })
+
   test('invalid manifest is rejected', () => {
     // 非法 manifest。
     makeMod('bad', { version: '1' })
@@ -255,7 +292,7 @@ describe('mod - createGameAPI', () => {
     expect(called).toBe(1)
   })
 
-  test('hooks execute in registration order', () => {
+  test('hooks execute in registration order', async () => {
     // API。
     const api = createGameAPI({ data: {} })
     // 顺序记录。
@@ -263,13 +300,27 @@ describe('mod - createGameAPI', () => {
     // 两个钩子。
     api.on('seq', () => order.push(1))
     api.on('seq', () => order.push(2))
-    // 触发。
-    api.emit('seq')
+    // 触发（emit 支持 async，需 await 保证全部执行）。
+    await api.emit('seq')
     // 按序。
     expect(order).toEqual([1, 2])
   })
 
-  test('hook exception does not break others', () => {
+  test('async hooks are awaited in order', async () => {
+    // API。
+    const api = createGameAPI({ data: {} })
+    // 顺序记录。
+    const order = []
+    // 异步钩子（延迟执行）。
+    api.on('seq', async () => { await Promise.resolve(); order.push(1) })
+    api.on('seq', async () => { await Promise.resolve(); order.push(2) })
+    // 触发。
+    await api.emit('seq')
+    // 按序。
+    expect(order).toEqual([1, 2])
+  })
+
+  test('hook exception does not break others', async () => {
     // API。
     const api = createGameAPI({ data: {} })
     // 记录。
@@ -278,20 +329,20 @@ describe('mod - createGameAPI', () => {
     api.on('t', () => { throw new Error('boom') })
     api.on('t', () => { reached = true })
     // 触发。
-    api.emit('t')
+    await api.emit('t')
     // 第二个仍执行。
     expect(reached).toBe(true)
   })
 
-  test('property set triggers propertyChange hook', () => {
+  test('property set triggers propertyChange hook', async () => {
     // API。
     const api = createGameAPI({ data: {} })
     // 记录。
     let last = null
     // 钩子。
     api.on('propertyChange', ({ prop, value }) => { last = { prop, value } })
-    // 设置。
-    api.property.set('CHR', 10)
+    // 设置（property.set 内部 emit 是异步的）。
+    await api.property.set('CHR', 10)
     // 钩子触发。
     expect(last).toEqual({ prop: 'CHR', value: 10 })
   })
@@ -349,5 +400,47 @@ describe('mod - createGameAPI', () => {
     expect(bus.has('a')).toBe(true)
     // 列出。
     expect(bus.list()).toEqual({ a: 1 })
+  })
+
+  test('accepts external hook bus (shared with Life)', async () => {
+    // 外部总线。
+    const bus = createHookBus()
+    // gameAPI 用外部总线。
+    const api = createGameAPI({ data: {}, hooks: bus })
+    // 记录。
+    const calls = []
+    // 注册钩子。
+    api.on('onYearAdvance', (payload) => calls.push(payload))
+    // 引擎侧通过同一总线触发。
+    await bus.emit('onYearAdvance', { age: 5 })
+    // 钩子被触发。
+    expect(calls).toEqual([{ age: 5 }])
+  })
+
+  test('gameAPI.ai unavailable when no ai config', () => {
+    // 无 AI 配置。
+    const api = createGameAPI({ data: {} })
+    // 不可用。
+    expect(api.ai.available).toBe(false)
+    // 调用抛错。
+    expect(() => api.ai.generate({ prompt: 'x' })).toThrow()
+  })
+
+  test('gameAPI.ai delegates to client when configured', async () => {
+    // mock AI 客户端。
+    const aiClient = {
+      chatCompletion: async ({ messages }) => `reply:${messages.length}`,
+      generateJSON: async ({ user }) => ({ id: user }),
+    }
+    // 配置 AI。
+    const api = createGameAPI({ data: {}, ai: { client: aiClient, baseUrl: 'x', model: 'm' } })
+    // 可用。
+    expect(api.ai.available).toBe(true)
+    // 对话。
+    const chat = await api.ai.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(chat).toBe('reply:1')
+    // 生成。
+    const gen = await api.ai.generate({ user: 'gen-me' })
+    expect(gen).toEqual({ id: 'gen-me' })
   })
 })

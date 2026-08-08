@@ -325,3 +325,122 @@ describe('life - format', () => {
     expect(life.format('{unknown_key}')).toBe('{unknown_key}')
   })
 })
+
+// ========== 测试组 8：Mod 钩子接入 ==========
+describe('life - mod hooks', () => {
+  // 创建带钩子总线的 Life。
+  // @param {object} bus - 钩子总线（{ emit }）
+  // @returns {Promise<Life>} 实例
+  async function makeHookedLife(bus) {
+    // 创建实例。
+    const l = new Life({ data: buildData(), random: createRng(42), hooks: bus })
+    // 初始化。
+    await l.initial()
+    // 配置。
+    l.config()
+    // 返回。
+    return l
+  }
+
+  // 最小钩子总线（记录 emit/emitSync 调用）。
+  function makeBus() {
+    // 调用记录。
+    const calls = []
+    // 总线。
+    const bus = {
+      emit(name, payload) { calls.push({ name, payload }); return [] },
+      emitSync(name, payload) { calls.push({ name, payload }); return [] },
+    }
+    // 返回。
+    return { bus, calls }
+  }
+
+  test('onYearAdvance fires on next', async () => {
+    // 钩子总线。
+    const { bus, calls } = makeBus()
+    // 创建。
+    const l = await makeHookedLife(bus)
+    // 开局。
+    l.remake([])
+    l.start({})
+    // 推进一年。
+    l.next()
+    // 触发 onYearAdvance。
+    expect(calls.some(c => c.name === 'onYearAdvance')).toBe(true)
+    // payload 含 age。
+    const y = calls.find(c => c.name === 'onYearAdvance')
+    expect(typeof y.payload.age).toBe('number')
+  })
+
+  test('onTalentPoolGenerate fires on talentRandom', async () => {
+    // 钩子总线。
+    const { bus, calls } = makeBus()
+    // 创建。
+    const l = await makeHookedLife(bus)
+    // 抽池。
+    l.talentRandom()
+    // 触发。
+    expect(calls.some(c => c.name === 'onTalentPoolGenerate')).toBe(true)
+  })
+
+  test('onEventRender hook can rewrite description', async () => {
+    // 钩子总线：改写 format 输出。
+    const bus = {
+      emit(name, payload) { return this.emitSync(name, payload) },
+      emitSync(name, payload) {
+        // 渲染钩子：加前缀。
+        if (name === 'onEventRender') return ['[AI润色] ' + payload.text]
+        // 其余返回空。
+        return []
+      },
+    }
+    // 创建。
+    const l = await makeHookedLife(bus)
+    // 开局。
+    l.remake([])
+    l.start({})
+    // 格式化。
+    expect(l.format('你好')).toBe('[AI润色] 你好')
+  })
+
+  test('hooks can inject events into next content', async () => {
+    // 钩子总线：向 content 注入 AI 事件。
+    const bus = {
+      emit(name, payload) { return this.emitSync(name, payload) },
+      emitSync(name, payload) {
+        // 翻年钩子：追加 AI 事件流水。
+        if (name === 'onYearAdvance') payload.content.push({ type: 'EVT', description: 'AI 生成事件' })
+        // 返回。
+        return []
+      },
+    }
+    // 创建。
+    const l = await makeHookedLife(bus)
+    // 开局。
+    l.remake([])
+    l.start({})
+    // 推进。
+    const r = l.next()
+    // content 含 AI 注入的事件。
+    expect(r.content.some(c => c.description === 'AI 生成事件')).toBe(true)
+  })
+
+  test('hooks can inject talents into pool', async () => {
+    // 钩子总线：向天赋池注入 AI 天赋。
+    const bus = {
+      emit(name, payload) { return this.emitSync(name, payload) },
+      emitSync(name, payload) {
+        // 天赋池钩子：追加 AI 天赋。
+        if (name === 'onTalentPoolGenerate') payload.pool.push({ id: 'ai_001', name: 'AI 天赋', grade: 3 })
+        // 返回。
+        return []
+      },
+    }
+    // 创建。
+    const l = await makeHookedLife(bus)
+    // 抽池。
+    const pool = l.talentRandom()
+    // 池含 AI 天赋。
+    expect(pool.some(t => t.id === 'ai_001')).toBe(true)
+  })
+})

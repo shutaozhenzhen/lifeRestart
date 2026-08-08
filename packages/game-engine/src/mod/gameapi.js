@@ -51,12 +51,13 @@ export function createHookBus() {
 
     // #emit
     // 触发钩子（按注册顺序，异常隔离——单个失败不影响后续）。
+    // 支持同步与异步回调：async 钩子的 Promise 被 await，保证全部完成后返回。
     //
     // @param {string} name - 钩子名
     // @param {*} payload - 负载
     // @param {object} [log] - 日志器
-    // @returns {Array} 各回调返回值的数组
-    emit(name, payload, log) {
+    // @returns {Promise<Array>} 各回调返回值的数组
+    async emit(name, payload, log) {
       // 日志器。
       const logger = log || { debug: () => {}, error: () => {} }
       // 无钩子。
@@ -67,7 +68,38 @@ export function createHookBus() {
       for (const fn of hooks[name]) {
         // 异常隔离。
         try {
-          // 执行并记录。
+          // 执行并记录（await 支持 async 钩子）。
+          results.push(await fn(payload))
+        } catch (e) {
+          // 记录。
+          logger.error(`钩子 ${name} 异常: ${e.message}`)
+        }
+      }
+      // 返回。
+      return results
+    },
+
+    // #emitSync
+    // 同步触发钩子（按注册顺序，异常隔离）。
+    // 供同步场景使用（如 Life 引擎的 next()/format() 是同步方法）。
+    // async 钩子会被调用但返回值被忽略（fire-and-forget）。
+    //
+    // @param {string} name - 钩子名
+    // @param {*} payload - 负载
+    // @param {object} [log] - 日志器
+    // @returns {Array} 各回调返回值的数组（async 钩子为 Promise）
+    emitSync(name, payload, log) {
+      // 日志器。
+      const logger = log || { debug: () => {}, error: () => {} }
+      // 无钩子。
+      if (!hooks[name]) return []
+      // 结果。
+      const results = []
+      // 按序执行。
+      for (const fn of hooks[name]) {
+        // 异常隔离。
+        try {
+          // 同步调用（async 钩子的 Promise 直接入数组，不 await）。
           results.push(fn(payload))
         } catch (e) {
           // 记录。
@@ -104,27 +136,58 @@ export function createHookBus() {
 }
 
 // #createGameAPI
-// 创建 gameAPI：钩子总线 + 数据操作。
+// 创建 gameAPI：钩子总线 + 数据操作 + AI 客户端。
+// 支持注入外部钩子总线（hooks），使 Life 引擎与 gameAPI 共享同一总线：
+//   引擎在 next()/talentRandom()/format() 触发钩子，Mod 通过 gameAPI.on() 注册回调。
 //
 // @param {object} deps
 // @param {object} deps.data - 合并后的 Mod 数据 { talents, events, achievements, characters }
+// @param {object} [deps.hooks] - 外部钩子总线（createHookBus 实例）；缺省自建
+// @param {object} [deps.ai] - AI 配置 { client, baseUrl, apiKey, model }；缺省不启用 ai
 // @param {object} [deps.log] - 日志器
 // @returns {object} gameAPI
-export function createGameAPI({ data, log }) {
+export function createGameAPI({ data, hooks, ai, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, error: () => {} }
-  // 钩子总线。
-  const hooks = createHookBus()
+  // 钩子总线：注入外部实例（与 Life 共享）或自建。
+  const bus = hooks || createHookBus()
   // 数据引用。
   const store = data
+  // AI 客户端（注入式；未提供则 ai 不可用）。
+  const aiClient = ai?.client || null
+  // AI 默认配置。
+  const aiConfig = ai || {}
 
   // 返回 API。
   return {
-    // 钩子系统。
-    on: (name, fn) => hooks.on(name, fn),
-    off: (name, fn) => hooks.off(name, fn),
-    emit: (name, payload) => hooks.emit(name, payload, logger),
-    hooks: () => hooks.list(),
+    // 钩子系统（委托外部总线）。
+    on: (name, fn) => bus.on(name, fn),
+    off: (name, fn) => bus.off(name, fn),
+    emit: (name, payload) => bus.emit(name, payload, logger),
+    emitSync: (name, payload) => bus.emitSync(name, payload, logger),
+    hooks: () => bus.list(),
+
+    // AI 客户端（Mod 代码通过 gameAPI.ai 调用；需 manifest 声明 ai 权限）。
+    ai: {
+      // 是否有可用 AI 客户端。
+      get available() { return aiClient !== null },
+      // 当前配置。
+      config: { baseUrl: aiConfig.baseUrl, model: aiConfig.model },
+      // 对话（透传客户端）。
+      chat: (params) => {
+        // 无客户端。
+        if (!aiClient) throw new Error('AI 客户端不可用（未配置 ai 客户端）')
+        // 委托客户端。
+        return aiClient.chatCompletion({ ...aiConfig, ...params })
+      },
+      // 生成 JSON（透传客户端）。
+      generate: (params) => {
+        // 无客户端。
+        if (!aiClient) throw new Error('AI 客户端不可用（未配置 ai 客户端）')
+        // 委托客户端。
+        return aiClient.generateJSON({ ...aiConfig, ...params })
+      },
+    },
 
     // 属性操作。
     property: {
@@ -136,8 +199,8 @@ export function createGameAPI({ data, log }) {
         if (!store.properties) store.properties = {}
         // 赋值。
         store.properties[prop] = value
-        // 触发钩子。
-        hooks.emit('propertyChange', { prop, value }, logger)
+        // 触发钩子（异步，返回 Promise 供调用方 await）。
+        return bus.emit('propertyChange', { prop, value }, logger)
       },
     },
 
