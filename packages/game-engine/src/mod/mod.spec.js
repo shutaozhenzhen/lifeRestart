@@ -22,6 +22,8 @@ import { validateManifest, resolveOrder } from './manifest.js'
 import { createModLoader, scanMods } from './loader.js'
 // gameAPI。
 import { createGameAPI, createHookBus } from './gameapi.js'
+// 参数注册表。
+import { createParamRegistry } from '../params/param-registry.js'
 
 // ========== 测试组 1：validateManifest ==========
 describe('mod - validateManifest', () => {
@@ -442,5 +444,30 @@ describe('mod - createGameAPI', () => {
     // 生成。
     const gen = await api.ai.generate({ user: 'gen-me' })
     expect(gen).toEqual({ id: 'gen-me' })
+  })
+
+  test('gameAPI.param defines and reads custom params', () => {
+    // 参数注册表。
+    const registry = createParamRegistry()
+    // 定义基础参数。
+    registry.define('CHR', { type: 'local' })
+    // API（注入注册表）。
+    const api = createGameAPI({ data: {}, params: registry })
+    // param 可用。
+    expect(api.param).not.toBeNull()
+    // reset。
+    registry.reset({ CHR: 5 })
+    // 读。
+    expect(api.param.get('CHR')).toBe(5)
+    // 注册自定义参数（function 类型）。
+    api.param.define('DOUBLE', { type: 'function', get: "return ctx.get('CHR') * 2" })
+    // 读。
+    expect(api.param.get('DOUBLE')).toBe(10)
+    // 写。
+    api.param.set('CHR', 7)
+    expect(api.param.get('DOUBLE')).toBe(14)
+    // 全部。
+    expect(api.param.names).toContain('CHR')
+    expect(api.param.names).toContain('DOUBLE')
   })
 })

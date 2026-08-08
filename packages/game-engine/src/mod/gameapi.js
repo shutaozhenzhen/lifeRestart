@@ -136,7 +136,7 @@ export function createHookBus() {
 }
 
 // #createGameAPI
-// 创建 gameAPI：钩子总线 + 数据操作 + AI 客户端。
+// 创建 gameAPI：钩子总线 + 数据操作 + AI 客户端 + 参数注册。
 // 支持注入外部钩子总线（hooks），使 Life 引擎与 gameAPI 共享同一总线：
 //   引擎在 next()/talentRandom()/format() 触发钩子，Mod 通过 gameAPI.on() 注册回调。
 //
@@ -144,9 +144,10 @@ export function createHookBus() {
 // @param {object} deps.data - 合并后的 Mod 数据 { talents, events, achievements, characters }
 // @param {object} [deps.hooks] - 外部钩子总线（createHookBus 实例）；缺省自建
 // @param {object} [deps.ai] - AI 配置 { client, baseUrl, apiKey, model }；缺省不启用 ai
+// @param {object} [deps.params] - 参数注册表（createParamRegistry 实例）；缺省不自建
 // @param {object} [deps.log] - 日志器
 // @returns {object} gameAPI
-export function createGameAPI({ data, hooks, ai, log }) {
+export function createGameAPI({ data, hooks, ai, params, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, error: () => {} }
   // 钩子总线：注入外部实例（与 Life 共享）或自建。
@@ -188,6 +189,25 @@ export function createGameAPI({ data, hooks, ai, log }) {
         return aiClient.generateJSON({ ...aiConfig, ...params })
       },
     },
+
+    // 参数注册表（Mod 可定义/读取/修改可配置参数）。
+    // 需传入 createParamRegistry 实例（与 Life 共享）才可用。
+    param: params
+      ? {
+          // 注册参数。
+          define: (name, def) => params.define(name, def),
+          // 读参数。
+          get: (name) => params.get(name),
+          // 写参数。
+          set: (name, v) => params.set(name, v),
+          // 增量。
+          change: (name, v) => params.change(name, v),
+          // 全部参数名。
+          get names() { return params.names },
+          // 展开全部。
+          getAll: () => params.getAll(),
+        }
+      : null,
 
     // 属性操作。
     property: {

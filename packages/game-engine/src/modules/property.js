@@ -1,5 +1,5 @@
 /**
- * property 属性系统模块
+ * property 属性系统模块（param 注册表驱动版）
  *
  * 从原版 lifeRestart-old/src/modules/property.js 移植，按新项目约束做了注入化改造：
  *   1. 去掉 #system 依赖：构造函数注入 { clone, storage }，不再依赖 Life 实例。
@@ -7,15 +7,21 @@
  *   3. 字符串 ID 约束：initial() 不再把天赋/事件 ID 转 Number，原样保留字符串。
  *   4. change() 数组删除不再用 value<0 负值标记，改为显式前缀 '-' 标记。
  *   5. 移除 extractMaxTriggers 相关逻辑（max_triggers 由数据层显式提供）。
+ *   6. **参数即配置**：get/set/change/getAll 委托给 param 注册表
+ *      （src/params/param-registry.js + params.js），参数种类/类型/来源全部由 JSON 定义。
  *
  * 公开 API（供 Life 编排器与 gameAPI 调用）：
  *   TYPES / SPECIAL / initial / config / restart / restartLastStep
  *   get / set / change / effect / hookSpecial / judge / isEnd
- *   ageNext / getAgeData / getPropertys / achieve / lsget / lsset
+ *   ageNext / getAgeData / getPropertys / achieve / lsget / lsset / getAll
  */
 
-// 导入 util 工具函数（克隆、min/max 等）。
-import { clone, min, max, sum, listRandom } from '../functions/util.js'
+// 导入 util 工具函数（克隆、listRandom）。
+import { clone, listRandom } from '../functions/util.js'
+// param 注册表。
+import { createParamRegistry } from '../params/param-registry.js'
+// 内置参数定义。
+import { BUILTIN_PARAMS } from '../params/params.js'
 
 // #defaultStorage
 // 默认内存 storage 适配器。
@@ -40,86 +46,43 @@ class Property {
   // @param {Function} [deps.clone]  - 深拷贝函数，默认 util.clone
   // @param {object}   [deps.storage] - storage 适配器，默认内存实现
   // @param {() => number} [deps.random] - 随机源，默认 Math.random
-  constructor({ clone: cloneFn = clone, storage = defaultStorage, random = Math.random } = {}) {
+  // @param {object}   [deps.params]  - 自定义参数定义（合并进内置）
+  constructor({ clone: cloneFn = clone, storage = defaultStorage, random = Math.random, params } = {}) {
     // 保存注入的克隆函数。
     this.#clone = cloneFn
     // 保存注入的 storage。
     this.#storage = storage
     // 保存注入的随机源。
     this.#random = random
+    // 创建 param 注册表（注入 clone 供数组参数深拷贝）。
+    this.#registry = createParamRegistry({ storage, cloneFn: cloneFn, random })
+    // 注册内置参数。
+    this.#registry.defineAll(BUILTIN_PARAMS)
+    // 合并自定义参数（Mod/运行时扩展）。
+    if (params) this.#registry.defineAll(params)
   }
 
   // #TYPES
-  // 属性类型常量。
-  // 分为四类：
-  //   本局（AGE/CHR/.../EVT/TMS）—— 直接存储
-  //   派生（LAGE/HAGE/SUM）       —— get() 时实时计算
-  //   统计（ATLT/CTLT/TTLT/比率） —— 跨局累计，走 storage
-  //   特殊（EXT/RDM）             —— 特殊逻辑
-  TYPES = {
-    // 本局属性。
-    AGE: 'AGE', // 年龄
-    CHR: 'CHR', // 颜值
-    INT: 'INT', // 智力
-    STR: 'STR', // 体质
-    MNY: 'MNY', // 家境
-    SPR: 'SPR', // 快乐
-    LIF: 'LIF', // 生命
-    TLT: 'TLT', // 已获天赋
-    EVT: 'EVT', // 已触事件
-    TMS: 'TMS', // 重开次数
-
-    // 派生属性（Auto calc）。
-    LAGE: 'LAGE', // 最低年龄
-    HAGE: 'HAGE', // 最高年龄
-    LCHR: 'LCHR', // 最低颜值
-    HCHR: 'HCHR', // 最高颜值
-    LINT: 'LINT', // 最低智力
-    HINT: 'HINT', // 最高智力
-    LSTR: 'LSTR', // 最低体质
-    HSTR: 'HSTR', // 最高体质
-    LMNY: 'LMNY', // 最低家境
-    HMNY: 'HMNY', // 最高家境
-    LSPR: 'LSPR', // 最低快乐
-    HSPR: 'HSPR', // 最高快乐
-
-    SUM: 'SUM', // 总评
-
-    EXT: 'EXT', // 继承天赋
-
-    // 总计（Achievement Total）。
-    ATLT: 'ATLT', // 拥有过的天赋
-    AEVT: 'AEVT', // 触发过的事件
-    ACHV: 'ACHV', // 达成的成就
-
-    // 计数（Count）。
-    CTLT: 'CTLT', // 天赋选择数
-    CEVT: 'CEVT', // 事件收集数
-    CACHV: 'CACHV', // 成就达成数
-
-    // 总数（Total）。
-    TTLT: 'TTLT', // 总天赋数
-    TEVT: 'TEVT', // 总事件数
-    TACHV: 'TACHV', // 总成就数
-
-    // 比率（Rate）。
-    REVT: 'REVT', // 事件收集率
-    RTLT: 'RTLT', // 天赋选择率
-    RACHV: 'RACHV', // 成就达成率
-
-    // 特殊。
-    RDM: 'RDM', // 随机属性
+  // 属性类型常量（由注册表参数名派生，保持向后兼容）。
+  // 供 Life/外部模块引用，实际读写走注册表。
+  get TYPES() {
+    // 从注册表参数名生成 { NAME: 'NAME' }。
+    const types = {}
+    // 逐个。
+    for (const name of this.#registry.names) types[name] = name
+    // 返回。
+    return types
   }
 
   // #SPECIAL
   // 特殊类型映射。
   SPECIAL = {
     RDM: [ // 随机属性：从这五个中随机选一个。
-      this.TYPES.CHR,
-      this.TYPES.INT,
-      this.TYPES.STR,
-      this.TYPES.MNY,
-      this.TYPES.SPR,
+      'CHR',
+      'INT',
+      'STR',
+      'MNY',
+      'SPR',
     ],
   }
 
@@ -127,6 +90,7 @@ class Property {
   #clone        // 克隆函数
   #storage      // storage 适配器
   #random       // 随机源
+  #registry     // param 注册表
   #ageData      // 年龄数据（initial 注入）
   #total        // 各类型总数（initial 注入）
   #data = {}    // 本局属性数据
@@ -174,8 +138,9 @@ class Property {
       // 写回处理后的数据。
       age[a] = { event, talent }
     }
-    // 保存总数。
+    // 保存总数并注入注册表。
     this.#total = total
+    this.#registry.setTotal(total)
   }
 
   // #config
@@ -199,33 +164,35 @@ class Property {
     // 初始化本局数据：标量属性为 0/1，数组为空，派生低/高为 ±Infinity。
     this.#data = {
       // 年龄从 0 前开始（-1 表示出生前）。
-      [this.TYPES.AGE]: -1,
+      AGE: -1,
       // 五项基础属性从 0 开始。
-      [this.TYPES.CHR]: 0,
-      [this.TYPES.INT]: 0,
-      [this.TYPES.STR]: 0,
-      [this.TYPES.MNY]: 0,
-      [this.TYPES.SPR]: 0,
+      CHR: 0,
+      INT: 0,
+      STR: 0,
+      MNY: 0,
+      SPR: 0,
       // 生命默认 1（存活）。
-      [this.TYPES.LIF]: 1,
+      LIF: 1,
       // 天赋/事件列表为空。
-      [this.TYPES.TLT]: [],
-      [this.TYPES.EVT]: [],
+      TLT: [],
+      EVT: [],
       // 派生低值从正无穷开始（取 min 才有意义）。
-      [this.TYPES.LAGE]: Infinity,
-      [this.TYPES.LCHR]: Infinity,
-      [this.TYPES.LINT]: Infinity,
-      [this.TYPES.LSTR]: Infinity,
-      [this.TYPES.LSPR]: Infinity,
-      [this.TYPES.LMNY]: Infinity,
+      LAGE: Infinity,
+      LCHR: Infinity,
+      LINT: Infinity,
+      LSTR: Infinity,
+      LSPR: Infinity,
+      LMNY: Infinity,
       // 派生高值从负无穷开始（取 max 才有意义）。
-      [this.TYPES.HAGE]: -Infinity,
-      [this.TYPES.HCHR]: -Infinity,
-      [this.TYPES.HINT]: -Infinity,
-      [this.TYPES.HSTR]: -Infinity,
-      [this.TYPES.HMNY]: -Infinity,
-      [this.TYPES.HSPR]: -Infinity,
+      HAGE: -Infinity,
+      HCHR: -Infinity,
+      HINT: -Infinity,
+      HSTR: -Infinity,
+      HMNY: -Infinity,
+      HSPR: -Infinity,
     }
+    // 注册表引用本局 data（local 参数读写它）。
+    this.#registry.reset(this.#data)
     // 逐项应用初始分配。
     for (const key in data) this.change(key, data[key])
   }
@@ -237,195 +204,28 @@ class Property {
   // @returns {void}
   restartLastStep() {
     // 记录五个基础属性的当前值到 L/H 派生值。
-    this.#data[this.TYPES.LAGE] = this.get(this.TYPES.AGE)
-    this.#data[this.TYPES.LCHR] = this.get(this.TYPES.CHR)
-    this.#data[this.TYPES.LINT] = this.get(this.TYPES.INT)
-    this.#data[this.TYPES.LSTR] = this.get(this.TYPES.STR)
-    this.#data[this.TYPES.LSPR] = this.get(this.TYPES.SPR)
-    this.#data[this.TYPES.LMNY] = this.get(this.TYPES.MNY)
-    this.#data[this.TYPES.HAGE] = this.get(this.TYPES.AGE)
-    this.#data[this.TYPES.HCHR] = this.get(this.TYPES.CHR)
-    this.#data[this.TYPES.HINT] = this.get(this.TYPES.INT)
-    this.#data[this.TYPES.HSTR] = this.get(this.TYPES.STR)
-    this.#data[this.TYPES.HMNY] = this.get(this.TYPES.MNY)
-    this.#data[this.TYPES.HSPR] = this.get(this.TYPES.SPR)
+    this.#data.LAGE = this.get('AGE')
+    this.#data.LCHR = this.get('CHR')
+    this.#data.LINT = this.get('INT')
+    this.#data.LSTR = this.get('STR')
+    this.#data.LSPR = this.get('SPR')
+    this.#data.LMNY = this.get('MNY')
+    this.#data.HAGE = this.get('AGE')
+    this.#data.HCHR = this.get('CHR')
+    this.#data.HINT = this.get('INT')
+    this.#data.HSTR = this.get('STR')
+    this.#data.HMNY = this.get('MNY')
+    this.#data.HSPR = this.get('SPR')
   }
 
   // #get
-  // 读取属性值。这是属性系统的核心分发器。
-  // 处理四类属性：本局直接读、派生实时算、统计走 storage、特殊逻辑。
+  // 读取属性值。委托 param 注册表。
   //
   // @param {string} prop - 属性类型（TYPES 中的键）
   // @returns {*} 属性值
   get(prop) {
-    // 按属性类型分发。
-    switch (prop) {
-      // 本局标量/数组属性：直接返回深拷贝（防止外部篡改内部数据）。
-      case this.TYPES.AGE:
-      case this.TYPES.CHR:
-      case this.TYPES.INT:
-      case this.TYPES.STR:
-      case this.TYPES.MNY:
-      case this.TYPES.SPR:
-      case this.TYPES.LIF:
-      case this.TYPES.TLT:
-      case this.TYPES.EVT:
-        // 返回深拷贝。
-        return this.#clone(this.#data[prop])
-      // 派生低值：min(存储值, 对应基础属性的当前值)。
-      // 例如 LCHR = min(LCHR, CHR)。
-      case this.TYPES.LAGE:
-      case this.TYPES.LCHR:
-      case this.TYPES.LINT:
-      case this.TYPES.LSTR:
-      case this.TYPES.LMNY:
-      case this.TYPES.LSPR:
-        return min(
-          // 存储的低值。
-          this.#data[prop],
-          // 当前基础值（经由 fallback 映射）。
-          this.get(this.fallback(prop))
-        )
-      // 派生高值：max(存储值, 对应基础属性的当前值)。
-      case this.TYPES.HAGE:
-      case this.TYPES.HCHR:
-      case this.TYPES.HINT:
-      case this.TYPES.HSTR:
-      case this.TYPES.HMNY:
-      case this.TYPES.HSPR:
-        return max(
-          // 存储的高值。
-          this.#data[prop],
-          // 当前基础值。
-          this.get(this.fallback(prop))
-        )
-      // SUM 总评：五项最高属性 ×2 + 最高年龄 /2，向下取整。
-      case this.TYPES.SUM:
-        // 取各派生最高值。
-        const HAGE = this.get(this.TYPES.HAGE)
-        const HCHR = this.get(this.TYPES.HCHR)
-        const HINT = this.get(this.TYPES.HINT)
-        const HSTR = this.get(this.TYPES.HSTR)
-        const HMNY = this.get(this.TYPES.HMNY)
-        const HSPR = this.get(this.TYPES.HSPR)
-        // 总评公式。
-        return Math.floor(sum(HCHR, HINT, HSTR, HMNY, HSPR) * 2 + HAGE / 2)
-      // TMS 重开次数：走 storage。
-      case this.TYPES.TMS:
-        // 读取 storage，缺失为 0。
-        return this.lsget('times') || 0
-      // EXT 继承天赋：走 storage。
-      case this.TYPES.EXT:
-        // 读取 storage，缺失为 null。
-        return this.lsget('extendTalent') || null
-      // ATLT/AEVT/ACHV 累计：走 storage，缺失为空数组。
-      case this.TYPES.ATLT:
-      case this.TYPES.AEVT:
-      case this.TYPES.ACHV:
-        return this.lsget(prop) || []
-      // CTLT/CEVT/CACHV 计数：对应累计数组的长度。
-      case this.TYPES.CTLT:
-      case this.TYPES.CEVT:
-      case this.TYPES.CACHV:
-        return this.get(this.fallback(prop)).length
-      // TTLT/TEVT/TACHV 总数：从 initial 注入的 total 读取。
-      case this.TYPES.TTLT:
-      case this.TYPES.TEVT:
-      case this.TYPES.TACHV:
-        return this.#total[prop]
-      // RTLT/REVT/RACHV 比率：计数 / 总数。
-      case this.TYPES.RTLT:
-      case this.TYPES.REVT:
-      case this.TYPES.RACHV:
-        // fallback 返回 [计数属性, 总数属性]。
-        const fb = this.fallback(prop)
-        // 计数除以总数。
-        return this.get(fb[0]) / this.get(fb[1])
-      // 未知属性：返回 0。
-      default:
-        return 0
-    }
-  }
-
-  // #fallback
-  // 派生属性的回退映射：告诉我某派生属性基于哪个基础属性/哪对属性。
-  //
-  // @param {string} prop - 属性类型
-  // @returns {string|string[]} 基础属性名；比率类返回 [计数, 总数]
-  fallback(prop) {
-    // 按属性分发。
-    switch (prop) {
-      // 年龄高低 → AGE。
-      case this.TYPES.LAGE:
-      case this.TYPES.HAGE: return this.TYPES.AGE
-      // 颜值高低 → CHR。
-      case this.TYPES.LCHR:
-      case this.TYPES.HCHR: return this.TYPES.CHR
-      // 智力高低 → INT。
-      case this.TYPES.LINT:
-      case this.TYPES.HINT: return this.TYPES.INT
-      // 体质高低 → STR。
-      case this.TYPES.LSTR:
-      case this.TYPES.HSTR: return this.TYPES.STR
-      // 家境外高 → MNY。
-      case this.TYPES.LMNY:
-      case this.TYPES.HMNY: return this.TYPES.MNY
-      // 快乐高值 → SPR。
-      case this.TYPES.LSPR:
-      case this.TYPES.HSPR: return this.TYPES.SPR
-      // 计数 → 累计。
-      case this.TYPES.CTLT: return this.TYPES.ATLT
-      case this.TYPES.CEVT: return this.TYPES.AEVT
-      case this.TYPES.CACHV: return this.TYPES.ACHV
-      // LIF 自身。
-      case this.TYPES.LIF: return this.TYPES.LIF
-      // 比率 → [计数, 总数]。
-      case this.TYPES.RTLT: return [this.TYPES.CTLT, this.TYPES.TTLT]
-      case this.TYPES.REVT: return [this.TYPES.CEVT, this.TYPES.TEVT]
-      case this.TYPES.RACHV: return [this.TYPES.CACHV, this.TYPES.TACHV]
-      // 默认无回退。
-      default: return
-    }
-  }
-
-  // #set
-  // 覆盖设置属性值（本局属性走 #data + 派生更新，storage 属性直接写）。
-  //
-  // @param {string} prop - 属性类型
-  // @param {*} value - 新值
-  // @returns {void}
-  set(prop, value) {
-    // 按属性分发。
-    switch (prop) {
-      // 本局属性：克隆赋值 + 派生高/低更新 + 累计记录。
-      case this.TYPES.AGE:
-      case this.TYPES.CHR:
-      case this.TYPES.INT:
-      case this.TYPES.STR:
-      case this.TYPES.MNY:
-      case this.TYPES.SPR:
-      case this.TYPES.LIF:
-      case this.TYPES.TLT:
-      case this.TYPES.EVT:
-        // 克隆赋值，并用 hl() 更新派生高/低值。
-        this.hl(prop, this.#data[prop] = this.#clone(value))
-        // 记录累计（天赋/事件进 ATLT/AEVT）。
-        this.achieve(prop, value)
-        // 完成。
-        return
-      // TMS：写 storage（重开次数）。
-      case this.TYPES.TMS:
-        // 转整数，非数字为 0。
-        this.lsset('times', parseInt(value) || 0)
-        return
-      // EXT：写 storage（继承天赋）。
-      case this.TYPES.EXT:
-        this.lsset('extendTalent', value)
-        return
-      // 其余（只读/计算）属性：忽略。
-      default:
-        return
-    }
+    // 委托注册表。
+    return this.#registry.get(prop)
   }
 
   // #getPropertys
@@ -435,98 +235,53 @@ class Property {
   getPropertys() {
     // 克隆打包六个属性。
     return this.#clone({
-      [this.TYPES.AGE]: this.get(this.TYPES.AGE),
-      [this.TYPES.CHR]: this.get(this.TYPES.CHR),
-      [this.TYPES.INT]: this.get(this.TYPES.INT),
-      [this.TYPES.STR]: this.get(this.TYPES.STR),
-      [this.TYPES.MNY]: this.get(this.TYPES.MNY),
-      [this.TYPES.SPR]: this.get(this.TYPES.SPR),
+      AGE: this.get('AGE'),
+      CHR: this.get('CHR'),
+      INT: this.get('INT'),
+      STR: this.get('STR'),
+      MNY: this.get('MNY'),
+      SPR: this.get('SPR'),
     })
   }
 
   // #getAll
   // 返回全部本局属性快照（供 condition 引擎作为 params 求值）。
-  // 覆盖 TYPES 中所有可求值属性：基础 + 派生 + 统计 + 特殊。
-  // 原版 checkProp 用 property.get(prop) 取任意属性，这里等价地全部展开，
-  // 保证旧数据条件（如 HAGE>79、TMS>99、ATLT?[1023]）能正确求值。
+  // 委托注册表展开全部参数（含派生/统计/特殊，RDM 等 special 跳过）。
   //
   // @returns {object} 全部属性对象
   getAll() {
-    // 构建快照对象。
-    const all = {}
-    // 遍历所有属性类型键。
-    for (const key in this.TYPES) {
-      // 跳过特殊随机属性（RDM 无固定值，条件中不使用）。
-      if (key === this.TYPES.RDM) continue
-      // 逐个求值（get() 内部处理派生/统计/特殊逻辑）。
-      all[this.TYPES[key]] = this.get(this.TYPES[key])
+    // 委托注册表。
+    return this.#registry.getAll()
+  }
+
+  // #set
+  // 覆盖设置属性值。委托 param 注册表。
+  // 对 TLT/EVT 等累计参数，set 后触发 achieve（记录 ATLT/AEVT），与原版一致。
+  //
+  // @param {string} prop - 属性类型
+  // @param {*} value - 新值
+  // @returns {void}
+  set(prop, value) {
+    // 委托注册表。
+    this.#registry.set(prop, value)
+    // 数组累计参数：set 后触发 achieve。
+    if (prop === 'TLT' || prop === 'EVT') {
+      // 记录累计（数组逐项）。
+      this.achieve(prop, value)
     }
-    // 返回快照。
-    return all
   }
 
   // #change
   // 增量修改属性值（游戏中的加减变化都走这里）。
-  // 数组属性（TLT/EVT）：
-  //   正数/正常 ID → 添加（去重）
-  //   负数（数字属性）或 '-' 前缀（字符串 ID）→ 移除
+  // 数组属性（TLT/EVT）：添加/移除 ID（'-' 前缀或负数移除）。
+  // 委托 param 注册表（数组参数的自定义 change 处理添加/移除语义）。
   //
   // @param {string} prop - 属性类型
   // @param {*} value - 增量或 ID
   // @returns {void}
   change(prop, value) {
-    // 数组值：递归逐项处理。
-    if (Array.isArray(value)) {
-      // 对每个元素递归调用自身。
-      for (const v of value) this.change(prop, v)
-      // 全部处理完。
-      return
-    }
-    // 按属性分发。
-    switch (prop) {
-      // 标量属性：数字累加。
-      case this.TYPES.AGE:
-      case this.TYPES.CHR:
-      case this.TYPES.INT:
-      case this.TYPES.STR:
-      case this.TYPES.MNY:
-      case this.TYPES.SPR:
-      case this.TYPES.LIF:
-        // 累加并更新派生高/低值。
-        this.hl(prop, this.#data[prop] += Number(value))
-        return
-      // 数组属性：添加/移除 ID。
-      case this.TYPES.TLT:
-      case this.TYPES.EVT:
-        // 取当前数组（引用，直接操作）。
-        const v = this.#data[prop]
-        // 字符串化 ID 便于统一判断。
-        const id = `${value}`
-        // 移除标记：数字负值或 '-' 前缀。
-        const isRemove = (typeof value === 'number' && value < 0) || id.startsWith('-')
-        // 需要移除的 ID。
-        const targetId = isRemove ? id.replace(/^-/, '') : id
-        // 移除：找到并删除。
-        if (isRemove) {
-          // 定位下标。
-          const index = v.indexOf(targetId)
-          // 存在则删除。
-          if (index !== -1) v.splice(index, 1)
-        } else {
-          // 添加：去重。
-          if (!v.includes(id)) v.push(id)
-        }
-        // 记录累计。
-        this.achieve(prop, value)
-        return
-      // TMS：走 set（storage）。
-      case this.TYPES.TMS:
-        this.set(prop, this.get(prop) + parseInt(value))
-        return
-      // 其余忽略。
-      default:
-        return
-    }
+    // 委托注册表。
+    this.#registry.change(prop, value)
   }
 
   // #hookSpecial
@@ -536,7 +291,7 @@ class Property {
   // @returns {string} 映射后的真实属性
   hookSpecial(prop) {
     // RDM：从候选里随机取一个。
-    if (prop === this.TYPES.RDM) {
+    if (prop === 'RDM') {
       // 注入的随机源。
       const random = this.#random
       return listRandom(this.SPECIAL.RDM, random)
@@ -594,7 +349,7 @@ class Property {
   // @returns {boolean} LIF < 1
   isEnd() {
     // 生命值小于 1 即结束。
-    return this.get(this.TYPES.LIF) < 1
+    return this.get('LIF') < 1
   }
 
   // #ageNext
@@ -604,9 +359,9 @@ class Property {
   // @returns {{age: number, event: Array, talent: Array}}
   ageNext() {
     // 年龄自增。
-    this.change(this.TYPES.AGE, 1)
+    this.change('AGE', 1)
     // 读取新年龄。
-    const age = this.get(this.TYPES.AGE)
+    const age = this.get('AGE')
     // 读取该年龄数据（缺失返回空）。
     const data = this.getAgeData(age)
     // 事件列表（缺失年龄用空数组）。
@@ -628,88 +383,17 @@ class Property {
     return this.#clone(this.#ageData[age])
   }
 
-  // #hl
-  // high/low：更新某个基础属性对应的派生高/低值。
-  //
-  // @param {string} prop - 基础属性（AGE/CHR/INT/STR/MNY/SPR）
-  // @param {number} value - 当前值
-  // @returns {void}
-  hl(prop, value) {
-    // 各属性对应的 [低值, 高值] 键。
-    let keys
-    // 映射基础属性 → 派生键对。
-    switch (prop) {
-      case this.TYPES.AGE: keys = [this.TYPES.LAGE, this.TYPES.HAGE]; break
-      case this.TYPES.CHR: keys = [this.TYPES.LCHR, this.TYPES.HCHR]; break
-      case this.TYPES.INT: keys = [this.TYPES.LINT, this.TYPES.HINT]; break
-      case this.TYPES.STR: keys = [this.TYPES.LSTR, this.TYPES.HSTR]; break
-      case this.TYPES.MNY: keys = [this.TYPES.LMNY, this.TYPES.HMNY]; break
-      case this.TYPES.SPR: keys = [this.TYPES.LSPR, this.TYPES.HSPR]; break
-      // 其余属性无派生。
-      default: return
-    }
-    // 解构出低值键和高值键。
-    const [l, h] = keys
-    // 低值取 min。
-    this.#data[l] = min(this.#data[l], value)
-    // 高值取 max。
-    this.#data[h] = max(this.#data[h], value)
-  }
-
   // #achieve
-  // 记录累计数据：
+  // 记录累计数据（委托注册表参数 change）：
   //   ACHV：追加 [id, 时间戳] 到成就列表。
-  //   TLT/EVT：把新 ID 合并进 ATLT/AEVT（去重）。
+  //   TLT/EVT：把新 ID 合并进 ATLT/AEVT（去重）——由注册表 TLT/EVT 的 change 联动。
   //
   // @param {string} prop - 属性类型
   // @param {*} newData - 新数据
   // @returns {void}
   achieve(prop, newData) {
-    // 按属性分发。
-    switch (prop) {
-      // 成就：追加 [id, 时间戳]。
-      case this.TYPES.ACHV:
-        // 读已有列表。
-        const lastData = this.lsget(prop)
-        // 追加新条目并写回。
-        this.lsset(prop, (lastData || []).concat([[newData, Date.now()]]))
-        return
-      // 天赋 → ATLT。
-      case this.TYPES.TLT: {
-        // 记录到 ATLT 的键。
-        const key = this.TYPES.ATLT
-        // 读已有 + 合并新数据 + 去重 + 写回。
-        this.#mergeSet(key, newData)
-        return
-      }
-      // 事件 → AEVT。
-      case this.TYPES.EVT: {
-        // 记录到 AEVT 的键。
-        const key = this.TYPES.AEVT
-        // 合并写回。
-        this.#mergeSet(key, newData)
-        return
-      }
-      // 其余忽略。
-      default:
-        return
-    }
-  }
-
-  // #mergeSet
-  // 把新 ID 合并进 storage 中的累计集合（去重）。
-  //
-  // @param {string} key - storage 键（ATLT/AEVT）
-  // @param {*} newData - 新 ID（单个或数组）
-  // @returns {void}
-  #mergeSet(key, newData) {
-    // 读已有列表。
-    const lastData = this.lsget(key) || []
-    // 合并并去重后写回。
-    this.lsset(
-      key,
-      Array.from(new Set(lastData.concat(newData || []).flat()))
-    )
+    // 委托注册表（ACHV/ATLT/AEVT 的 change 处理累计语义）。
+    this.#registry.change(prop, newData)
   }
 
   // #lsget
