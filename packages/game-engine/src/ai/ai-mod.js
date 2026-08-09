@@ -1,18 +1,20 @@
 /**
- * AI Mod 核心（Step 16/17/18/19）
+ * AI Mod 工厂（Step 16/17/18/19）
  *
- * AI Mod 是一个普通 Mod，只是默认安装且负责暴露 gameAPI.ai 增强能力。
- * 通过 createAIMod() 工厂把 AI 客户端 + 校验器 + 钩子逻辑组装进 gameAPI。
+ * AI Mod 是一个普通 Mod（位于 mods/ai-mod/），本模块提供其核心逻辑的单一实现：
+ * AI 客户端 + 校验器 + 钩子注册 + 重试/fallback。
+ * code.js 通过 gameAPI 调用，避免逻辑重复。
  *
  * 职责：
- *   1. 把 manifest.ai（baseUrl/apiKey/model）注入 gameAPI.ai。
- *   2. 注册生成钩子：onTalentPoolGenerate / onYearAdvance。
- *   3. 生成结果经校验器校验，失败自动重试 N 次，最终 fallback。
+ *   1. 用 AI 配置（baseUrl/apiKey/model）创建客户端。
+ *   2. 生成天赋/事件（含校验 + 重试 N 次 + fallback）。
+ *   3. 注册钩子：onTalentPoolGenerate / onYearAdvance。
  */
 
-// 引擎共享模块。
-import { createAIClient } from 'game-engine/src/ai/ai-client.js'
-import { validateTalentJSON, validateEventJSON } from 'game-engine/src/ai/ai-validate.js'
+// AI 客户端。
+import { createAIClient } from './ai-client.js'
+// AI 校验器。
+import { validateTalentJSON, validateEventJSON } from './ai-validate.js'
 
 // #createAIMod
 // 创建 AI Mod 增强器：注入 gameAPI + 注册钩子。
@@ -28,10 +30,12 @@ import { validateTalentJSON, validateEventJSON } from 'game-engine/src/ai/ai-val
 export function createAIMod({ gameAPI, config, fetch, generateTalent, generateEvent, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, warn: () => {}, error: () => {} }
-  // 客户端（配置了 Key 才创建）。
-  const client = config && config.apiKey
-    ? createAIClient({ fetch, log: logger })
-    : null
+  // 客户端：优先复用 gameAPI.ai（CLI/前端已注入的客户端），否则按配置新建。
+  const client = gameAPI.ai && gameAPI.ai.available
+    // 复用已配置的 AI 客户端（其 generate 已带 baseUrl/apiKey/model）。
+    ? { generateJSON: (p) => gameAPI.ai.generate(p) }
+    // 按配置新建（config.apiKey 存在时）。
+    : (config && config.apiKey ? createAIClient({ fetch, log: logger }) : null)
   // 默认重试次数。
   const MAX_RETRY = 3
   // 已注册的移除函数列表。

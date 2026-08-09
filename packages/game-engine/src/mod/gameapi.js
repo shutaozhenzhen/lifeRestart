@@ -147,7 +147,7 @@ export function createHookBus() {
 // @param {object} [deps.params] - 参数注册表（createParamRegistry 实例）；缺省不自建
 // @param {object} [deps.log] - 日志器
 // @returns {object} gameAPI
-export function createGameAPI({ data, hooks, ai, params, log }) {
+export function createGameAPI({ data, hooks, ai, aiModFactory, params, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, error: () => {} }
   // 钩子总线：注入外部实例（与 Life 共享）或自建。
@@ -160,7 +160,7 @@ export function createGameAPI({ data, hooks, ai, params, log }) {
   const aiConfig = ai || {}
 
   // 返回 API。
-  return {
+  const api = {
     // 钩子系统（委托外部总线）。
     on: (name, fn) => bus.on(name, fn),
     off: (name, fn) => bus.off(name, fn),
@@ -189,6 +189,11 @@ export function createGameAPI({ data, hooks, ai, params, log }) {
         return aiClient.generateJSON({ ...aiConfig, ...params })
       },
     },
+
+    // AI Mod 工厂（注入式；code.js 用它创建 AI Mod 增强器，避免逻辑重复）。
+    createAIMod: aiModFactory
+      ? (cfg) => aiModFactory({ gameAPI: api, config: { ...aiConfig, ...cfg }, log: logger })
+      : null,
 
     // 参数注册表（Mod 可定义/读取/修改可配置参数）。
     // 需传入 createParamRegistry 实例（与 Life 共享）才可用。
@@ -268,4 +273,6 @@ export function createGameAPI({ data, hooks, ai, params, log }) {
     // 数据访问（只读视图）。
     data: store,
   }
+  // 返回 API（含 createAIMod 闭包引用自身）。
+  return api
 }

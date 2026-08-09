@@ -20,6 +20,8 @@
 import { createModLoader } from '../mod/loader.js'
 import { createGameAPI, createHookBus } from '../mod/gameapi.js'
 import { createAIClient } from '../ai/ai-client.js'
+// AI Mod 工厂。
+import { createAIMod } from '../ai/ai-mod.js'
 import Life from '../modules/life.js'
 import { createRng } from '../functions/util.js'
 import { makeCliLogger } from './cli-util.js'
@@ -96,7 +98,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   const bus = createHookBus()
   // 加载 + 执行 code.js。
   const { data } = loader.loadAll({
-    createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, ai: aiConfig, log }),
+    createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, ai: aiConfig, aiModFactory: createAIMod, log }),
   })
   // 加载器错误。
   if (loader.errors.length > 0) loader.errors.forEach(e => log.warn(`Mod 错误: ${e}`))

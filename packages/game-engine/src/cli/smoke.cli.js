@@ -19,6 +19,8 @@
 import { createModLoader } from '../mod/loader.js'
 import { createGameAPI, createHookBus } from '../mod/gameapi.js'
 import { createAIClient } from '../ai/ai-client.js'
+// AI Mod 工厂。
+import { createAIMod } from '../ai/ai-mod.js'
 import Life from '../modules/life.js'
 import { createRng } from '../functions/util.js'
 import { makeCliLogger } from './cli-util.js'
@@ -81,7 +83,7 @@ function loadModData({ modsDir, aiConfig, log }) {
   const bus = createHookBus()
   // 加载 + 执行 code.js。
   const { data } = loader.loadAll({
-    createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, ai: aiConfig, log }),
+    createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, ai: aiConfig, aiModFactory: createAIMod, log }),
   })
   // 返回。
   return { data, bus }

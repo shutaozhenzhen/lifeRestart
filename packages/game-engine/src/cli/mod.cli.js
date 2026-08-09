@@ -17,6 +17,8 @@
 import { createModLoader } from '../mod/loader.js'
 import { createGameAPI, createHookBus } from '../mod/gameapi.js'
 import { createAIClient } from '../ai/ai-client.js'
+// AI Mod 工厂（code.js 经 gameAPI.createAIMod 使用）。
+import { createAIMod } from '../ai/ai-mod.js'
 import { makeCliLogger } from './cli-util.js'
 
 // #makeAIConfig
@@ -110,9 +112,9 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   }
   // 共享钩子总线（loader 的 code.js 与演示共用同一总线，AI 钩子才能互相触发）。
   const bus = createHookBus()
-  // 加载数据并执行各 Mod 的 code.js（注入 gameAPI + AI 客户端 + 共享总线）。
+  // 加载数据并执行各 Mod 的 code.js（注入 gameAPI + AI 客户端 + AI Mod 工厂 + 共享总线）。
   const { data, codeList } = loader.loadAll({
-    createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, ai: aiConfig, log }),
+    createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, ai: aiConfig, aiModFactory: createAIMod, log }),
   })
   // 数据统计。
   console.log(`\n=== 合并数据 ===`)
@@ -122,7 +124,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
     console.log(`  ${key}: ${Object.keys(data[key]).length} 项`)
   }
   // gameAPI 演示（复用共享总线，AI 钩子会被触发）。
-  const api = createGameAPI({ data, hooks: bus, ai: aiConfig, log })
+  const api = createGameAPI({ data, hooks: bus, ai: aiConfig, aiModFactory: createAIMod, log })
   // 触发 onYearAdvance（AI 注入事件）。
   const payload = { age: 1, content: [], isEnd: false }
   api.emit('onYearAdvance', payload).then(() => {
