@@ -125,6 +125,9 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 开局。
   life.remake(selected)
   life.start({ CHR: 4, INT: 4, STR: 4, MNY: 4, SPR: 4 })
+  // journal（Step 21：AI 生成结果记录，可导出）。
+  const { createJournal, recordYear } = await import('../functions/journal.js')
+  const journal = createJournal({})
   // 推进。
   let aiEvents = 0
   for (let i = 0; i < years; i++) {
@@ -132,6 +135,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
     const r = life.next()
     // 等微任务，让 AI 注入落地（真实场景是下一帧/下一岁可见）。
     await new Promise(res => setTimeout(res, 20))
+    // 记录流水（含 AI 注入）。
+    recordYear(journal, r)
     // 统计 AI 事件。
     aiEvents += r.content.filter(c => c.description && c.description.includes('AI')).length
     // 结束。
@@ -142,4 +147,16 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   console.log(`推进 ${years} 年，AI 生成内容 ${aiEvents} 条`)
   // AI 状态。
   if (!aiConfig) console.log('（未配置 AI，以上为原版数据）')
+  // 输出 journal（--journal 指定文件时落盘，供 export-ai 导出 Mod）。
+  const jIdx = argv.indexOf('--journal')
+  if (jIdx !== -1) {
+    // 文件路径。
+    const journalFile = argv[jIdx + 1]
+    // 写入。
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(journalFile, JSON.stringify(journal.all(), null, 2))
+    // 提示。
+    console.log(`流水已写入: ${journalFile}（${journal.all().length} 条）`)
+    console.log(`提示: 可用 export-ai.cli.js --journal ${journalFile} --out <dir> 导出为 Mod`)
+  }
 }

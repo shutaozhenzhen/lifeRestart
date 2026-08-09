@@ -36,7 +36,71 @@ const mods = ref([
     enabled: false,
     permissions: ['hooks', 'storage'],
   },
+  {
+    name: 'ai-mod',
+    version: '1.0.0',
+    description: 'AI 增强（系统内置，需配置 API Key）',
+    system: true,
+    enabled: false,
+    permissions: ['ai', 'network', 'storage', 'hooks'],
+  },
 ])
+
+// AI 配置（localStorage 持久化）。
+const aiConfig = ref(loadAIConfig())
+
+// 读取 AI 配置。
+function loadAIConfig() {
+  // 读取。
+  try {
+    // localStorage。
+    return JSON.parse(localStorage.getItem('aiConfig')) || { apiKey: '', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', provider: 'openai' }
+  } catch {
+    // 默认。
+    return { apiKey: '', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', provider: 'openai' }
+  }
+}
+
+// 保存 AI 配置。
+function saveAIConfig() {
+  // 写入。
+  localStorage.setItem('aiConfig', JSON.stringify(aiConfig.value))
+}
+
+// 服务商预设。
+const PROVIDERS = {
+  openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  glm: { label: 'GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+  qwen: { label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+}
+
+// 选择服务商（自动填充 baseUrl/model）。
+function selectProvider(p) {
+  // 预设。
+  const preset = PROVIDERS[p]
+  // 有预设。
+  if (preset) {
+    // 填充。
+    aiConfig.value.baseUrl = preset.baseUrl
+    aiConfig.value.model = preset.model
+  }
+  // 记录。
+  aiConfig.value.provider = p
+}
+
+// 切换 AI Mod 开关（启用时需配置 Key）。
+function toggleAI(mod) {
+  // 切换。
+  mod.enabled = !mod.enabled
+  // 启用但未配置 Key。
+  if (mod.enabled && !aiConfig.value.apiKey) {
+    // 提示。
+    alert('启用 AI 增强前，请先配置 API Key（下方 AI 设置）')
+  }
+  // 保存。
+  saveAIConfig()
+}
 
 // 待授权的 Mod（权限弹窗）。
 const pendingAuth = ref(null)
@@ -96,11 +160,52 @@ function back() {
         </span>
       </div>
       <div class="mod-actions">
-        <button class="btn" :class="{ on: mod.enabled }" @click="toggle(mod); requestPermission(mod)">
+        <button class="btn" :class="{ on: mod.enabled }" @click="mod.name === 'ai-mod' ? toggleAI(mod) : (toggle(mod), requestPermission(mod))">
           {{ mod.enabled ? '已启用' : '已禁用' }}
         </button>
         <button v-if="!mod.system" class="btn danger" @click="remove(mod)">删除</button>
         <span v-else class="sys-hint">系统内置</span>
+      </div>
+    </div>
+
+    <!-- AI 配置面板 -->
+    <div class="ai-panel">
+      <h3 class="ai-title">AI 设置</h3>
+      <p class="ai-hint">配置 AI 服务商（Mod 级 API Key，用于 AI 生成天赋/事件）</p>
+
+      <div class="ai-field">
+        <label>服务商</label>
+        <div class="provider-row">
+          <button
+            v-for="(preset, key) in PROVIDERS"
+            :key="key"
+            class="btn provider"
+            :class="{ active: aiConfig.provider === key }"
+            @click="selectProvider(key)"
+          >{{ preset.label }}</button>
+        </div>
+      </div>
+
+      <div class="ai-field">
+        <label>API Key</label>
+        <input v-model="aiConfig.apiKey" type="password" placeholder="sk-..." @change="saveAIConfig" />
+      </div>
+
+      <div class="ai-field">
+        <label>模型</label>
+        <input v-model="aiConfig.model" placeholder="gpt-4o-mini" @change="saveAIConfig" />
+      </div>
+
+      <div class="ai-field">
+        <label>Base URL</label>
+        <input v-model="aiConfig.baseUrl" placeholder="https://api.openai.com/v1" @change="saveAIConfig" />
+      </div>
+
+      <div class="ai-field ai-status">
+        <label>状态</label>
+        <span :class="aiConfig.apiKey ? 'ok' : 'warn'">
+          {{ aiConfig.apiKey ? '已配置 Key（可启用 ai-mod）' : '未配置 Key（无法调用 AI）' }}
+        </span>
       </div>
     </div>
 
@@ -225,5 +330,59 @@ function back() {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+.ai-panel {
+  margin-top: 20px;
+  background: #1a2a4e;
+  border-radius: 8px;
+  padding: 18px;
+}
+.ai-title {
+  margin-bottom: 4px;
+}
+.ai-hint {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 14px;
+}
+.ai-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.ai-field label {
+  width: 80px;
+  font-size: 13px;
+  color: #aaa;
+  flex-shrink: 0;
+}
+.ai-field input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #2a3a5e;
+  background: #0f3460;
+  color: #fff;
+  font-size: 13px;
+}
+.provider-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.btn.provider {
+  padding: 5px 12px;
+  font-size: 12px;
+  background: #0f3460;
+}
+.btn.provider.active {
+  background: #e94560;
+}
+.ai-status .ok {
+  color: #4caf50;
+}
+.ai-status .warn {
+  color: #ff9800;
 }
 </style>
