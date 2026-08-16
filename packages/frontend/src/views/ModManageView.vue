@@ -67,6 +67,46 @@ function saveAIConfig() {
   localStorage.setItem('aiConfig', JSON.stringify(aiConfig.value))
 }
 
+// AI 代理基地址（Step 16/17/23）优先序：
+//   Electron 渲染进程（window.electronAIProxy，preload 注入）> VITE_AI_PROXY > Vite dev 代理 /ai-proxy。
+const AI_PROXY = window.electronAIProxy?.baseUrl || import.meta.env.VITE_AI_PROXY || '/ai-proxy'
+
+// AI 连接测试状态。
+const aiTest = ref({ status: 'idle', output: '' })
+
+// 测试 AI 连接（经本地代理调用当前服务商，验证 Key/模型/路由）。
+async function testAI() {
+  // 置为测试中。
+  aiTest.value = { status: 'testing', output: '' }
+  // 调用代理。
+  try {
+    // 请求（真实服务商需 Key；provider=mock 可无 Key 演示）。
+    const res = await fetch(`${AI_PROXY}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: aiConfig.value.provider,
+        apiKey: aiConfig.value.apiKey,
+        baseUrl: aiConfig.value.baseUrl,
+        model: aiConfig.value.model,
+        messages: [{ role: 'user', content: '用一句话介绍你自己（用于连接测试）' }],
+        max_tokens: 48,
+      }),
+    })
+    // 解析响应。
+    const data = await res.json()
+    // 非 2xx。
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`)
+    // 提取回复。
+    const text = data.choices?.[0]?.message?.content || '(空回复)'
+    // 成功。
+    aiTest.value = { status: 'ok', output: text }
+  } catch (e) {
+    // 失败（含代理未启动的情况）。
+    aiTest.value = { status: 'error', output: e.message }
+  }
+}
+
 // 服务商预设。
 const PROVIDERS = {
   openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
@@ -207,6 +247,19 @@ function back() {
           {{ aiConfig.apiKey ? '已配置 Key（可启用 ai-mod）' : '未配置 Key（无法调用 AI）' }}
         </span>
       </div>
+
+      <div class="ai-field ai-test">
+        <label>连接测试</label>
+        <button class="btn primary" :disabled="aiTest.status === 'testing'" @click="testAI">
+          {{ aiTest.status === 'testing' ? '测试中…' : '测试连接' }}
+        </button>
+        <span v-if="aiTest.status === 'ok'" class="ok test-out">{{ aiTest.output }}</span>
+        <span v-else-if="aiTest.status === 'error'" class="err test-out">{{ aiTest.output }}</span>
+      </div>
+      <p class="ai-hint">
+        测试经本地 AI 代理转发（需先启动代理：cd packages/game-engine && node server.js）。
+        切换服务商后测试，可验证不同 provider 的路由与回复。
+      </p>
     </div>
 
     <!-- 权限弹窗 -->
@@ -384,5 +437,19 @@ function back() {
 }
 .ai-status .warn {
   color: #ff9800;
+}
+.ai-test .ok {
+  color: #4caf50;
+}
+.ai-test .err {
+  color: #e94560;
+}
+.test-out {
+  font-size: 12px;
+  word-break: break-all;
+}
+.ai-test .btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>
