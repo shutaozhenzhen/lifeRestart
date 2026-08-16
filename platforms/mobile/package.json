@@ -1,0 +1,13 @@
+{
+  "name": "mobile-platform",
+  "version": "0.0.1",
+  "private": true,
+  "description": "移动端（Capacitor APK，Step 25）— 前端 WebView + nodejs-mobile 内嵌 AI 代理",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/copy-dist.js",
+    "android:add": "npx cap add android",
+    "android:sync": "npx cap sync android",
+    "android:open": "npx cap open android"
+  }
+}

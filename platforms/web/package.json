@@ -1,0 +1,19 @@
+{
+  "name": "web-platform",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Web + Termux 版（Step 24）— 单进程：静态文件 + 内嵌 AI 代理（/ai-proxy）",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "build": "node scripts/build.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "game-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "archiver": "^7.0.1",
+    "vitest": "^4.1.10"
+  }
+}

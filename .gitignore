@@ -11,6 +11,14 @@ docs/
 out/
 release/
 
+# 平台构建产物（阶段五，由构建脚本生成，勿提交）
+platforms/electron/dist-web/
+platforms/electron/release/
+platforms/web/public/
+platforms/web/release/
+platforms/web/bundle/
+platforms/mobile/www/
+
 # Data Mod 生成产物（由 data-mod.cli.js 落盘生成，勿提交）
 mods/lifeRestart-data/
 

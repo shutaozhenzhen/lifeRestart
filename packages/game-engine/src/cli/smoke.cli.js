@@ -31,7 +31,7 @@ import { basename } from 'node:path'
 // 构建 AI 配置（--mock-ai 或环境变量）。
 // @param {string[]} argv - CLI 参数
 // @returns {object|null} AI 配置或 null
-function makeAIConfig(argv) {
+export function makeAIConfig(argv) {
   // mock 模式。
   const mockIdx = argv.indexOf('--mock-ai')
   // mock。
@@ -76,7 +76,7 @@ function makeAIConfig(argv) {
 // @param {object|null} params.aiConfig - AI 配置
 // @param {object} params.log - 日志器
 // @returns {{data: object, bus: object}} 数据与共享总线
-function loadModData({ modsDir, aiConfig, log }) {
+export function loadModData({ modsDir, aiConfig, log }) {
   // 加载器。
   const loader = createModLoader({ modsDir, log })
   // 共享总线。

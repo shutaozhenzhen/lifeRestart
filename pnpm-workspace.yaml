@@ -8,5 +8,8 @@ packages:
   - 'packages/*'
   - 'platforms/*'
 allowBuilds:
+  electron: true
+  electron-builder: true
+  electron-winstaller: true
   esbuild: true
   vue-demi: true

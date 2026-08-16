@@ -1,0 +1,8 @@
+{
+  "appId": "com.liferestart.mobile",
+  "appName": "人生重开模拟器",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}

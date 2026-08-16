@@ -1,0 +1,43 @@
+{
+  "name": "electron-platform",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Electron 桌面版（Step 23）— 主进程内嵌 AI 代理启动 + 加载 frontend 构建产物",
+  "main": "main.js",
+  "scripts": {
+    "test": "vitest run",
+    "start": "electron .",
+    "smoke": "electron . --smoke",
+    "predist": "node scripts/copy-dist.js",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "game-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-builder": "^26.0.12",
+    "vitest": "^4.1.10"
+  },
+  "build": {
+    "appId": "com.liferestart.desktop",
+    "productName": "人生重开模拟器",
+    "files": [
+      "main.js",
+      "preload.js",
+      "proxy-manager.js",
+      "dist-web/**",
+      "node_modules/game-engine/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
