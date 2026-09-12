@@ -16,6 +16,8 @@
 
 // 兼容层（旧语法转换，Data Mod 打包用）。
 import { convertLegacy } from './condition/compat.js'
+// 日志器（缺省静默）。
+import { SILENT_LOGGER } from './functions/logger.js'
 
 // #ARRAY_PROPS
 // 默认数组属性集合（成员判断用 .some()，值转字符串 ID）。
@@ -30,7 +32,9 @@ export const ARRAY_PROPS = ['TLT', 'EVT', 'ATLT', 'AEVT', 'ACHV']
 // @param {string} deps.baseUrl - 数据基础路径
 // @param {string} deps.locale - 语言目录名（zh-cn / en-us）
 // @returns {object} 加载器
-export function createLoader({ fetch, baseUrl = '', locale = 'zh-cn' }) {
+export function createLoader({ fetch, baseUrl = '', locale = 'zh-cn', log } = {}) {
+  // 日志器（缺省静默，不干扰测试）。
+  const logger = log || SILENT_LOGGER
   // 返回加载器对象。
   return {
     // #loadAll
@@ -38,6 +42,8 @@ export function createLoader({ fetch, baseUrl = '', locale = 'zh-cn' }) {
     //
     // @returns {Promise<object>} { age, talents, events, achievements, characters, total }
     async loadAll() {
+      // 记录（debug）。
+      logger.debug(`data-loader.loadAll: 从 ${baseUrl}/${locale}/ 加载 5 个数据文件`)
       // 并行加载各数据文件。
       const [age, talents, events, achievements, characters] = await Promise.all([
         this.load('age.json'),
@@ -46,6 +52,8 @@ export function createLoader({ fetch, baseUrl = '', locale = 'zh-cn' }) {
         this.load('achievement.json'),
         this.load('character.json'),
       ])
+      // 记录（debug）。
+      logger.debug('data-loader: 全部加载完成（age/talents/events/achievements/characters）')
       // 返回整合数据。
       return { age, talents, events, achievements, characters }
     },
@@ -58,10 +66,14 @@ export function createLoader({ fetch, baseUrl = '', locale = 'zh-cn' }) {
     async load(file) {
       // 拼接完整 URL。
       const url = `${baseUrl}/${locale}/${file}`
+      // 记录（trace）。
+      logger.trace(`data-loader.load(${file})`)
       // 调用注入的 fetch。
       const res = await fetch(url)
       // 非 2xx 抛错。
       if (!res.ok) throw new Error(`加载失败: ${url} (${res.status})`)
+      // 记录（debug）。
+      logger.debug(`data-loader: ${file} 加载成功`)
       // 返回 JSON。
       return res.json()
     },

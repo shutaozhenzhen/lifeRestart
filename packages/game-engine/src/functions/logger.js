@@ -36,6 +36,17 @@ const DEFAULT_SINK = {
   error: (msg) => console.error(msg),
 }
 
+// #SILENT_SINK
+// 静默输出目标：全部丢弃。
+// 引擎内核模块构造缺省使用，避免无配置/测试场景刷屏。
+const SILENT_SINK = {
+  trace: () => {},
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+}
+
 // #serializeArg
 // 把函数参数序列化为可读文本。
 // 超过 maxArgLength 截断（默认 200，避免刷屏）；trace 级设为 Infinity 完整显示。
@@ -71,7 +82,9 @@ function serializeArg(arg, maxArgLength) {
 // @param {string} [params.prefix] - 日志前缀（如模块名）
 // @param {number} [params.maxArgLength] - trace 参数最大显示长度，默认 200
 // @returns {object} 日志器 { trace, debug, info, warn, error, traceFn, setLevel, getLevel }
-export function createLogger({ level = 'info', sink = DEFAULT_SINK, prefix = '', maxArgLength = 200 } = {}) {
+export function createLogger({ level = 'info', sink, prefix = '', maxArgLength = 200 } = {}) {
+  // 输出目标：sink === null 时全静默；缺省 console；自定义 sink 直接使用。
+  const out = sink === null ? SILENT_SINK : (sink || DEFAULT_SINK)
   // 当前级别权重。
   let currentLevel = LOG_LEVELS[level] !== undefined ? LOG_LEVELS[level] : LOG_LEVELS.info
 
@@ -98,7 +111,7 @@ export function createLogger({ level = 'info', sink = DEFAULT_SINK, prefix = '',
     // 级别过滤。
     if (LOG_LEVELS[lv] < currentLevel) return
     // 调用 sink 输出。
-    sink[lv](format(lv, msg))
+    out[lv](format(lv, msg))
   }
 
   // 返回日志器对象。
@@ -186,8 +199,39 @@ export function createLogger({ level = 'info', sink = DEFAULT_SINK, prefix = '',
       // 默认。
       return 'info'
     },
+
+    // #child
+    // 创建子日志器：继承当前级别与输出目标，仅追加前缀。
+    // 引擎内核用：Life 给每个子模块分发带模块前缀的日志器，
+    // setLevel 对子日志器同样生效（动态切换级别全局同步）。
+    //
+    // @param {string} childPrefix - 子前缀（如 'property'/'talent'）
+    // @returns {object} 子日志器
+    child: (childPrefix) => createLogger({
+      // 继承当前级别。
+      level: (() => {
+        // 反查级别名。
+        for (const [name, weight] of Object.entries(LOG_LEVELS)) {
+          // 匹配当前权重。
+          if (weight === currentLevel) return name
+        }
+        // 默认。
+        return 'info'
+      })(),
+      // 透传输出目标（null 保持静默，自定义 sink 复用同一实例）。
+      sink,
+      // 追加前缀：父级已有前缀则用冒号连接。
+      prefix: prefix ? `${prefix}:${childPrefix}` : childPrefix,
+      // 透传参数长度限制。
+      maxArgLength,
+    }),
   }
 }
+
+// #SILENT_LOGGER
+// 全静默日志器：引擎模块构造缺省使用（不传 logger 时），
+// 级别过滤仍可设置，但所有输出丢弃，不干扰测试与无配置场景。
+export const SILENT_LOGGER = createLogger({ sink: null })
 
 // #parseLogLevel
 // 解析 CLI 参数中的 --log-level。

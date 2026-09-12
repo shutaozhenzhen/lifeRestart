@@ -112,8 +112,8 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
       console.log(`🏆 成就达成: ${payload.name}`)
     }
   }
-  // 创建 Life 实例。
-  const life = new Life({ data, random, storage, emit })
+  // 创建 Life 实例（注入日志器：引擎内核各级日志随 --log-level 切换）。
+  const life = new Life({ data, random, storage, emit, logger })
   // 初始化（异步）。
   const ready = (async () => {
     // 初始化数据。

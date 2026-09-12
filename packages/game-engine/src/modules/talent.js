@@ -14,25 +14,30 @@
  *   do / replace / forEach
  */
 
+import { SILENT_LOGGER } from '../functions/logger.js'
+
 class Talent {
   // 构造函数：注入依赖，替代原版的 #system。
   // @param {object} deps
   // @param {Function} [deps.clone]  - 深拷贝函数
   // @param {Function} [deps.check]  - 条件求值函数 check(condition, props)
   // @param {() => number} [deps.random] - 随机源
-  constructor({ clone = (v) => v, check = () => false, random = Math.random } = {}) {
+  constructor({ clone = (v) => v, check = () => false, random = Math.random, logger } = {}) {
     // 保存注入的克隆函数。
     this.#clone = clone
     // 保存注入的条件求值函数。
     this.#check = check
     // 保存注入的随机源。
     this.#random = random
+    // 保存日志器（缺省静默，不干扰测试）。
+    this.#log = logger || SILENT_LOGGER
   }
 
   // 私有字段。
   #clone        // 克隆函数
   #check        // 条件求值函数
   #random       // 随机源
+  #log          // 日志器
   #talents      // 天赋数据
   #talentPullCount   // 天赋抽取池大小
   #talentRate   // 天赋等级概率
@@ -49,6 +54,8 @@ class Talent {
   initial({ talents }) {
     // 保存天赋数据。
     this.#talents = talents
+    // 记录（debug）。
+    this.#log.debug(`talent.initial: ${Object.keys(talents || {}).length} 个天赋`)
     // 遍历每个天赋。
     for (const id in talents) {
       // 取出天赋对象。
@@ -127,6 +134,8 @@ class Talent {
   check(talentId) {
     // 取天赋对象。
     const { condition } = this.get(talentId)
+    // trace：条件检查。
+    this.#log.trace(`talent.check(${talentId})`)
     // 无条件则满足。
     if (!condition) return true
     // 用注入的 check 求值（新语法条件）。
@@ -243,6 +252,8 @@ class Talent {
   // @param {object} additionValues - 加成属性值
   // @returns {Array<object>} 天赋对象数组
   talentRandom(include, additionValues) {
+    // trace 入口。
+    this.#log.trace('→ talent.talentRandom()')
     // 计算各等级概率。
     const rate = this.getRate(additionValues)
 
@@ -317,6 +328,8 @@ class Talent {
   // @param {number} count - 抽取数量
   // @returns {Array<string>} 天赋 ID 数组
   random(count) {
+    // trace 入口。
+    this.#log.trace(`→ talent.random(${count})`)
     // 非 exclusive 天赋 ID 列表。
     const talents = Object.keys(this.#talents).filter(id => !this.#talents[id].exclusive)
     // 逐个随机抽取。
@@ -354,6 +367,8 @@ class Talent {
   // @param {string} talentId - 天赋 ID
   // @returns {{effect, grade, name, description}|null} 触发结果；条件不满足返回 null
   do(talentId) {
+    // trace 入口。
+    this.#log.trace(`→ talent.do(${talentId})`)
     // 取天赋字段。
     const { effect, condition, grade, name, description } = this.get(talentId)
     // 有条件且不满足 → 不触发。

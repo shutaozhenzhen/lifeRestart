@@ -10,21 +10,26 @@
  *   initial / count / check / get / information / do
  */
 
+import { SILENT_LOGGER } from '../functions/logger.js'
+
 class Event {
   // 构造函数：注入依赖，替代原版的 #system。
   // @param {object} deps
   // @param {Function} [deps.clone] - 深拷贝函数
   // @param {Function} [deps.check] - 条件求值函数 check(condition, props)
-  constructor({ clone = (v) => v, check = () => false } = {}) {
+  constructor({ clone = (v) => v, check = () => false, logger } = {}) {
     // 保存注入的克隆函数。
     this.#clone = clone
     // 保存注入的条件求值函数。
     this.#check = check
+    // 保存日志器（缺省静默，不干扰测试）。
+    this.#log = logger || SILENT_LOGGER
   }
 
   // 私有字段。
   #clone      // 克隆函数
   #check      // 条件求值函数
+  #log        // 日志器
   #events     // 事件数据
 
   // #initial
@@ -38,6 +43,8 @@ class Event {
   initial({ events }) {
     // 保存事件数据。
     this.#events = events
+    // 记录（debug）。
+    this.#log.debug(`event.initial: ${Object.keys(events || {}).length} 个事件`)
     // 遍历每个事件。
     for (const id in events) {
       // 取出事件对象。
@@ -76,6 +83,8 @@ class Event {
   check(eventId) {
     // 取事件字段。
     const { include, exclude, NoRandom } = this.get(eventId)
+    // trace：随机触发条件检查。
+    this.#log.trace(`event.check(${eventId})`)
     // NoRandom 事件不能随机触发。
     if (NoRandom) return false
     // exclude 条件满足 → 禁止触发。
@@ -118,6 +127,8 @@ class Event {
   // @param {string} eventId - 事件 ID
   // @returns {{effect, next?, description, postEvent?, grade}} 执行结果
   do(eventId) {
+    // trace 入口。
+    this.#log.trace(`→ event.do(${eventId})`)
     // 取事件字段。
     const { effect, branch, event: description, postEvent, grade } = this.get(eventId)
     // 有分支：逐条检查条件。

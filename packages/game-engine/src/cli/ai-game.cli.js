@@ -104,12 +104,13 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   if (loader.errors.length > 0) loader.errors.forEach(e => log.warn(`Mod 错误: ${e}`))
   // 打印 Mod 列表。
   console.log(`Mod: ${loader.order.join(', ')}`)
-  // 创建 Life（注入共享总线 → 引擎触发钩子 → AI 注入）。
+  // 创建 Life（注入共享总线 → 引擎触发钩子 → AI 注入 + 日志器）。
   const life = new Life({
     data,
     random,
     hooks: bus,
     storage: { _d: {}, getItem(k) { return k in this._d ? this._d[k] : null }, setItem(k, v) { this._d[k] = String(v) } },
+    logger: log,
   })
   // 初始化。
   await life.initial()

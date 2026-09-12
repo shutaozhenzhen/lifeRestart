@@ -23,6 +23,7 @@ import Achievement from './achievement.js'
 import Character from './character.js'
 import { clone as cloneUtil, weightRandom } from '../functions/util.js'
 import { check as checkCondition } from '../condition/index.js'
+import { SILENT_LOGGER } from '../functions/logger.js'
 
 class Life {
   // 构造函数：注入依赖。
@@ -33,7 +34,8 @@ class Life {
   // @param {() => number} [deps.now] - 时间戳函数
   // @param {(tag: string, data: *) => void} [deps.emit] - 事件总线（成就通知等业务事件）
   // @param {object} [deps.hooks] - Mod 钩子总线（{ emit }），AI Mod 等通过它介入游戏流程
-  constructor({ data, random = Math.random, storage, now, emit = () => {}, hooks } = {}) {
+  // @param {object} [deps.logger] - 日志器（functions/logger.js 的 createLogger 产物）；缺省全静默
+  constructor({ data, random = Math.random, storage, now, emit = () => {}, hooks, logger } = {}) {
     // 保存数据。
     this.#data = data || {}
     // 保存随机源。
@@ -42,17 +44,25 @@ class Life {
     this.#emit = emit
     // 保存 Mod 钩子总线（缺省空操作）。
     this.#hooks = hooks || { emit: () => [], emitSync: () => [] }
+    // 保存日志器（缺省静默，不干扰测试/无配置场景）。
+    this.#log = logger || SILENT_LOGGER
+    // 子模块日志器：继承级别/输出目标，追加模块前缀。
+    const propertyLog = this.#log.child('property')
+    const talentLog = this.#log.child('talent')
+    const eventLog = this.#log.child('event')
+    const achievementLog = this.#log.child('achievement')
+    const characterLog = this.#log.child('character')
     // 属性实例。
-    this.#property = new Property({ clone: cloneUtil, storage, random })
+    this.#property = new Property({ clone: cloneUtil, storage, random, logger: propertyLog })
     // 条件求值闭包：用当前属性快照（所有模块共享）。
     const checkNow = (condition) => checkCondition(condition, this.#property.getAll())
     // 天赋实例。
-    this.#talent = new Talent({ clone: cloneUtil, check: checkNow, random })
+    this.#talent = new Talent({ clone: cloneUtil, check: checkNow, random, logger: talentLog })
     // 事件实例。
-    this.#event = new Event({ clone: cloneUtil, check: checkNow })
+    this.#event = new Event({ clone: cloneUtil, check: checkNow, logger: eventLog })
     // 成就实例：绑定属性系统的 ACHV 读写。
     this.#achievement = new Achievement({
-      clone: cloneUtil, check: checkNow, emit,
+      clone: cloneUtil, check: checkNow, emit, logger: achievementLog,
       // 达成检查：ACHV 累计列表是否含该 ID。
       isAchieved: (id) => (this.#property.get('ACHV') || []).some(([a]) => a == id),
       // 记录达成：写入属性系统 ACHV（含时间戳）。
@@ -60,9 +70,13 @@ class Life {
     })
     // 名人实例。
     this.#character = new Character({
-      clone: cloneUtil, random, storage, now,
+      clone: cloneUtil, random, storage, now, logger: characterLog,
       getTalentRandom: (count) => this.#talent.random(count),
     })
+    // 全部日志器（自身 + 各子模块），供 setLogLevel 动态切换。
+    this.#loggers = [this.#log, propertyLog, talentLog, eventLog, achievementLog, characterLog]
+    // 记录构造摘要。
+    this.#log.debug(`Life 构造: data=${Object.keys(this.#data).join(',') || '(空)'} logger=${logger ? '注入' : '静默'}`)
   }
 
   // 模块枚举。
@@ -84,6 +98,8 @@ class Life {
   #random
   #emit
   #hooks
+  #log                // 日志器（引擎编排层）
+  #loggers            // 全部日志器集合（含子模块，供动态切换级别）
   #triggerTalents      // 天赋触发计数
   #defaultPropertyPoints // 默认属性点数
   #talentSelectLimit   // 天赋选择上限
@@ -99,6 +115,12 @@ class Life {
   async initial() {
     // 从数据源解构。
     const { age, talents, events, achievements, characters } = this.#data
+    // 规模摘要（info）。
+    this.#log.info(
+      `initial: age=${Object.keys(age || {}).length} talents=${Object.keys(talents || {}).length} ` +
+      `events=${Object.keys(events || {}).length} achievements=${Object.keys(achievements || {}).length} ` +
+      `characters=${Object.keys(characters || {}).length}`
+    )
     // 各模块初始化并记录总数。
     const total = {
       [this.PropertyTypes.TACHV]: this.#achievement.initial({ achievements }),
@@ -109,6 +131,8 @@ class Life {
     this.#property.initial({ age, total })
     // 名人初始化。
     this.#character.initial({ characters })
+    // 完成摘要（debug）。
+    this.#log.debug(`initial 完成: TACHV=${total[this.PropertyTypes.TACHV]} TEVT=${total[this.PropertyTypes.TEVT]} TTLT=${total[this.PropertyTypes.TTLT]}`)
     // 返回总数。
     return total
   }
@@ -142,6 +166,8 @@ class Life {
     this.#talent.config()
     // 属性配置（judge 分档）。
     this.#property.config(propertyConfig)
+    // 记录配置摘要。
+    this.#log.debug(`config: 点数=${defaultPropertyPoints} 天赋上限=${talentSelectLimit} 分配范围=${JSON.stringify(propertyAllocateLimit)}`)
   }
 
   // #request
@@ -179,7 +205,23 @@ class Life {
   // @returns {boolean} 结果
   check(condition) {
     // 用当前属性快照求值。
-    return checkCondition(condition, this.#property.getAll())
+    const result = checkCondition(condition, this.#property.getAll())
+    // trace：条件求值结果。
+    this.#log.trace(`check(${condition}) → ${result}`)
+    // 返回。
+    return result
+  }
+
+  // #setLogLevel
+  // 动态切换日志级别：同步到自身与全部子模块日志器，全链路实时生效。
+  //
+  // @param {string} level - trace/debug/info/warn/error
+  // @returns {void}
+  setLogLevel(level) {
+    // 遍历全部日志器。
+    this.#loggers.forEach(l => l.setLevel(level))
+    // 记录。
+    this.#log.info(`日志级别切换为 ${level}`)
   }
 
   // #remake
@@ -194,6 +236,8 @@ class Life {
     this.#initialData.TLT = cloneUtil(talents)
     // 重置触发计数。
     this.#triggerTalents = {}
+    // 记录开局准备（info）。
+    this.#log.info(`remake: 已选天赋 ${talents.length} 个（${talents.join(',') || '无'}）`)
     // 触发替换链。
     return this.talentReplace(this.#initialData.TLT)
   }
@@ -209,6 +253,8 @@ class Life {
       // 覆盖初始数据。
       this.#initialData[key] = cloneUtil(allocation[key])
     }
+    // 记录开局（info）。
+    this.#log.info(`start: 属性分配 ${JSON.stringify(allocation)}`)
     // 重启属性系统。
     this.#property.restart(this.#initialData)
     // 触发天赋（初始天赋）。
@@ -217,6 +263,8 @@ class Life {
     this.#property.restartLastStep()
     // 初始成就检测。
     this.#achievement.achieve(this.AchievementOpportunity.START)
+    // 完成摘要（debug）。
+    this.#log.debug(`start 完成: 初始属性 ${JSON.stringify(this.#property.getPropertys())}`)
   }
 
   // #getPropertyPoints
@@ -244,6 +292,8 @@ class Life {
   //
   // @returns {{age: number, content: Array, isEnd: boolean}}
   next() {
+    // trace 入口。
+    this.#log.trace('→ next()')
     // 年龄+1，读取该年数据。
     const { age, event, talent } = this.#property.ageNext()
     // 触发天赋。
@@ -258,8 +308,13 @@ class Life {
     this.#hooks.emitSync('onYearAdvance', { age, content, isEnd })
     // 轨迹成就检测。
     this.#achievement.achieve(this.AchievementOpportunity.TRAJECTORY)
+    // 本岁产出摘要（debug）。
+    this.#log.debug(`[${age}岁] 天赋 ${talentContent.length} 条 / 事件 ${eventContent.length} 条 / isEnd=${isEnd}`)
     // 返回。
-    return { age, content, isEnd }
+    const result = { age, content, isEnd }
+    // trace 退出（摘要，content 只记条数防刷屏）。
+    this.#log.trace(`← next → ${JSON.stringify({ age, content: content.length, isEnd })}`)
+    return result
   }
 
   // #talentReplace
@@ -294,7 +349,12 @@ class Life {
   // @returns {Array} 触发流水
   doTalent(talents) {
     // 有新增天赋则加入属性。
-    if (talents) this.#property.change(this.PropertyTypes.TLT, talents)
+    if (talents) {
+      // 记录新增天赋（debug）。
+      this.#log.debug(`doTalent: 新增天赋 ${talents.join(',')}`)
+      // 加入属性。
+      this.#property.change(this.PropertyTypes.TLT, talents)
+    }
     // 待检查天赋：过滤未超触发上限的。
     talents = this.#property.get(this.PropertyTypes.TLT)
       .filter(talentId => this.getTalentCurrentTriggerCount(talentId) < this.#talent.get(talentId).maxTriggers)
@@ -306,7 +366,13 @@ class Life {
       // 触发。
       const result = this.#talent.do(talentId)
       // 未触发跳过。
-      if (!result) continue
+      if (!result) {
+        // trace：未触发（条件不满足）。
+        this.#log.trace(`doTalent: ${talentId} 未触发`)
+        continue
+      }
+      // 触发成功（debug）。
+      this.#log.debug(`doTalent: ${talentId} 触发（效果 ${JSON.stringify(result.effect || {})}）`)
       // 触发次数 +1。
       this.#triggerTalents[talentId] = this.getTalentCurrentTriggerCount(talentId) + 1
       // 取结果字段。
@@ -333,8 +399,12 @@ class Life {
   // @param {string} eventId - 事件 ID
   // @returns {Array} 事件流水
   doEvent(eventId) {
+    // trace 入口。
+    this.#log.trace(`→ doEvent(${eventId})`)
     // 事件不存在则跳过。
     try {
+      // 记录执行（debug）。
+      this.#log.debug(`doEvent: 执行事件 ${eventId}`)
       // 执行事件。
       const { effect, next, description, postEvent, grade } = this.#event.do(eventId)
       // 记录事件到已触列表。
@@ -352,8 +422,9 @@ class Life {
       if (next) return [content, ...this.doEvent(next)].flat()
       // 无分支。
       return [content]
-    } catch {
-      // 事件缺失返回空流水。
+    } catch (e) {
+      // 事件缺失返回空流水（warn：可恢复异常）。
+      this.#log.warn(`doEvent: 事件缺失或异常（${e.message}），跳过`)
       return []
     }
   }
@@ -370,7 +441,13 @@ class Life {
       try { return this.#event.check(eventId) } catch { return false }
     })
     // 无可选事件。
-    if (candidates.length === 0) return null
+    if (candidates.length === 0) {
+      // trace：无候选。
+      this.#log.trace('random: 无候选事件')
+      return null
+    }
+    // 候选规模（debug）。
+    this.#log.debug(`random: ${events.length} 候选 → ${candidates.length} 可触发`)
     // 权重随机。
     return weightRandom(candidates, this.#random)
   }
@@ -390,6 +467,8 @@ class Life {
     )
     // Mod 钩子：天赋池生成（AI 可向 pool 注入生成的天赋）。
     this.#hooks.emitSync('onTalentPoolGenerate', { pool })
+    // 记录池规模（info）。
+    this.#log.info(`talentRandom: 天赋池 ${pool.length} 个`)
     // 返回。
     return pool
   }
@@ -407,6 +486,8 @@ class Life {
     characters.normal.forEach(replaceTalent)
     // 处理唯一"我"。
     if (characters.unique && characters.unique.talent) replaceTalent(characters.unique)
+    // 记录（debug）。
+    this.#log.debug(`characterRandom: 普通 ${characters.normal.length} 个 / 唯一 ${characters.unique ? '有' : '无'}`)
     // 返回。
     return characters
   }
@@ -463,6 +544,8 @@ class Life {
   // @param {string} description - 含占位符的文本
   // @returns {string} 格式化结果
   format(description) {
+    // trace 入口。
+    this.#log.trace(`→ format(${description})`)
     // 替换所有 {xxx} 占位符。
     const formatted = `${description}`.replaceAll(/\{\s*[0-9a-zA-Z_-]+\s*?\}/g, (match) => {
       // 取占位符内部键名。
@@ -487,7 +570,8 @@ class Life {
       // 钩子返回字符串。
       if (typeof r === 'string') return r
     }
-    // 返回格式化结果。
+    // 返回格式化结果（trace 退出）。
+    this.#log.trace(`← format → ${formatted}`)
     return formatted
   }
 

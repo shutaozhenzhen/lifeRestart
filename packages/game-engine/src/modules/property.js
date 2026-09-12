@@ -18,6 +18,7 @@
 
 // 导入 util 工具函数（克隆、listRandom）。
 import { clone, listRandom } from '../functions/util.js'
+import { SILENT_LOGGER } from '../functions/logger.js'
 // param 注册表。
 import { createParamRegistry } from '../params/param-registry.js'
 // 内置参数定义。
@@ -47,13 +48,15 @@ class Property {
   // @param {object}   [deps.storage] - storage 适配器，默认内存实现
   // @param {() => number} [deps.random] - 随机源，默认 Math.random
   // @param {object}   [deps.params]  - 自定义参数定义（合并进内置）
-  constructor({ clone: cloneFn = clone, storage = defaultStorage, random = Math.random, params } = {}) {
+  constructor({ clone: cloneFn = clone, storage = defaultStorage, random = Math.random, params, logger } = {}) {
     // 保存注入的克隆函数。
     this.#clone = cloneFn
     // 保存注入的 storage。
     this.#storage = storage
     // 保存注入的随机源。
     this.#random = random
+    // 保存日志器（缺省静默，不干扰测试）。
+    this.#log = logger || SILENT_LOGGER
     // 创建 param 注册表（注入 clone 供数组参数深拷贝）。
     this.#registry = createParamRegistry({ storage, cloneFn: cloneFn, random })
     // 注册内置参数。
@@ -91,6 +94,7 @@ class Property {
   #storage      // storage 适配器
   #random       // 随机源
   #registry     // param 注册表
+  #log          // 日志器
   #ageData      // 年龄数据（initial 注入）
   #total        // 各类型总数（initial 注入）
   #data = {}    // 本局属性数据
@@ -109,6 +113,8 @@ class Property {
   initial({ age, total }) {
     // 保存年龄数据引用。
     this.#ageData = age
+    // 记录（debug）。
+    this.#log.debug(`property.initial: age ${Object.keys(age || {}).length} 岁`)
     // 遍历每个年龄的数据。
     for (const a in age) {
       // 取出该年龄的事件与天赋列表。
@@ -161,6 +167,8 @@ class Property {
   // @param {object} data - 初始属性
   // @returns {void}
   restart(data) {
+    // trace 入口。
+    this.#log.trace('→ property.restart()')
     // 初始化本局数据：标量属性为 0/1，数组为空，派生低/高为 ±Infinity。
     this.#data = {
       // 年龄从 0 前开始（-1 表示出生前）。
@@ -280,6 +288,8 @@ class Property {
   // @param {*} value - 增量或 ID
   // @returns {void}
   change(prop, value) {
+    // trace：属性变更记录。
+    this.#log.trace(`property.change(${prop}, ${JSON.stringify(value)})`)
     // 委托注册表。
     this.#registry.change(prop, value)
   }
@@ -307,6 +317,8 @@ class Property {
   // @param {object} effects - 效果对象
   // @returns {void}
   effect(effects) {
+    // trace：效果应用。
+    this.#log.trace(`property.effect(${JSON.stringify(effects)})`)
     // 遍历每个属性增量。
     for (const prop in effects) {
       // RDM 等特殊属性先映射，再累加。
@@ -358,6 +370,8 @@ class Property {
   //
   // @returns {{age: number, event: Array, talent: Array}}
   ageNext() {
+    // trace 入口。
+    this.#log.trace('→ property.ageNext()')
     // 年龄自增。
     this.change('AGE', 1)
     // 读取新年龄。

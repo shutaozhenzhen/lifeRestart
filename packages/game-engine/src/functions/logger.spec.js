@@ -1,18 +1,19 @@
 /**
  * logger 日志系统单元测试 — logger.spec.js
  *
- * 覆盖范围：18 个测试用例，分为 5 组：
+ * 覆盖范围：27 个测试用例，分为 6 组：
  *   1. 级别过滤（低于当前级别不输出）
  *   2. traceFn（记录函数参数与返回）
  *   3. traceFn 异步支持
  *   4. setLevel/getLevel（动态切换）
  *   5. parseLogLevel（CLI 解析）
+ *   6. sink null 静默 + child 子日志器（引擎内核注入用）
  */
 
 // 导入 vitest 测试 DSL 和被测函数。
-import { describe, test, expect } from 'vitest'
+import { describe, test, expect, vi } from 'vitest'
 // logger 模块。
-import { createLogger, LOG_LEVELS, parseLogLevel } from './logger.js'
+import { createLogger, LOG_LEVELS, parseLogLevel, SILENT_LOGGER } from './logger.js'
 
 // #makeCapturedLogger
 // 创建捕获输出的 logger（sink 记录到数组）。
@@ -269,5 +270,83 @@ describe('logger - parseLogLevel', () => {
     expect(LOG_LEVELS.info).toBeLessThan(LOG_LEVELS.warn)
     // warn < error。
     expect(LOG_LEVELS.warn).toBeLessThan(LOG_LEVELS.error)
+  })
+})
+
+// ========== 测试组 6：sink null（静默）与 child（子日志器） ==========
+// 引擎内核注入用：Life 构造给每个子模块发 child 日志器，缺省（不传 logger）全静默。
+describe('logger - silent & child', () => {
+  test('sink null: 全静默（trace 级也不输出）', () => {
+    // 静默日志器。
+    const logger = createLogger({ level: 'trace', sink: null })
+    // 捕获 console。
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      // 各级别调用。
+      logger.trace('t')
+      logger.debug('d')
+      logger.info('i')
+      logger.warn('w')
+      logger.error('e')
+      // 无输出。
+      expect(console.log).not.toHaveBeenCalled()
+    } finally {
+      // 还原。
+      spy.mockRestore()
+    }
+  })
+
+  test('SILENT_LOGGER: 引擎缺省可用，traceFn 也不输出', () => {
+    // 捕获 console。
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      // 静默日志器包装函数。
+      const value = SILENT_LOGGER.traceFn('fn', (a) => a + 1, 1)
+      // 透传结果。
+      expect(value).toBe(2)
+      // 无输出。
+      expect(console.log).not.toHaveBeenCalled()
+    } finally {
+      // 还原。
+      spy.mockRestore()
+    }
+  })
+
+  test('child: 继承级别/输出目标，追加前缀', () => {
+    // 捕获数组。
+    const lines = []
+    // 自定义 sink。
+    const sink = { trace: m => lines.push(m), debug: m => lines.push(m), info: m => lines.push(m), warn: m => lines.push(m), error: m => lines.push(m) }
+    // 父日志器（debug 级 + 前缀）。
+    const parent = createLogger({ level: 'debug', prefix: 'game', sink })
+    // 子日志器。
+    const child = parent.child('property')
+    // 输出。
+    child.debug('消息')
+    // 前缀追加（game:property）。
+    expect(lines[0]).toBe('[DEBUG][game:property] 消息')
+    // trace 不输出（级别继承 debug）。
+    child.trace('太细')
+    // 仍 1 条。
+    expect(lines.length).toBe(1)
+  })
+
+  test('child: 独立切换级别（父不受影响）', () => {
+    // 捕获数组。
+    const lines = []
+    // 自定义 sink。
+    const sink = { trace: m => lines.push(m), debug: m => lines.push(m), info: m => lines.push(m), warn: m => lines.push(m), error: m => lines.push(m) }
+    // 父 trace 级。
+    const parent = createLogger({ level: 'trace', sink })
+    // 子日志器。
+    const child = parent.child('x')
+    // 父切 warn（子不受影响）。
+    parent.setLevel('warn')
+    // 子仍是 trace。
+    expect(child.getLevel()).toBe('trace')
+    // 子 trace 仍输出。
+    child.trace('c')
+    // 包含子日志。
+    expect(lines).toContain('[TRACE][x] c')
   })
 })

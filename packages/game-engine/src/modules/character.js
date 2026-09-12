@@ -26,6 +26,8 @@ const defaultStorage = {
   },
 }
 
+import { SILENT_LOGGER } from '../functions/logger.js'
+
 class Character {
   // 构造函数：注入依赖，替代原版的 #system。
   // @param {object} deps
@@ -40,9 +42,12 @@ class Character {
     storage = defaultStorage,
     now = () => Date.now(),
     getTalentRandom = () => [],
+    logger,
   } = {}) {
     // 保存注入的克隆函数。
     this.#clone = clone
+    // 保存日志器（缺省静默，不干扰测试）。
+    this.#log = logger || SILENT_LOGGER
     // 保存注入的随机源。
     this.#random = random
     // 保存注入的 storage。
@@ -55,6 +60,7 @@ class Character {
 
   // 私有字段。
   #clone           // 克隆函数
+  #log             // 日志器
   #random          // 随机源
   #storage         // storage
   #now             // 时间戳函数
@@ -77,6 +83,8 @@ class Character {
   initial({ characters }) {
     // 保存名人数据。
     this.#characters = characters
+    // 记录（debug）。
+    this.#log.debug(`character.initial: ${Object.keys(characters || {}).length} 个名人`)
     // 从 storage 恢复唯一"我"。
     const saved = this.#storage.getItem('uniqueWaTaShi')
     // 有存档则解析。
@@ -208,6 +216,8 @@ class Character {
   //
   // @returns {{unique: object|null, normal: Array<object>}}
   random() {
+    // trace 入口。
+    this.#log.trace('→ character.random()')
     // 返回组合。
     return {
       // 唯一"我"。

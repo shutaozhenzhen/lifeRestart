@@ -23,6 +23,7 @@ import { createAIClient } from '../ai/ai-client.js'
 import { createAIMod } from '../ai/ai-mod.js'
 import Life from '../modules/life.js'
 import { createRng } from '../functions/util.js'
+import { SILENT_LOGGER } from '../functions/logger.js'
 import { makeCliLogger } from './cli-util.js'
 // Node 内置：路径。
 import { basename } from 'node:path'
@@ -98,14 +99,18 @@ export function loadModData({ modsDir, aiConfig, log }) {
 // @param {object|null} params.aiBus - AI 钩子总线（null 表示关闭 AI）
 // @param {number} [params.years] - 年数
 // @param {number} [params.startLif] - 起始生命
+// @param {object} [params.log] - 日志器
 // @returns {Promise<object>} 轨迹
-export async function runWithAI({ seed, data, aiBus, years = 20, startLif = 10 }) {
-  // 创建 Life（固定种子 + 共享钩子总线）。
+export async function runWithAI({ seed, data, aiBus, years = 20, startLif = 10, log } = {}) {
+  // 日志器（缺省静默，保持冒烟输出干净；用 SILENT_LOGGER 保证 child() 可用）。
+  const logger = log || SILENT_LOGGER
+  // 创建 Life（固定种子 + 共享钩子总线 + 日志器）。
   const life = new Life({
     data,
     random: createRng(seed),
     hooks: aiBus || { emit: () => [], emitSync: () => [] },
     storage: { _d: {}, getItem(k) { return k in this._d ? this._d[k] : null }, setItem(k, v) { this._d[k] = String(v) } },
+    logger,
   })
   // 初始化。
   await life.initial()

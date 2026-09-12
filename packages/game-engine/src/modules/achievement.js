@@ -10,6 +10,8 @@
  *   Opportunity / initial / count / list / get / check / isAchieved / achieve
  */
 
+import { SILENT_LOGGER } from '../functions/logger.js'
+
 class Achievement {
   // 触发时机常量。
   Opportunity = {
@@ -26,7 +28,7 @@ class Achievement {
   // @param {Function} [deps.isAchieved] - 检查成就是否已达成 isAchieved(id)
   // @param {Function} [deps.record]  - 记录达成 record(id)（写入属性系统 ACHV）
   // @param {Function} [deps.emit]    - 事件总线 emit(tag, data)
-  constructor({ clone = (v) => v, check = () => false, isAchieved = () => false, record = () => {}, emit = () => {} } = {}) {
+  constructor({ clone = (v) => v, check = () => false, isAchieved = () => false, record = () => {}, emit = () => {}, logger } = {}) {
     // 保存注入的克隆函数。
     this.#clone = clone
     // 保存注入的条件求值函数。
@@ -37,6 +39,8 @@ class Achievement {
     this.#record = record
     // 保存注入的事件总线。
     this.#emit = emit
+    // 保存日志器（缺省静默，不干扰测试）。
+    this.#log = logger || SILENT_LOGGER
   }
 
   // 私有字段。
@@ -45,6 +49,7 @@ class Achievement {
   #isAchieved   // 达成检查函数
   #record       // 记录函数
   #emit         // 事件总线
+  #log          // 日志器
   #achievements // 成就数据
 
   // #initial
@@ -56,6 +61,8 @@ class Achievement {
   initial({ achievements }) {
     // 保存成就数据。
     this.#achievements = achievements
+    // 记录（debug）。
+    this.#log.debug(`achievement.initial: ${this.count} 个成就`)
     // 返回成就总数。
     return this.count
   }
@@ -130,6 +137,8 @@ class Achievement {
   // @param {string} opportunity - 触发时机（Opportunity 之一）
   // @returns {void}
   achieve(opportunity) {
+    // 记录（debug）。
+    this.#log.debug(`achievement.achieve(${opportunity})`)
     // 流程：
     //   1. 列出全部成就。
     //   2. 过滤未达成的。
@@ -144,6 +153,8 @@ class Achievement {
       .filter(({ id }) => this.check(id))
       // 逐个达成。
       .forEach(({ id }) => {
+        // 记录达成（info）。
+        this.#log.info(`成就达成: ${id}`)
         // 写入属性系统的 ACHV 累计。
         this.#record(id)
         // 广播成就事件（供 Vue 弹窗/通知）。

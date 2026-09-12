@@ -40,8 +40,8 @@ export async function runLife({ seed, years = 100, talents = [], allocation = {}
   const logger = log || makeCliLogger([], 'export')
   // 加载数据（--data → 原版 JSON，缺省 → fixture）。
   const data = await loadData({ dataDir })
-  // 创建 Life（固定种子 RNG）。
-  const life = new Life({ data, random: createRng(seed) })
+  // 创建 Life（固定种子 RNG + 日志器注入）。
+  const life = new Life({ data, random: createRng(seed), logger })
   // 初始化。
   await life.initial()
   // 配置（含 judge）。
@@ -136,7 +136,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
     const dataIdx = argv.indexOf('--data')
     const dataDir = dataIdx !== -1 ? argv[dataIdx + 1] : undefined
     // 运行。
-    const result = await runLife({ seed, years, talents, startLif, dataDir })
+    // 注入日志器（引擎内核日志随 --log-level 切换）。
+    const result = await runLife({ seed, years, talents, startLif, dataDir, log: makeCliLogger(argv, 'export') })
     // 输出 JSON。
     console.log(JSON.stringify(result, null, 2))
   })()
