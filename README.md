@@ -161,4 +161,4 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 - 本项目代码以 **MIT License** 发布，详见 [LICENSE](./LICENSE)。
 - 游戏数据（`talents` / `events` / `age` / `achievements` / `characters`）与剧情文本衍生自
   [VickScarlet/lifeRestart](https://github.com/VickScarlet/lifeRestart)（**MIT License, Copyright (c) 2021 神戸小鳥**），
-  在此保留原作者版权声明。
+  在此保留原作者版权声明；第三方归属与转换说明详见 [NOTICE](./NOTICE)。

@@ -1,0 +1,30 @@
+# NOTICE — 第三方来源与归属
+
+本仓库（人生重开模拟器 · Mod 内核重写版）为**衍生作品**，包含以下第三方 MIT 许可内容。
+
+## 原版 lifeRestart
+
+- 项目：VickScarlet/lifeRestart — https://github.com/VickScarlet/lifeRestart
+- 版权：Copyright (c) 2021 神戸小鳥
+- 许可：MIT License（全文见本仓库 [LICENSE](./LICENSE)）
+- 使用范围：**游戏数据与剧情文本**，即
+  `talents` / `events` / `age` / `achievements` / `characters` 五类数据，
+  以及其中全部剧情文本、天赋与成就描述。
+
+### 数据在本仓库中的位置
+
+| 路径 | 说明 |
+|---|---|
+| `packages/frontend/public/data/*.json` | 运行期数据（Data Mod 转换产物，前端 `fetch('/data/*.json')`） |
+| `mods/lifeRestart-data/` | 同上，由 `data-mod.cli.js` 生成（本仓库不提交） |
+
+### 转换说明
+
+上述数据经 `packages/game-engine/src/cli/data-mod.cli.js` 处理为引擎格式：
+条件表达式由旧语法（`CHR>5&AGE?[18,30]`）经 `src/condition/compat.js` 转换为新语法、
+ID 字符串化、age 事件解析为 `["id", weight]` 对。**转换不改变原始文本内容的归属**。
+
+## 本仓库新增部分
+
+除上述数据与剧情文本外，本仓库的引擎、前端、Mod 系统、AI 集成、平台打包与全部测试代码
+均为新增实现，版权归 Copyright (c) 2026 The_book (shutaozhenzhen) 所有，同样以 MIT 许可发布。
