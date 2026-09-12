@@ -22,9 +22,71 @@ const loading = ref(false)
 // 当前选中的模式。
 const activeMode = ref('custom')
 
-// 组装演示数据。
-function buildData() {
-  // 返回完整数据。
+// #loadModState
+// 读取 Mod 启停状态（localStorage 键 modsState，与 Mod 管理页共用）。
+function loadModState(name) {
+  // 读取。
+  try {
+    // 解析。
+    const s = JSON.parse(localStorage.getItem('modsState'))
+    // 返回该 Mod 启停。
+    return s?.enabled?.[name] ?? null
+  } catch {
+    // 未知。
+    return null
+  }
+}
+
+// #fetchOriginalData
+// 加载原版数据（lifeRestart-data 系统 Mod 的转换产物，已内置于 public/data/）。
+// lifeRestart-data 是 data-mod 产物：新语法条件、字符串 ID、[id,权重] 二维数组，引擎可直接消费。
+//
+// @returns {Promise<object>} 原版数据 { age, total, talents, events, achievements, characters }
+async function fetchOriginalData() {
+  // 并行加载 5 个数据文件。
+  const [age, talents, events, achievements, characters] = await Promise.all([
+    fetch('/data/age.json').then(r => r.json()),
+    fetch('/data/talents.json').then(r => r.json()),
+    fetch('/data/events.json').then(r => r.json()),
+    fetch('/data/achievements.json').then(r => r.json()),
+    fetch('/data/characters.json').then(r => r.json()),
+  ])
+  // 返回整合数据。
+  return {
+    age,
+    total: { TACHV: Object.keys(achievements).length, TEVT: Object.keys(events).length, TTLT: Object.keys(talents).length },
+    talents,
+    events,
+    achievements,
+    characters,
+  }
+}
+
+// 组装游戏数据：数据源由 lifeRestart-data Mod 的启停状态决定。
+// - 启用（Mod 管理页开关，localStorage modsState）→ 原版数据（lifeRestart-data 内置产物）。
+// - 禁用 / 加载失败 → 回退 fixture 演示数据。
+async function buildData() {
+  // lifeRestart-data 启停状态。
+  const originalEnabled = loadModState('lifeRestart-data')
+  // 启用（缺省视为启用：系统内置默认开）。
+  if (originalEnabled !== false) {
+    // 尝试加载原版。
+    try {
+      // 原版数据。
+      const data = await fetchOriginalData()
+      // 页面日志：数据源。
+      store.pushLog('info', `[UI][home] 数据源：lifeRestart-data 原版数据（${Object.keys(data.talents).length} 天赋 / ${Object.keys(data.events).length} 事件）`)
+      // 返回。
+      return data
+    } catch (e) {
+      // 页面日志：降级。
+      store.pushLog('warn', `[UI][home] 原版数据加载失败（${e.message}），回退 fixture 演示数据`)
+    }
+  } else {
+    // 页面日志：被禁用。
+    store.pushLog('info', '[UI][home] lifeRestart-data 已禁用，使用 fixture 演示数据')
+  }
+  // 返回 fixture 演示数据（降级）。
   return {
     age: clone(AGE_DATA),
     total: TOTAL,
@@ -45,10 +107,12 @@ function chooseMode(mode) {
 
 // 开始新人生。
 async function startGame() {
+  // 页面行为日志（常显进日志面板）。
+  store.pushLog('info', '[UI][home] 开始新人生（引擎初始化）')
   // 标记加载。
   loading.value = true
-  // 初始化引擎。
-  await store.init(buildData())
+  // 初始化引擎（数据源：lifeRestart-data 启用 → 原版；禁用 → fixture）。
+  await store.init(await buildData())
   // 跳转到天赋选择页（名人模式暂同路径，Step 后续分离）。
   router.push('/talent')
 }
@@ -83,8 +147,11 @@ async function startGame() {
       {{ loading ? '加载中...' : '↻ 立即重开' }}
     </button>
 
-    <!-- Mod 管理入口 -->
-    <button class="btn ghost" @click="router.push('/mods')">Mod 管理</button>
+    <!-- 设置 / Mod 管理入口 -->
+    <div class="nav-btns">
+      <button class="btn ghost" @click="router.push('/settings')">设置</button>
+      <button class="btn ghost" @click="router.push('/mods')">Mod 管理</button>
+    </div>
   </div>
 </template>
 
@@ -96,6 +163,10 @@ async function startGame() {
   justify-content: center;
   min-height: 100vh;
   gap: 20px;
+}
+.nav-btns {
+  display: flex;
+  gap: 10px;
 }
 .title {
   font-size: 48px;

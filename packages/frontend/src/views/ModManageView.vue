@@ -1,21 +1,37 @@
 <script setup>
 // Mod 管理页（对应设计文档 6.5）。
 // 展示 Mod 列表、启用/禁用开关、权限声明、删除（系统 Mod 不可删）。
-// 原型：数据用内存 mock（真实文件系统操作在引擎侧，浏览器通过 API 层）。
-import { ref } from 'vue'
+// 启停/删除状态经 localStorage 持久化（键 modsState），刷新后保留用户选择。
+// 真实文件系统操作在引擎侧（mod/manager.js），浏览器侧为 UI 层（未接 API）。
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 // 权限说明。
 import { PERMISSION_LABELS } from 'game-engine/src/mod/permissions.js'
+// 游戏 store（页面操作行为日志：进入页面/按钮操作都记入日志面板）。
+import { useGameStore } from '../stores/game.js'
+// Mod 启停/删除状态持久化（纯函数，可测试）。
+import { loadModsState, saveModsState, applyModsState } from '../utils/mods-state.js'
 
 // 路由。
 const router = useRouter()
+// 游戏 store。
+const gameStore = useGameStore()
 
-// Mod 列表（原型 mock）。
-const mods = ref([
+// 页面挂载：记录进入 Mod 管理页。
+onMounted(() => {
+  // 记录（UI 日志常显，不随引擎级别过滤）。
+  gameStore.pushLog('info', '[UI][mods] 进入 Mod 管理页')
+})
+
+// （loadModsState/saveModsState/applyModsState 已抽到 utils/mods-state.js，可单元测试）
+
+// #MOD_LIST
+// Mod 默认列表（原型数据源；启停/删除状态经 localStorage 持久化）。
+const MOD_LIST = [
   {
     name: 'lifeRestart-data',
     version: '1.0.0',
-    description: '原版数据（系统内置）',
+    description: '原版数据（系统内置；启用时游戏加载真实原版数据，禁用回退演示数据）',
     system: true,
     enabled: true,
     permissions: [],
@@ -44,9 +60,16 @@ const mods = ref([
     enabled: false,
     permissions: ['ai', 'network', 'storage', 'hooks'],
   },
-])
+]
 
-// AI 配置（localStorage 持久化）。
+// 读取持久化状态（一次）。
+const savedState = loadModsState()
+// 已删除（非 system）Mod 名（持久化）。
+const removedMods = ref(savedState.removed || [])
+// Mod 列表：默认集合过滤已删除 + 应用保存的启停状态（applyModsState 纯函数，刷新后保留用户选择）。
+const mods = ref(applyModsState(MOD_LIST, savedState))
+
+// AI 配置（localStorage 持久化，与 ai-mod 开关解耦：配置仅保存，启用才生效）。
 const aiConfig = ref(loadAIConfig())
 
 // 读取 AI 配置。
@@ -101,9 +124,13 @@ async function testAI() {
     const text = data.choices?.[0]?.message?.content || '(空回复)'
     // 成功。
     aiTest.value = { status: 'ok', output: text }
+    // 记录（连接成功）。
+    gameStore.pushLog('info', `[UI][mods] AI 连接测试成功（${aiConfig.value.provider}/${aiConfig.value.model}）`)
   } catch (e) {
     // 失败（含代理未启动的情况）。
     aiTest.value = { status: 'error', output: e.message }
+    // 记录（连接失败）。
+    gameStore.pushLog('warn', `[UI][mods] AI 连接测试失败: ${e.message}`)
   }
 }
 
@@ -127,19 +154,38 @@ function selectProvider(p) {
   }
   // 记录。
   aiConfig.value.provider = p
+  // 页面日志：切换服务商。
+  gameStore.pushLog('info', `[UI][mods] AI 服务商切换为 ${preset?.label || p}`)
 }
 
 // 切换 AI Mod 开关（启用时需配置 Key）。
 function toggleAI(mod) {
   // 切换。
   mod.enabled = !mod.enabled
+  // 页面日志：AI Mod 开关。
+  gameStore.pushLog('info', `[UI][mods] ai-mod ${mod.enabled ? '启用' : '禁用'}`)
+  // 保存状态（刷新后保留，纯函数）。
+  saveModsState({ mods: mods.value, removed: removedMods.value })
+  // 禁用时联动折叠配置面板。
+  if (!mod.enabled) aiPanelOpen.value = false
   // 启用但未配置 Key。
   if (mod.enabled && !aiConfig.value.apiKey) {
     // 提示。
-    alert('启用 AI 增强前，请先配置 API Key（下方 AI 设置）')
+    alert('启用 AI 增强前，请先配置 API Key（AI 配置面板）')
   }
   // 保存。
   saveAIConfig()
+}
+
+// AI 配置面板展开状态（点开才展开）。
+const aiPanelOpen = ref(false)
+// ai-mod 当前是否启用（联动面板的置灰与提示）。
+const aiModEnabled = computed(() => mods.value.find(m => m.name === 'ai-mod')?.enabled || false)
+// 展开/折叠 AI 配置面板。
+function togglePanel() {
+  aiPanelOpen.value = !aiPanelOpen.value
+  // 页面日志。
+  gameStore.pushLog('info', `[UI][mods] ${aiPanelOpen.value ? '展开' : '收起'} ai-mod AI 配置`)
 }
 
 // 待授权的 Mod（权限弹窗）。
@@ -149,6 +195,10 @@ const pendingAuth = ref(null)
 function toggle(mod) {
   // 系统 Mod 只可禁用不可删除，原型允许切换。
   mod.enabled = !mod.enabled
+  // 页面日志。
+  gameStore.pushLog('info', `[UI][mods] ${mod.name} ${mod.enabled ? '启用' : '禁用'}`)
+  // 保存状态（刷新后保留，纯函数）。
+  saveModsState({ mods: mods.value, removed: removedMods.value })
 }
 
 // 删除 Mod（系统 Mod 禁止）。
@@ -159,6 +209,15 @@ function remove(mod) {
   if (confirm(`删除 Mod ${mod.name}？`)) {
     // 移除。
     mods.value = mods.value.filter(m => m !== mod)
+    // 记录已删除（持久化，刷新后不再出现）。
+    removedMods.value.push(mod.name)
+    // 保存状态（纯函数）。
+    saveModsState({ mods: mods.value, removed: removedMods.value })
+    // 页面日志。
+    gameStore.pushLog('info', `[UI][mods] 已删除 Mod ${mod.name}`)
+  } else {
+    // 页面日志（取消）。
+    gameStore.pushLog('debug', `[UI][mods] 取消删除 ${mod.name}`)
   }
 }
 
@@ -168,12 +227,16 @@ function requestPermission(mod) {
   const needsAuth = mod.permissions.length > 0 && mod.enabled
   // 弹窗。
   pendingAuth.value = needsAuth ? mod : null
+  // 页面日志。
+  if (needsAuth) gameStore.pushLog('info', `[UI][mods] ${mod.name} 请求权限弹窗（${mod.permissions.join(', ')}）`)
 }
 
 // 确认授权。
 function confirmAuth() {
   // 关闭弹窗。
   pendingAuth.value = null
+  // 页面日志。
+  gameStore.pushLog('info', '[UI][mods] 授权弹窗确认（允许）')
 }
 
 // 回主页。
@@ -203,63 +266,65 @@ function back() {
         <button class="btn" :class="{ on: mod.enabled }" @click="mod.name === 'ai-mod' ? toggleAI(mod) : (toggle(mod), requestPermission(mod))">
           {{ mod.enabled ? '已启用' : '已禁用' }}
         </button>
+        <button v-if="mod.name === 'ai-mod'" class="btn config" :class="{ active: aiPanelOpen }" @click="togglePanel">
+          {{ aiPanelOpen ? '收起配置' : 'AI 配置' }}
+        </button>
         <button v-if="!mod.system" class="btn danger" @click="remove(mod)">删除</button>
         <span v-else class="sys-hint">系统内置</span>
       </div>
-    </div>
+      <!-- AI 配置面板（内嵌于 ai-mod 卡片，点开才展开；禁用时灰化，仅保存暂不生效） -->
+      <div v-if="mod.name === 'ai-mod' && aiPanelOpen" class="ai-config" :class="{ dim: !aiModEnabled }">
+        <div v-if="!aiModEnabled" class="warn-banner">⚠ AI Mod 已禁用，配置仅保存暂不生效（启用后立即生效）</div>
+        <p class="ai-hint">Mod 级 API Key，用于 AI 生成天赋/事件（对应 ai-mod manifest.json 的 ai 字段）</p>
 
-    <!-- AI 配置面板 -->
-    <div class="ai-panel">
-      <h3 class="ai-title">AI 设置</h3>
-      <p class="ai-hint">配置 AI 服务商（Mod 级 API Key，用于 AI 生成天赋/事件）</p>
-
-      <div class="ai-field">
-        <label>服务商</label>
-        <div class="provider-row">
-          <button
-            v-for="(preset, key) in PROVIDERS"
-            :key="key"
-            class="btn provider"
-            :class="{ active: aiConfig.provider === key }"
-            @click="selectProvider(key)"
-          >{{ preset.label }}</button>
+        <div class="ai-field">
+          <label>服务商</label>
+          <div class="provider-row">
+            <button
+              v-for="(preset, key) in PROVIDERS"
+              :key="key"
+              class="btn provider"
+              :class="{ active: aiConfig.provider === key }"
+              @click="selectProvider(key)"
+            >{{ preset.label }}</button>
+          </div>
         </div>
-      </div>
 
-      <div class="ai-field">
-        <label>API Key</label>
-        <input v-model="aiConfig.apiKey" type="password" placeholder="sk-..." @change="saveAIConfig" />
-      </div>
+        <div class="ai-field">
+          <label>API Key</label>
+          <input v-model="aiConfig.apiKey" type="password" placeholder="sk-..." @change="saveAIConfig" />
+        </div>
 
-      <div class="ai-field">
-        <label>模型</label>
-        <input v-model="aiConfig.model" placeholder="gpt-4o-mini" @change="saveAIConfig" />
-      </div>
+        <div class="ai-field">
+          <label>模型</label>
+          <input v-model="aiConfig.model" placeholder="gpt-4o-mini" @change="saveAIConfig" />
+        </div>
 
-      <div class="ai-field">
-        <label>Base URL</label>
-        <input v-model="aiConfig.baseUrl" placeholder="https://api.openai.com/v1" @change="saveAIConfig" />
-      </div>
+        <div class="ai-field">
+          <label>Base URL</label>
+          <input v-model="aiConfig.baseUrl" placeholder="https://api.openai.com/v1" @change="saveAIConfig" />
+        </div>
 
-      <div class="ai-field ai-status">
-        <label>状态</label>
-        <span :class="aiConfig.apiKey ? 'ok' : 'warn'">
-          {{ aiConfig.apiKey ? '已配置 Key（可启用 ai-mod）' : '未配置 Key（无法调用 AI）' }}
-        </span>
-      </div>
+        <div class="ai-field ai-status">
+          <label>状态</label>
+          <span :class="aiConfig.apiKey ? 'ok' : 'warn'">
+            {{ aiConfig.apiKey ? '已配置 Key（启用后生效）' : '未配置 Key（无法调用 AI）' }}
+          </span>
+        </div>
 
-      <div class="ai-field ai-test">
-        <label>连接测试</label>
-        <button class="btn primary" :disabled="aiTest.status === 'testing'" @click="testAI">
-          {{ aiTest.status === 'testing' ? '测试中…' : '测试连接' }}
-        </button>
-        <span v-if="aiTest.status === 'ok'" class="ok test-out">{{ aiTest.output }}</span>
-        <span v-else-if="aiTest.status === 'error'" class="err test-out">{{ aiTest.output }}</span>
+        <div class="ai-field ai-test">
+          <label>连接测试</label>
+          <button class="btn primary" :disabled="aiTest.status === 'testing'" @click="testAI">
+            {{ aiTest.status === 'testing' ? '测试中…' : '测试连接' }}
+          </button>
+          <span v-if="aiTest.status === 'ok'" class="ok test-out">{{ aiTest.output }}</span>
+          <span v-else-if="aiTest.status === 'error'" class="err test-out">{{ aiTest.output }}</span>
+        </div>
+        <p class="ai-hint">
+          测试经本地 AI 代理转发（需先启动代理：cd packages/game-engine && node server.js）。
+          切换服务商后测试，可验证不同 provider 的路由与回复。
+        </p>
       </div>
-      <p class="ai-hint">
-        测试经本地 AI 代理转发（需先启动代理：cd packages/game-engine && node server.js）。
-        切换服务商后测试，可验证不同 provider 的路由与回复。
-      </p>
     </div>
 
     <!-- 权限弹窗 -->
@@ -294,6 +359,7 @@ function back() {
 }
 .mod {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   background: #16213e;
@@ -354,6 +420,13 @@ function back() {
 .btn.primary {
   background: #e94560;
 }
+.btn.config {
+  background: #0f3460;
+  border: 1px solid #42a5f5;
+}
+.btn.config.active {
+  background: #42a5f5;
+}
 .sys-hint {
   color: #888;
   font-size: 12px;
@@ -384,14 +457,24 @@ function back() {
   justify-content: flex-end;
   gap: 8px;
 }
-.ai-panel {
-  margin-top: 20px;
+.ai-config {
+  flex-basis: 100%;
+  margin-top: 14px;
   background: #1a2a4e;
   border-radius: 8px;
   padding: 18px;
 }
-.ai-title {
-  margin-bottom: 4px;
+.ai-config.dim {
+  opacity: 0.55;
+}
+.warn-banner {
+  background: rgba(255, 152, 0, 0.12);
+  color: #ff9800;
+  border: 1px solid rgba(255, 152, 0, 0.35);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 12px;
 }
 .ai-hint {
   font-size: 12px;

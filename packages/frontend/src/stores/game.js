@@ -14,14 +14,27 @@
 
 // 导入 Pinia。
 import { defineStore } from 'pinia'
+// markRaw：Life 实例含 # 私有字段，reactive 代理会破坏私有字段访问（Vue 响应式代理问题）。
+import { markRaw } from 'vue'
 // 导入 Life 引擎。
 import Life from 'game-engine/src/modules/life.js'
+// 日志器工厂（前端配置界面创建，注入引擎全链路）。
+import { createLogger } from 'game-engine/src/functions/logger.js'
+
+// #loadLogLevel
+// 读取日志级别配置（localStorage 键 logLevel，缺省 info）。
+function loadLogLevel() {
+  // 读取。
+  const v = localStorage.getItem('logLevel')
+  // 合法级别列表。
+  return ['trace', 'debug', 'info', 'warn', 'error'].includes(v) ? v : 'info'
+}
 
 // 定义 store。
 export const useGameStore = defineStore('game', {
   // 状态。
   state: () => ({
-    // Life 实例。
+    // Life 实例（初始 null；赋值时经 markRaw 保护 # 私有字段，见 init）。
     life: null,
     // 是否初始化完成。
     initialized: false,
@@ -41,6 +54,10 @@ export const useGameStore = defineStore('game', {
     allocation: { CHR: 0, INT: 0, STR: 0, MNY: 0 },
     // 分配边界 [min, max]。
     allocLimit: [0, 10],
+    // 日志级别（配置界面切换，localStorage 持久化）。
+    logLevel: loadLogLevel(),
+    // 日志缓冲（界面日志面板显示，最多保留 500 条）。
+    logBuffer: [],
   }),
 
   // 计算属性。
@@ -59,8 +76,20 @@ export const useGameStore = defineStore('game', {
   actions: {
     // 初始化引擎。
     async init(data) {
-      // 创建 Life 实例。
-      this.life = new Life({ data })
+      // 创建日志器：级别从配置读取，输出到浏览器 console + 界面缓冲。
+      // 引擎内核（Life/属性/天赋/事件/成就/角色/数据加载/Mod 钩子）全部日志经此汇入。
+      const logger = createLogger({
+        level: this.logLevel,
+        sink: {
+          trace: (m) => this.pushLog('trace', m),
+          debug: (m) => this.pushLog('debug', m),
+          info: (m) => this.pushLog('info', m),
+          warn: (m) => this.pushLog('warn', m),
+          error: (m) => this.pushLog('error', m),
+        },
+      })
+      // 创建 Life 实例（注入日志器）。markRaw 防止被 reactive 代理（私有字段保护）。
+      this.life = markRaw(new Life({ data, logger }))
       // 初始化。
       await this.life.initial()
       // 配置。
@@ -109,8 +138,17 @@ export const useGameStore = defineStore('game', {
 
     // 抽取天赋池。
     drawTalents() {
-      // 调用引擎抽取。
+      // 引擎未初始化保护（刷新后直进页面的双保险）。
+      if (!this.life) {
+        // 错误日志（常显进面板）。
+        this.pushLog('error', '[UI][game] 引擎未初始化，无法抽取天赋（应回主页重新开始）')
+        // 空池返回。
+        return
+      }
+      // 调用引擎抽取（trace 引擎日志随级别过滤）。
       this.talentPool = this.life.talentRandom()
+      // 页面日志：池规模。
+      this.pushLog('debug', `[UI][game] 抽取天赋池 ${this.talentPool.length} 个`)
     },
 
     // 选中一个天赋（互斥校验 + 限 3 个）。
@@ -213,6 +251,39 @@ export const useGameStore = defineStore('game', {
     resetAllocation() {
       // 全部归零。
       this.allocation = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
+    },
+
+    // 切换日志级别：全链路实时生效（引擎自身 + 全部子模块日志器）并持久化。
+    // @param {string} level - trace/debug/info/warn/error
+    setLogLevel(level) {
+      // 更新状态。
+      this.logLevel = level
+      // 引擎已创建则同步切换（Life.setLogLevel 遍历各子模块日志器）。
+      if (this.life) this.life.setLogLevel(level)
+      // 持久化。
+      localStorage.setItem('logLevel', level)
+      // 缓冲提示。
+      this.pushLog('info', `[配置] 日志级别切换为 ${level}`)
+    },
+
+    // 收集日志到缓冲（logger sink 回调：级别过滤已在 logger 内完成）。
+    // @param {string} level - 级别
+    // @param {string} msg - 格式化消息
+    pushLog(level, msg) {
+      // 行文本。
+      const line = `[${level.toUpperCase()}] ${msg}`
+      // 缓冲。
+      this.logBuffer.push(line)
+      // 超限截断（保留最新）。
+      if (this.logBuffer.length > 500) this.logBuffer.splice(0, this.logBuffer.length - 500)
+      // 同步到浏览器 console。
+      console.log(line)
+    },
+
+    // 清空日志缓冲。
+    clearLog() {
+      // 清空。
+      this.logBuffer = []
     },
   },
 })
