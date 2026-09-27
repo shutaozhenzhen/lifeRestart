@@ -4,6 +4,8 @@
 引擎只提供条件求值、参数系统、事件/天赋调度与钩子协议。纯 JavaScript 引擎 + Vue 3 前端 + AI 集成（OpenAI 兼容协议），
 并提供 CLI 原型、桌面 / Web / 移动端打包。
 
+> 🌐 **在线试玩**：<https://shutaozhenzhen.github.io/lifeRestart/>（GitHub Pages，纯静态；AI 增强不可用，详见下文）
+
 ## 特性
 
 - **Mod 即内核**：manifest 校验、依赖拓扑排序、加载器、`gameAPI` 钩子（可注册参数 / 天赋 / 事件 / 成就 / AI 注入），内置 Data Mod
@@ -115,6 +117,26 @@ cd lifeRestart && pnpm --filter frontend dev
 页面流转：`/` → `/talent` → `/property` → `/game` → `/summary`，另有 `/mods`（Mod 管理）与 `/settings`（日志等级 + 实时日志面板）。
 AI 连接测试经 vite 代理 `/ai-proxy` 转发到本地代理服务。
 
+## 在线版（GitHub Pages）
+
+线上试玩：**<https://shutaozhenzhen.github.io/lifeRestart/>**
+
+纯静态部署（`packages/frontend` 的 Vite 构建产物），由 [`.github/workflows/deploy-pages.yml`](./.github/workflows/deploy-pages.yml)
+在推送到 `main` 时自动构建并发布（也可在 Actions 页手动 `workflow_dispatch` 触发）。
+
+| 项 | 说明 |
+|---|---|
+| 路由 | Hash 模式（`#/xxx`），静态托管无需 404 回退 |
+| 资源路径 | `vite.config.js` 设 `base: './'`，`HomeView` 数据请求基于 `import.meta.env.BASE_URL`，兼容 `https://<user>.github.io/<repo>/` 子路径 |
+| 数据 | `packages/frontend/public/data/` 随构建复制进产物（约 3.9 MB，Pages 自动 gzip） |
+| **AI 功能** | **不可用**：Pages 只托管静态文件，没有 Node 运行时，`/ai-proxy` 不可达。游戏本体完全可玩，仅 AI 增强关闭；如需 AI，构建时设 `VITE_AI_PROXY` 指向自建代理（逻辑见 `packages/game-engine/server.js`） |
+
+部署前置：仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**（一次性）。
+
+> ⚠️ 仓库 `pnpm-lock.yaml` 与 `packages/frontend/package.json` 暂不一致（lockfile 缺 frontend 的 `vitest`），
+> workflow 因此使用 `pnpm install --no-frozen-lockfile`。在有正常 pnpm 环境的机器上跑 `pnpm install --lockfile-only`
+> 重算并提交 lockfile 后，可改回 `--frozen-lockfile`。
+
 ## 平台打包
 
 ```bash
@@ -155,6 +177,7 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 
 - **阶段一 ~ 四（Step 1–22）**：全部完成 —— 引擎内核、Vue 前端 UI、Mod 系统、AI 集成（含代理服务）
 - **阶段五（平台打包 Step 23–26）**：Step 23（Electron）/ 24（Web）/ 26（跨平台一致性）完成；Step 25（Capacitor 移动端）为脚手架，待 Android SDK 环境验证
+- **GitHub Pages 在线版**：已上线 <https://shutaozhenzhen.github.io/lifeRestart/>（阶段五延伸，纯静态托管；AI 不可用）
 
 ## 数据来源与许可
 
