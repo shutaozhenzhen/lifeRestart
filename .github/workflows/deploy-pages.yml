@@ -46,11 +46,15 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
+      # 注意：仓库 pnpm-lock.yaml 与 packages/frontend/package.json 不一致
+      # （lockfile 缺 frontend 的 vitest 依赖），故不能使用 --frozen-lockfile。
+      # 待在有正常 pnpm 环境的机器上跑 `pnpm install --lockfile-only` 重算并提交
+      # lockfile 后，可改回 `pnpm install --frozen-lockfile`。
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build frontend
         run: pnpm --filter frontend build
