@@ -19,8 +19,9 @@ platforms/web/release/
 platforms/web/bundle/
 platforms/mobile/www/
 
-# Data Mod 生成产物（由 data-mod.cli.js 落盘生成，勿提交）
-mods/lifeRestart-data/
+# Data Mod（原版数据转换产物）已入库：mods/lifeRestart-data/
+# 内容与 packages/frontend/public/data/ 一致（同一转换产物），保证干净克隆后
+# CLI（smoke / ai-game / consistency）与测试开箱即用。勿手工编辑。
 
 # 日志
 *.log

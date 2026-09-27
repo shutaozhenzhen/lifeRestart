@@ -33,7 +33,7 @@ lifeRestart/
 │   │   └── server.js           # AI 代理服务（零依赖 Node http）
 │   └── frontend/               # Vue 3 + Pinia + Hash 路由（页面流转 + Mod 管理页 + 设置页）
 │       └── public/data/        # 运行期数据（原版 JSON，Data Mod 转换产物）
-├── mods/                       # 内置 Mod：base-mod / fun-mod / ai-mod（lifeRestart-data 由 CLI 生成）
+├── mods/                       # 内置 Mod：base-mod / fun-mod / ai-mod / lifeRestart-data（均已入库）
 ├── platforms/
 │   ├── electron/               # 桌面版：主进程起代理 + 窗口 + electron-builder 打包
 │   ├── web/                    # 单进程静态站 + 内嵌代理（产出解压即运行的 zip）
@@ -58,7 +58,7 @@ pnpm install
 pnpm test
 
 # 或单独跑
-cd packages/game-engine && pnpm test     # 引擎 529 用例
+cd packages/game-engine && pnpm test     # 引擎 531 用例
 cd packages/frontend    && pnpm test     # 前端 13 用例（异常回归）
 ```
 
@@ -97,7 +97,8 @@ cd packages/game-engine
 # 1) 原版数据（remake 的 xlsx→json 产物，含 {zh-cn,en-us}/）打包为 Data Mod
 node src/cli/data-mod.cli.js --data ../../../remake/public/data --out ../../mods
 #    → 规模约 age 501 / talents 184 / events 1720 / achievements 165 / characters 100
-#    （前端 packages/frontend/public/data/ 即同一转换产物，已入库，clone 后无需重新生成）
+#    （mods/lifeRestart-data 与 packages/frontend/public/data 为同一转换产物，
+#      均已入库，clone 后无需重新生成；仅在重新转换原版数据时才需要执行上一条命令）
 node src/cli/mod.cli.js ../../mods            # 加载验证（依赖图 / 钩子）
 
 # 2) 无需 API Key，用 mock AI 跑一局 AI 版
@@ -166,7 +167,7 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 529 | condition / compat / params / 各模块 / mod / ai / cli / data-loader |
+| `packages/game-engine` | 531 | condition / compat / params / 各模块 / mod / ai / cli / data-loader |
 | `packages/frontend` | 13 | 前端异常回归：markRaw 私有字段、引擎页守卫、Mod 状态持久化、日志链路 |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
