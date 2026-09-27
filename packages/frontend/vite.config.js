@@ -7,6 +7,11 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   // Vue 插件。
   plugins: [vue()],
+  // 资源基础路径：相对路径。
+  // GitHub Pages 项目页部署在 https://<user>.github.io/<repo>/ 子路径下，
+  // 默认 base '/' 会让 /assets/* 指向域名根而 404；'./' 生成相对引用，
+  // 配合 Hash 路由（#/xxx 不影响相对路径解析）可同时兼容用户页与项目页。
+  base: './',
   // 开发服务器：端口 3000，自动打开浏览器。
   server: {
     port: 3000,

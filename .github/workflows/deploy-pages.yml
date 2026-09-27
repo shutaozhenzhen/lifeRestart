@@ -1,0 +1,81 @@
+# ============================================
+# GitHub Pages 部署（纯静态前端）
+# ============================================
+# 说明：
+#   - 只构建 packages/frontend（Vue + Vite），产出纯静态站点。
+#   - 引擎（game-engine）以 workspace 依赖被 Vite 打包进产物，无需后端。
+#   - AI 代理（packages/game-engine/server.js）是 Node 服务，Pages 无法托管，
+#     因此线上环境 AI 功能默认不可用（可在构建时设 VITE_AI_PROXY 指向外部代理）。
+#   - 路由为 Hash 模式（#/xxx），服务器只需返回 index.html，无需 404 回退。
+#
+# 前置：仓库 Settings → Pages → Build and deployment → Source 选择 "GitHub Actions"。
+name: Deploy to GitHub Pages
+
+# 触发：推送到 main，或手动触发。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Pages 部署所需权限。
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只允许一个部署，新的推送取消排队中的旧任务。
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  # ---------- 构建 ----------
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm（前端依赖 game-engine: workspace:*，必须用 pnpm 安装，npm 不支持）。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # 与仓库 pnpm-workspace.yaml 的 allowBuilds 字段保持一致（pnpm 11+）。
+          version: 12
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm --filter frontend build
+
+      # 构建校验：确认数据文件被复制进产物（缺失会静默降级到 fixture，需显式失败）。
+      - name: Verify build output
+        run: |
+          test -f packages/frontend/dist/index.html
+          test -f packages/frontend/dist/data/age.json
+          test -f packages/frontend/dist/data/achievements.json
+          echo "构建产物校验通过"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/frontend/dist
+
+  # ---------- 部署 ----------
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

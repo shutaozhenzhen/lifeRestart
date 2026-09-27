@@ -43,13 +43,17 @@ function loadModState(name) {
 //
 // @returns {Promise<object>} 原版数据 { age, total, talents, events, achievements, characters }
 async function fetchOriginalData() {
+  // 数据基础路径：Vite 注入的 BASE_URL（构建时随 base 变化，dev 为 '/'，
+  // GitHub Pages 构建为 './'）。用相对路径而非硬编码 '/data/'，
+  // 避免部署到子路径时请求到域名根而 404。
+  const base = import.meta.env.BASE_URL || '/'
   // 并行加载 5 个数据文件。
   const [age, talents, events, achievements, characters] = await Promise.all([
-    fetch('/data/age.json').then(r => r.json()),
-    fetch('/data/talents.json').then(r => r.json()),
-    fetch('/data/events.json').then(r => r.json()),
-    fetch('/data/achievements.json').then(r => r.json()),
-    fetch('/data/characters.json').then(r => r.json()),
+    fetch(`${base}data/age.json`).then(r => r.json()),
+    fetch(`${base}data/talents.json`).then(r => r.json()),
+    fetch(`${base}data/events.json`).then(r => r.json()),
+    fetch(`${base}data/achievements.json`).then(r => r.json()),
+    fetch(`${base}data/characters.json`).then(r => r.json()),
   ])
   // 返回整合数据。
   return {
