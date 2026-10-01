@@ -97,16 +97,36 @@ describe('SummaryView', () => {
     // 挂载。
     const { wrapper } = mountView(SummaryView)
     await flushPromises()
-    // 第二个 section 是收集统计。
-    const statsText = wrapper.findAll('.section')[1].text()
-    // 三个统计项。
+    // 收集统计区。
+    const statsText = wrapper.find('.statistics').text()
+    // 四个条目（TMS 隐藏：页头已显示重开次数）。
     expect(statsText).toContain('成就达成数')
+    expect(statsText).toContain('成就达成率')
     expect(statsText).toContain('天赋选择率')
     expect(statsText).toContain('事件收集率')
     // 比率格式化为百分比。
     expect(statsText).toMatch(/\d+\.\d%/)
+    // 成就达成数带分母（n / 总数）。
+    expect(statsText).toMatch(/\d+ \/ \d+/)
     // 不出现空值占位。
     expect(statsText).not.toContain('undefined')
+  })
+
+  test('收集统计：不泄漏引擎内部键名（RACHV 曾裸展示成 0.00606…）', async () => {
+    // 造一局。
+    await playedStore()
+    // 挂载。
+    const { wrapper } = mountView(SummaryView)
+    await flushPromises()
+    // 统计区文本。
+    const statsText = wrapper.find('.statistics').text()
+    // 不得出现纯大写内部键（TMS / CACHV / RACHV / RTLT / REVT）。
+    expect(statsText).not.toMatch(/\b[A-Z]{3,}\b/)
+    // 也不得出现长浮点小数（未格式化的比率）。
+    expect(statsText).not.toMatch(/0\.\d{5,}/)
+    // 而成就达成率必须以百分比出现。
+    const rateRow = wrapper.findAll('.statistics .row').find((r) => r.text().includes('成就达成率'))
+    expect(rateRow.text()).toMatch(/\d+\.\d%/)
   })
 
   test('成就列表：渲染计数与条目，且为固定高度滚动区', async () => {

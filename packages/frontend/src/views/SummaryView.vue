@@ -15,6 +15,8 @@ import { useGameStore } from '../stores/game.js'
 import { loadLocale, t } from 'game-engine/src/i18n/index.js'
 // 复制文本（剪贴板 API + 回退）。
 import { copyText } from '../utils/log-export.js'
+// 统计项的标签与格式化（集中定义，见该模块头部说明：RACHV 曾因两份手写清单漏配而裸展示）。
+import { visibleStatistics } from '../utils/statistics-view.js'
 
 // 路由。
 const router = useRouter()
@@ -42,12 +44,7 @@ const summaryLabels = {
   HSPR: '最高快乐',
 }
 
-// 统计条目展示（键 → 中文名）。
-const statisticsLabels = {
-  CACHV: '成就达成数',
-  RTLT: '天赋选择率',
-  REVT: '事件收集率',
-}
+// 统计条目展示（键 → 中文名 + 格式化方式）见 utils/statistics-view.js。
 
 // #judgeText
 // 评价键 → 可见文案（缺词条时原样返回键名）。
@@ -61,25 +58,9 @@ function judgeText(key) {
   return t(locale, key)
 }
 
-// #formatValue
-// 统计值格式化：比率类转百分比，其余原样。
-//
-// @param {string} key - 统计键
-// @param {object} item - judge 结果 { value, ... }
-// @returns {string} 展示文本
-function formatValue(key, item) {
-  // 无评价（未配置）：占位。
-  if (!item) return '—'
-  // 比率类。
-  if (key === 'RTLT' || key === 'REVT') return `${(Number(item.value || 0) * 100).toFixed(1)}%`
-  // 其余。
-  return String(item.value)
-}
-
 // 统计条目列表（跳过 TMS：页头已显示"重开次数"）。
-const statItems = computed(() =>
-  Object.entries(statistics.value).filter(([key]) => key !== 'TMS')
-)
+// 成就达成数带上分母（成就总数），比单看一个数字有用。
+const statItems = computed(() => visibleStatistics(statistics.value, { totalAchievements: achievements.value.length }))
 
 // 已达成成就数。
 const achievedCount = computed(() => achievements.value.filter((a) => a.isAchieved).length)
@@ -172,12 +153,12 @@ async function copySeed() {
     </div>
 
     <!-- 统计（成就/天赋/事件收集） -->
-    <div class="section">
+    <div class="section statistics">
       <h3>收集统计</h3>
-      <div v-for="[key, item] in statItems" :key="key" class="row">
-        <span class="label">{{ statisticsLabels[key] || key }}</span>
+      <div v-for="row in statItems" :key="row.key" class="row" :class="{ unknown: !row.known }">
+        <span class="label">{{ row.label }}</span>
         <span class="value">
-          <template v-if="item">{{ formatValue(key, item) }}（{{ judgeText(item.judge) }}）</template>
+          <template v-if="row.text !== '—'">{{ row.text }}（{{ judgeText(row.judge) }}）</template>
           <template v-else>—</template>
         </span>
       </div>
@@ -232,6 +213,11 @@ async function copySeed() {
   padding: 3px 8px;
   font-size: 11px;
   margin-left: 6px;
+}
+/* 未登记的统计键（引擎加了新统计项但界面没跟上）：用告警色标出来，
+   正常情况不该出现——statistics-view.spec.js 的覆盖性用例会先在 CI 拦住。 */
+.statistics .row.unknown .label {
+  color: #ffb84d;
 }
 .title {
   text-align: center;
