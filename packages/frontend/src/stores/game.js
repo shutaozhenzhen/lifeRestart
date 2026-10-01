@@ -88,6 +88,8 @@ export const useGameStore = defineStore('game', {
     seed: null,
     // 本局使用的原始数据（markRaw，供「同种子复现」重开一局；不参与渲染）。
     rawData: null,
+    // 成就达成提示队列（引擎 emit('achievement') 推入；由全局 AchievementToast 渲染）。
+    achievementToasts: [],
   }),
 
   // 计算属性。
@@ -119,6 +121,8 @@ export const useGameStore = defineStore('game', {
       this.talentPool = []
       this.selectedTalents = []
       this.clearTrace()
+      // 上一局的成就提示也不该带到新一局。
+      this.clearAchievementToasts()
       this.isEnd = false
       this.lif = 1
       this.allocation = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
@@ -138,9 +142,19 @@ export const useGameStore = defineStore('game', {
       // 之后所有随机（天赋抽卡、事件抽取、RDM 效果）都走 createRng(seed)，
       // 因此"同种子 + 同操作顺序 = 同一局人生"。
       this.seed = normalizeSeed(seed) ?? createSeed()
-      // 创建 Life 实例：经 create-life 统一装配（数据 + 日志 + **持久化 storage** + 种子随机源）。
+      // 创建 Life 实例：经 create-life 统一装配（数据 + 日志 + **持久化 storage** + 种子随机源 + 事件总线）。
+      // emit：引擎在成就达成时广播 'achievement'（带成就对象），这里转成界面提示。
       // markRaw 防止被 reactive 代理（Life 含 # 私有字段，被代理会崩）。
-      this.life = markRaw(createAppLife({ data, logger, random: createRng(this.seed) }))
+      this.life = markRaw(createAppLife({
+        // 数据。
+        data,
+        // 日志。
+        logger,
+        // 随机源（本局种子）。
+        random: createRng(this.seed),
+        // 事件总线。
+        emit: (tag, payload) => this.handleEngineEvent(tag, payload),
+      }))
       // 保留原始数据引用（markRaw 保护，避免 Vue 深度代理 3.5MB 数据），供"同种子复现"重开一局。
       this.rawData = markRaw(data)
       // 初始化。
@@ -165,6 +179,70 @@ export const useGameStore = defineStore('game', {
       await this.init(this.rawData, { seed })
       // 成功。
       return true
+    },
+
+    // #handleEngineEvent
+    // 引擎业务事件 → 界面行为。
+    //
+    // @param {string} tag - 事件名
+    // @param {*} payload - 事件负载
+    // @returns {void}
+    handleEngineEvent(tag, payload) {
+      // 成就达成 → 弹提示（+ 记日志，便于日志报告里核对）。
+      if (tag === 'achievement') {
+        // 推入提示队列。
+        this.pushAchievementToast(payload)
+        // 日志。
+        this.pushLog('info', `[UI][achievement] 达成成就：${payload?.name || payload?.id || '未知'}`)
+      }
+    },
+
+    // #pushAchievementToast
+    // 推入一条成就提示（同一条成就不重复堆叠；队列上限 3 条，超出丢最旧）。
+    //
+    // @param {object} achievement - 成就对象（引擎 achievement.get(id) 的副本）
+    // @returns {void}
+    pushAchievementToast(achievement) {
+      // 无效负载忽略。
+      if (!achievement || !achievement.id) return
+      // 已在队列里 → 只刷新（顶到最新），不重复堆叠。
+      const existing = this.achievementToasts.findIndex((t) => t.id === achievement.id)
+      // 已存在则移除旧的那条。
+      if (existing !== -1) this.achievementToasts.splice(existing, 1)
+      // 推入（补上时间戳，供界面显示/测试断言）。
+      this.achievementToasts.push({
+        // 成就 ID。
+        id: achievement.id,
+        // 名称。
+        name: achievement.name || achievement.id,
+        // 描述。
+        description: achievement.description || '',
+        // 星级。
+        grade: achievement.grade ?? 0,
+        // 达成时间。
+        achievedAt: Date.now(),
+      })
+      // 队列上限：最多保留 3 条（避免刷屏）。
+      if (this.achievementToasts.length > 3) this.achievementToasts.splice(0, this.achievementToasts.length - 3)
+    },
+
+    // #dismissAchievementToast
+    // 关闭一条成就提示（用户点击或超时自动调用）。
+    //
+    // @param {string} id - 成就 ID
+    // @returns {void}
+    dismissAchievementToast(id) {
+      // 过滤掉。
+      this.achievementToasts = this.achievementToasts.filter((t) => t.id !== id)
+    },
+
+    // #clearAchievementToasts
+    // 清空提示队列（重开一局时调用）。
+    //
+    // @returns {void}
+    clearAchievementToasts() {
+      // 清空。
+      this.achievementToasts = []
     },
 
     // 从引擎同步属性到响应式状态。

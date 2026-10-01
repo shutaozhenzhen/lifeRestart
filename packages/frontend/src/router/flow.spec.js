@@ -57,8 +57,9 @@ async function mountApp({ dataFail = false, realData = false } = {}) {
   // 干净 localStorage（引擎 storage 适配器会用）。
   installLocalStorage()
   // 数据请求：真实数据 / fixture / 故意失败。
+  let data = null
   if (dataFail) stubFetchFail()
-  else if (realData) stubFetchReal()
+  else if (realData) data = stubFetchReal()
   else stubFetchOk()
   // 起始路由。
   await router.push('/')
@@ -68,8 +69,8 @@ async function mountApp({ dataFail = false, realData = false } = {}) {
   const wrapper = mount(App, { global: { plugins: [pinia, router] } })
   // 等首屏渲染。
   await flushPromises()
-  // 返回。
-  return { wrapper, store: useGameStore() }
+  // 返回（data 供用例注入测试专用数据）。
+  return { wrapper, store: useGameStore(), data }
 }
 
 // 每个用例前：真实定时器 + 复位路由。
@@ -224,8 +225,41 @@ describe('全流程集成', () => {
     expect(router.currentRoute.value.path).toBe('/')
   })
 
-  test('数据加载失败时降级为 fixture 数据源（并在报告里可见）', async () => {
-    // 挂载时让数据请求失败（走 HomeView 的降级分支）。
+  test('成就达成时弹出提示（引擎 emit → 全局提示组件，端到端）', async () => {
+    // 挂载（真实数据）。
+    const { wrapper, store, data } = await mountApp({ realData: true })
+    // 真实数据的 START 类成就都带条件（需要特定天赋）→ 无法稳定触发；
+    // 注入一个**无条件**的 START 成就，链路的其余部分（引擎检测 → emit → store → 组件）全是真的。
+    data.achievements.test_start_ach = {
+      id: 'test_start_ach',
+      name: '测试成就·出生',
+      description: '验证成就提示全链路',
+      opportunity: 'START',
+      grade: 2,
+    }
+    // 主页开始新人生（引擎会加载注入的成就）。
+    await findButton(wrapper, '立即重开').trigger('click')
+    await flushPromises()
+    // 走到开局（等价天赋页确认 + 属性页点「下一步」）：START 时机在此检测。
+    store.confirmTalents()
+    store.begin({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+    await flushPromises()
+    // 提示弹出，内容为成就名与描述。
+    expect(wrapper.find('.toast-host').exists()).toBe(true)
+    expect(wrapper.find('.toast-name').text()).toBe('测试成就·出生')
+    expect(wrapper.find('.toast-desc').text()).toBe('验证成就提示全链路')
+    expect(wrapper.find('.toast-title').text()).toBe('成就达成')
+    // 点击可关闭。
+    await wrapper.find('.toast').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.toast-host').exists()).toBe(false)
+    // 同时记进了日志（报告里能核对"这局达成了什么"）。
+    expect(store.logBuffer.some((line) => line.includes('测试成就·出生'))).toBe(true)
+    // 卸载。
+    wrapper.unmount()
+  }, 180000)
+
+  test('数据加载失败时降级为 fixture 数据源（并在报告里可见）', async () => {    // 挂载时让数据请求失败（走 HomeView 的降级分支）。
     const { wrapper, store } = await mountApp({ dataFail: true })
     // 开始新人生。
     await findButton(wrapper, '立即重开').trigger('click')

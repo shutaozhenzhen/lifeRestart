@@ -129,4 +129,23 @@ describe('create-life 接线契约', () => {
     // 且 summary 仍可用（默认 judge 生效）。
     expect(life.summary.SUM).toBeDefined()
   })
+
+  test('契约 5：emit 透传到引擎（成就达成 → 界面才能弹提示）', async () => {
+    // 收集事件。
+    const events = []
+    // 装配时注入总线。
+    const life = createAppLife({ data: buildData(), emit: (tag, payload) => events.push([tag, payload]) })
+    // 初始化 + 配置。
+    await life.initial()
+    life.config()
+    // 开局（START 时机会检测成就）。
+    life.remake([])
+    life.start({ CHR: 5 })
+    // 至少收到一个 achievement 事件，且负载是可展示的成就对象。
+    const achievementEvents = events.filter(([tag]) => tag === 'achievement')
+    expect(achievementEvents.length).toBeGreaterThan(0)
+    // 负载含 id 与 name（页面直接渲染）。
+    expect(achievementEvents[0][1].id).toBeTruthy()
+    expect(achievementEvents[0][1].name).toBeTruthy()
+  })
 })

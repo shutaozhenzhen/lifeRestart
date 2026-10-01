@@ -448,7 +448,85 @@ async function playRealLife(seed, options = {}) {
   return playLife(seed, { maxYears: 120, data: loadRealData(), ...options })
 }
 
-describe('gameStore 随机种子与复现', () => {
+describe('gameStore 成就提示（引擎 emit → 界面弹窗）', () => {
+  test('W：开局触发的成就（START 时机）会推入提示队列', async () => {
+    // store + 开局。
+    const store = useGameStore()
+    await store.init(buildData())
+    // 新一局先清空提示。
+    expect(store.achievementToasts).toEqual([])
+    // START 时机的成就在 start() 里检测。
+    store.begin({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+    // 至少有一条提示（fixture 里有无条件 START 成就）。
+    expect(store.achievementToasts.length).toBeGreaterThan(0)
+    // 提示内容可直接展示（名称 + 描述）。
+    const toast = store.achievementToasts[0]
+    expect(String(toast.name).length).toBeGreaterThan(0)
+    expect(toast.id).toBeTruthy()
+    // 同时记了日志（报告里能核对"这局达成了什么"）。
+    expect(store.logBuffer.some((line) => line.includes('达成成就'))).toBe(true)
+  })
+
+  test('X：同一条成就只保留一条提示（不堆叠），并顶到最新', async () => {
+    // store。
+    const store = useGameStore()
+    // 直接推同一个成就两次。
+    store.pushAchievementToast({ id: 'ach_x', name: '成就X', description: '描述X', grade: 2 })
+    store.pushAchievementToast({ id: 'ach_x', name: '成就X', description: '描述X', grade: 2 })
+    // 只有一条。
+    expect(store.achievementToasts.length).toBe(1)
+    expect(store.achievementToasts[0].id).toBe('ach_x')
+  })
+
+  test('Y：提示队列上限 3 条（超出丢最旧）', async () => {
+    // store。
+    const store = useGameStore()
+    // 推 5 条不同成就。
+    for (let i = 1; i <= 5; i++) store.pushAchievementToast({ id: `ach_${i}`, name: `成就${i}`, grade: 1 })
+    // 只留最新 3 条。
+    expect(store.achievementToasts.map((t) => t.id)).toEqual(['ach_3', 'ach_4', 'ach_5'])
+  })
+
+  test('Z：关闭单条 / 清空全部 / 重开一局自动清空', async () => {
+    // store。
+    const store = useGameStore()
+    store.pushAchievementToast({ id: 'a1', name: 'A', grade: 0 })
+    store.pushAchievementToast({ id: 'a2', name: 'B', grade: 0 })
+    // 关闭一条。
+    store.dismissAchievementToast('a1')
+    expect(store.achievementToasts.map((t) => t.id)).toEqual(['a2'])
+    // 清空全部。
+    store.clearAchievementToasts()
+    expect(store.achievementToasts).toEqual([])
+    // 再推一条后重新 init（新一局）→ 自动清空，不把上一局的提示带过来。
+    store.pushAchievementToast({ id: 'a3', name: 'C', grade: 0 })
+    await store.init(buildData())
+    expect(store.achievementToasts).toEqual([])
+  })
+
+  test('Z2：无效负载不崩（缺 id / null）', () => {
+    // store。
+    const store = useGameStore()
+    // 各种非法输入。
+    store.pushAchievementToast(null)
+    store.pushAchievementToast(undefined)
+    store.pushAchievementToast({})
+    store.pushAchievementToast({ name: '没有 id' })
+    // 队列仍为空。
+    expect(store.achievementToasts).toEqual([])
+  })
+
+  test('Z3：handleEngineEvent 只认 achievement 事件（其它事件忽略）', () => {
+    // store。
+    const store = useGameStore()
+    // 其它事件。
+    store.handleEngineEvent('something-else', { id: 'x' })
+    store.handleEngineEvent('onYearAdvance', { age: 1 })
+    // 不产生提示。
+    expect(store.achievementToasts).toEqual([])
+  })
+})
+describe('gameStore 随机种子与复现（真实数据）', () => {
   test('P：init 自动生成种子并记录（页面据此显示）', async () => {
     // store。
     const store = useGameStore()

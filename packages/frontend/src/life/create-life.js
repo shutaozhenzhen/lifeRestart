@@ -23,8 +23,9 @@ import { createLifeStorage } from '../utils/life-storage.js'
 // @param {object} [params.logger] - 日志器（缺省静默）
 // @param {object} [params.storage] - 存储适配器（缺省 localStorage 适配器；模拟传内存实现）
 // @param {Function} [params.random] - 随机源（缺省 Math.random；批量模拟传种子 RNG 以复现）
+// @param {Function} [params.emit] - 业务事件总线 (tag, payload) => void（成就达成通知等）
 // @returns {Life} 引擎实例
-export function createAppLife({ data, logger, storage, random } = {}) {
+export function createAppLife({ data, logger, storage, random, emit } = {}) {
   // 组装：数据 + 日志 + **持久化存储**（三者缺一都会造成静默功能缺失）。
   return new Life({
     // 游戏数据。
@@ -35,5 +36,7 @@ export function createAppLife({ data, logger, storage, random } = {}) {
     storage: storage || createLifeStorage(),
     // 随机源：显式传入则用（可复现），否则引擎默认 Math.random。
     random,
+    // 业务事件总线：引擎在成就达成等时机广播（'achievement' → 成就对象）。
+    emit,
   })
 }
