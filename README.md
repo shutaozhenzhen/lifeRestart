@@ -86,6 +86,8 @@ node src/cli/export.cli.js   --seed <n>                     # 轨迹导出（同
 node src/cli/data-mod.cli.js --data <dir> --out <modsDir>   # 原版 JSON → Data Mod 落盘
 node src/cli/mod.cli.js <modsDir>                           # Mod 加载器（依赖图 / 钩子演示）
 node src/cli/simulate.cli.js --runs 30 --seed 42 [--mods ../../mods] [--json]  # 批量模拟（随机天赋+随机属性）
+node src/cli/simulate.cli.js --runs 30 --talents 1001,1002 --alloc CHR=3,INT=4,STR=5,MNY=8 \
+       --mods ../../mods --format md --out report.md   # 固定特性+固定属性，导出 CSV/JSON/Markdown
 
 # AI 链路
 node src/cli/ai-game.cli.js  --mods <dir> [--mock-ai] [--seed <n>] [--journal <file>]  # AI 可玩版
@@ -140,14 +142,19 @@ AI 连接测试经 vite 代理 `/ai-proxy` 转发到本地代理服务。
 重开次数、达成成就、已见事件带 `lifeRestart:` 前缀写入 localStorage，**跨局累积**
 （重开次数在点「↻ 重开」时 +1）。引擎 `storage` 未注入时会退回内存实现，这些数据会恒为空。
 
-**模拟统计页**（`/simulate`，新增「模拟系统」）：**随机抽天赋 + 随机分配属性，批量跑 N 局并聚合输出结果**
+**模拟统计页**（`/simulate`，新增「模拟系统」）：**按策略批量跑 N 局并聚合输出结果**
 ——寿命分布直方图、总评分档、属性均值（终局 / 历史最高）、收集率、最佳一局（含天赋名称与分配明细）。
-支持局数档位（10/30/50/100 + 自定义）、随机种子（可复现）、**快速模式**（演示数据，毫秒级一局）、
-运行进度（局/秒 + 预计剩余）与**随时停止**（保留已完成部分的聚合）。
+**策略两条轴各自可随机或固定**：特性（随机抽卡 ／ 从全部天赋里挑最多 3 个做控制变量实验）、
+属性（随机分配 ／ 手填四项）。支持局数档位（10/30/50/100 + 自定义）、随机种子（可复现）、
+**快速模式**（演示数据，毫秒级一局）、运行进度（局/秒 + 预计剩余）与**随时停止**（保留已完成部分的聚合）；
+结果可**导出 CSV / JSON / Markdown**（Markdown 可直接贴进 issue，JSON 供脚本二次分析）。
+
+固定策略的两条硬约束（都有一致行为与测试）：固定特性里**不存在的 ID 会被剔除**、全无效则回退随机，
+并在结果与报告里给 ⚠ 警告（不静默）；固定属性**超出可用点数时按比例缩减**到正好用完（单项不超上限）并警告。
 
 > 性能：真实数据下**单局 0.3~1.5 秒**（老年阶段每年要判几百个事件条件，寿命越长越慢），
 > 所以页面按局分批执行、批间让出主线程，并对 `condition` 加了**编译缓存**（见下）。
-> 想快速看分布就勾「快速模式」。CLI 等价入口见下方 `simulate.cli.js`。
+> 想快速看分布就勾「快速模式」。CLI 等价入口见下方 `simulate.cli.js`（支持 `--talents` / `--alloc` / `--format` / `--out`）。
 
 ## 在线版（GitHub Pages）
 
@@ -200,11 +207,11 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 574 | condition（含**编译缓存**）/ compat / params / 各模块 / mod / ai / cli / data-loader / **sim（批量模拟内核 + CLI）** |
-| `packages/frontend` | 146 | 纯逻辑（日志/自动播放/storage/mods-state/**数据加载**/**模拟驱动器**）+ **8 个页面组件测试** + 全流程集成 |
+| `packages/game-engine` | 612 | condition（含**编译缓存**）/ compat / params / 各模块 / mod / ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** |
+| `packages/frontend` | 151 | 纯逻辑（日志/自动播放/storage/mods-state/**数据加载**/**模拟驱动器**）+ **8 个页面组件测试** + 全流程集成 |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
-| **合计** | **732** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
+| **合计** | **775** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
 
 ### 前端测试分层（2026-10 补齐）
 
