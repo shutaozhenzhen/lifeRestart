@@ -133,6 +133,29 @@ export function mountView(component, { pinia, router, route = '/', global = {} }
   return { wrapper, router: r, pinia: p }
 }
 
+// #waitFor
+// 轮询等待条件成立（用于异步流程：批量模拟、取消等）。
+// 注意：需要真实定时器（不要与 vi.useFakeTimers 同时用）。
+//
+// @param {Function} predicate - 条件（返回 true 即结束）
+// @param {object} [options]
+// @param {number} [options.timeout] - 超时毫秒
+// @param {number} [options.interval] - 轮询间隔毫秒
+// @returns {Promise<boolean>} 是否在超时前成立
+export async function waitFor(predicate, { timeout = 4000, interval = 20 } = {}) {
+  // 起点。
+  const startedAt = Date.now()
+  // 轮询。
+  while (Date.now() - startedAt < timeout) {
+    // 成立即返回。
+    if (predicate()) return true
+    // 等一小会儿（真实定时器）。
+    await new Promise((resolve) => setTimeout(resolve, interval))
+  }
+  // 超时。
+  throw new Error('waitFor 超时：条件在限定时间内未成立')
+}
+
 // #stubFetchOk
 // 让 fetch 返回 fixture 数据（HomeView 会取 data/*.json 五个文件）。
 //

@@ -30,6 +30,8 @@ import SummaryView from '../views/SummaryView.vue'
 import ModManageView from '../views/ModManageView.vue'
 // 设置页（日志等级等全局配置）。
 import SettingsView from '../views/SettingsView.vue'
+// 模拟统计页（批量模拟：随机天赋 + 随机属性）。
+import SimulateView from '../views/SimulateView.vue'
 
 // 路由表。
 // 具名导出：测试用**同一份**路由表创建内存 history 实例，避免测试与线上路由分叉。
@@ -48,6 +50,8 @@ export const routes = [
   { path: '/mods', name: 'mods', component: ModManageView },
   // 设置页（全局配置）。
   { path: '/settings', name: 'settings', component: SettingsView },
+  // 模拟统计页。
+  { path: '/simulate', name: 'simulate', component: SimulateView },
   // 未知路径回主页。
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]

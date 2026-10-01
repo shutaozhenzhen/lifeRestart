@@ -17,6 +17,31 @@
 // 存储键前缀。
 export const DEFAULT_PREFIX = 'lifeRestart:'
 
+// #createMemoryStorage
+// 纯内存存储适配器（**不落盘**）。
+//
+// 用途：批量模拟必须用独立的临时存储——否则模拟会写脏玩家的存档
+// （重开次数 TMS、成就 ACHV、已见事件 AEVT 都会被模拟局灌满）。
+//
+// @returns {{getItem: Function, setItem: Function}} 适配器
+export function createMemoryStorage() {
+  // 内存数据。
+  const data = new Map()
+  // 返回适配器（语义与 localStorage 一致：字符串、缺失返回 null）。
+  return {
+    // 读。
+    getItem(key) {
+      // 命中返回字符串，否则 null。
+      return data.has(key) ? data.get(key) : null
+    },
+    // 写。
+    setItem(key, value) {
+      // 统一字符串化。
+      data.set(key, String(value))
+    },
+  }
+}
+
 // #createLifeStorage
 // 创建 storage 适配器（引擎侧只要求 getItem/setItem 的字符串语义）。
 //

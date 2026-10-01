@@ -21,16 +21,19 @@ import { createLifeStorage } from '../utils/life-storage.js'
 // @param {object} params
 // @param {object} params.data - 游戏数据（age/talents/events/achievements/characters）
 // @param {object} [params.logger] - 日志器（缺省静默）
-// @param {object} [params.storage] - 存储适配器（缺省 localStorage 适配器；测试可注入内存实现）
+// @param {object} [params.storage] - 存储适配器（缺省 localStorage 适配器；模拟传内存实现）
+// @param {Function} [params.random] - 随机源（缺省 Math.random；批量模拟传种子 RNG 以复现）
 // @returns {Life} 引擎实例
-export function createAppLife({ data, logger, storage } = {}) {
+export function createAppLife({ data, logger, storage, random } = {}) {
   // 组装：数据 + 日志 + **持久化存储**（三者缺一都会造成静默功能缺失）。
   return new Life({
     // 游戏数据。
     data,
     // 日志器。
     logger,
-    // 存储：缺省用 localStorage 适配器（测试可换成内存实现）。
+    // 存储：缺省用 localStorage 适配器（测试/模拟可换成内存实现）。
     storage: storage || createLifeStorage(),
+    // 随机源：显式传入则用（可复现），否则引擎默认 Math.random。
+    random,
   })
 }

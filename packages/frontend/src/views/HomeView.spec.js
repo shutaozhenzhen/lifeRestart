@@ -121,6 +121,18 @@ describe('HomeView', () => {
     expect(router.currentRoute.value.path).toBe('/mods')
   })
 
+  test('模拟统计入口可跳转（新增模拟系统）', async () => {
+    // 准备。
+    stubFetchOk()
+    // 挂载。
+    const { wrapper, router } = mountView(HomeView)
+    // 点模拟统计。
+    await findButton(wrapper, '模拟统计').trigger('click')
+    await flushPromises()
+    // 到模拟页。
+    expect(router.currentRoute.value.path).toBe('/simulate')
+  })
+
   test('加载中：按钮禁用并显示"加载中..."（防重复开局）', async () => {
     // 永不返回的 fetch：让 startGame 停在 await 上。
     globalThis.fetch = () => new Promise(() => {})
