@@ -61,6 +61,10 @@ function next() {
     message.value = `请选择 ${store.life.talentSelectLimit} 个天赋`
     return
   }
+  // 先确认天赋（引擎 remake：写入初始数据 + 触发替换链）。
+  // 必须在进入属性页之前执行——属性页要按「默认点数 + 天赋加成」显示可用点数，
+  // 而该值来自引擎内部初始数据；漏掉这一步会在属性页读取点数时崩溃。
+  store.confirmTalents()
   // 跳转属性分配页。
   router.push('/property')
 }

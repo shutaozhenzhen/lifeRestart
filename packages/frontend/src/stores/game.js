@@ -38,6 +38,10 @@ export const useGameStore = defineStore('game', {
     life: null,
     // 是否初始化完成。
     initialized: false,
+    // 是否已开局（start 已执行）。GameView 挂载时据此判断，避免重复开局。
+    started: false,
+    // 天赋是否已确认（confirmTalents 已执行 → begin 不再重复触发替换链）。
+    talentsConfirmed: false,
     // 当前六个基础属性（响应式）。
     propertys: {
       AGE: 0, CHR: 0, INT: 0, STR: 0, MNY: 0, SPR: 0,
@@ -76,6 +80,13 @@ export const useGameStore = defineStore('game', {
   actions: {
     // 初始化引擎。
     async init(data) {
+      // 重置单局状态：从主页重新开始时，不能残留上一局的进度标记与选择。
+      this.started = false
+      this.talentsConfirmed = false
+      this.talentPool = []
+      this.selectedTalents = []
+      this.content = []
+      this.allocation = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
       // 创建日志器：级别从配置读取，输出到浏览器 console + 界面缓冲。
       // 引擎内核（Life/属性/天赋/事件/成就/角色/数据加载/Mod 钩子）全部日志经此汇入。
       const logger = createLogger({
@@ -182,12 +193,51 @@ export const useGameStore = defineStore('game', {
       return { ok: true }
     },
 
-    // 开局（remake + start）。
+    // 确认天赋（进入属性分配页之前必须调用）。
+    //
+    // 为什么必须在这里而不是开局时：属性分配页要显示「默认点数 + 天赋加成」，
+    // 即读取 life.getPropertyPoints()，而该值来自引擎的 #initialData.TLT；
+    // 原实现只在 begin() 里 remake，属性页先渲染 → #initialData 未建立 → 崩溃。
+    //
+    // 重复调用安全：remake 内部对入参做深拷贝后重建初始数据，替换链不会累积污染。
+    //
+    // @returns {number} 确认后的可用点数（引擎未初始化时返回 0）
+    confirmTalents() {
+      // 引擎未初始化保护（刷新后直进页面的双保险）。
+      if (!this.life) {
+        // 错误日志（常显进面板）。
+        this.pushLog('error', '[UI][game] 引擎未初始化，无法确认天赋（应回主页重新开始）')
+        // 无点数。
+        return 0
+      }
+      // 触发替换链并把已选天赋写入初始数据。
+      this.life.remake([...this.selectedTalents])
+      // 标记已确认（begin 据此避免重复执行）。
+      this.talentsConfirmed = true
+      // 可用点数（默认 + 天赋加成）。
+      const points = this.life.getPropertyPoints()
+      // 页面日志：确认结果。
+      this.pushLog('info', `[UI][talent] 已确认天赋 ${this.selectedTalents.length} 个，可用点数 ${points}`)
+      // 返回，供调用方/测试断言。
+      return points
+    },
+
+    // 开局（应用分配属性 + 进入人生轨迹）。
+    // @param {object} allocation - 属性分配
     begin(allocation = {}) {
-      // 触发替换链。
-      this.life.remake(this.selectedTalents)
-      // 开局。
+      // 引擎未初始化保护。
+      if (!this.life) {
+        // 错误日志（常显进面板）。
+        this.pushLog('error', '[UI][game] 引擎未初始化，无法开局（应回主页重新开始）')
+        // 中断。
+        return
+      }
+      // 天赋未确认则补做一次（替换链只跑一次，避免重复消耗随机源）。
+      if (!this.talentsConfirmed) this.confirmTalents()
+      // 开局（写入分配属性 + 触发初始成就）。
       this.life.start(allocation)
+      // 标记已开局（GameView 挂载时据此避免重复开局）。
+      this.started = true
       // 清空流水。
       this.content = []
       // 同步。

@@ -6,6 +6,9 @@
  *   B. markRaw(null) 崩溃（Cannot convert undefined or null to object）→ 初始 null、赋值时 markRaw
  *   C. 刷新后 hash 直进引擎页，life 为 null 抽卡报错 → 路由守卫 + drawTalents 防御
  *   D. 日志等级切换（setLogLevel）：持久化 + 引擎全链路同步
+ *   E. 再次初始化（重开）后引擎仍可调用 → markRaw 持续生效
+ *   F. 属性分配页读取点数崩溃（TypeError: ... reading 'TLT'）→ 天赋确认时先 remake
+ *   G. begin 重复调用不重复执行 remake（替换链只跑一次）
  */
 
 // 导入 vitest 测试 DSL。
@@ -135,5 +138,59 @@ describe('gameStore 异常回归测试', () => {
     expect(() => store.life.next()).not.toThrow()
     // 就绪。
     expect(store.isReady).toBe(true)
+  })
+
+  test('F：天赋确认后属性页可读点数（回归：曾抛 reading TLT）', async () => {
+    // store。
+    const store = useGameStore()
+    // 初始化引擎（此时尚未 remake）。
+    await store.init(buildData())
+    // 抽卡。
+    store.drawTalents()
+    // 选满天赋上限（跳过会互斥失败的候选）。
+    const limit = store.life.talentSelectLimit
+    for (let i = 0; i < store.talentPool.length && store.selectedTalents.length < limit; i++) {
+      store.selectTalent(i)
+    }
+    // 已选满。
+    expect(store.selectedTalents.length).toBe(limit)
+    // 确认天赋（TalentView 点「下一步」时调用 → 引擎 remake）。
+    store.confirmTalents()
+    // 属性页渲染路径：曾经在这里抛 TypeError: Cannot read properties of undefined (reading 'TLT')。
+    expect(() => store.propertyPoints).not.toThrow()
+    // 可用点数 = 默认 20 + 天赋加成（≥20）。
+    expect(store.propertyPoints).toBeGreaterThanOrEqual(20)
+    // 尚未分配 → 剩余点数等于可用点数。
+    expect(store.leftPoints).toBe(store.propertyPoints)
+  })
+
+  test('G：begin 不重复触发 remake（替换链只跑一次）', async () => {
+    // store。
+    const store = useGameStore()
+    // 初始化。
+    await store.init(buildData())
+    // 换调用计数替身：只关心 remake/start 被调用的次数。
+    let remakeCount = 0
+    let startCount = 0
+    store.life = {
+      // sync() 会读该属性。
+      propertys: { AGE: 0 },
+      // 计数。
+      remake() { remakeCount++ },
+      start() { startCount++ },
+      getPropertyPoints: () => 20,
+    }
+    // 模拟从天赋页进入（尚未确认天赋、尚未开局）。
+    store.talentsConfirmed = false
+    store.started = false
+    // 开局两次（例如轨迹页被重复挂载）。
+    store.begin({})
+    store.begin({})
+    // 替换链只允许执行一次：重复会重新消耗随机源并重算替换结果。
+    expect(remakeCount).toBe(1)
+    // start 的次数不由 store 拦截，靠 GameView 的 store.started 守卫（此处记录现状）。
+    expect(startCount).toBe(2)
+    // 已标记开局。
+    expect(store.started).toBe(true)
   })
 })

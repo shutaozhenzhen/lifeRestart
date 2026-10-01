@@ -25,10 +25,11 @@ const lif = computed(() => (store.life ? store.life.request('PROPERTY').get('LIF
 // 是否结束。
 const isEnd = computed(() => (store.life ? store.life.request('PROPERTY').isEnd() : false))
 
-// 挂载时自动开局（若未开局）。
+// 挂载时自动开局（仅未开局时执行；remake 已在天赋确认时完成）。
 onMounted(() => {
-  // 未开局则开局。
-  if (!store.life || store.life.getPropertyPoints !== undefined) {
+  // 已开局则跳过（原条件写成 `getPropertyPoints !== undefined` 恒为真，
+  // 导致每次返回本页都重复 remake + start）。
+  if (!store.started) {
     // 用已选天赋 + 分配属性开局。
     store.begin({ ...store.allocation })
   }
