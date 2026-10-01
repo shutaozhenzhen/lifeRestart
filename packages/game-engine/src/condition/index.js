@@ -17,6 +17,38 @@
  * @throws {Error} 表达式语法错误或运行时错误
  */
 
+// #COMPILED
+// 条件编译缓存：条件字符串 → 编译后的函数。
+//
+// 为什么需要（性能，2026-10 由批量模拟暴露）：
+//   `new Function()` 是**编译**操作，成本远高于调用。真实数据一年要判几百个条件，
+//   每局又要跑上百局，原实现（每次求值都重新编译）会让批量模拟慢到不可用：
+//   实测单局从 ~250ms 降到缓存后的水平（见 condition/index.spec.js 的缓存用例）。
+//   条件字符串来自数据，取值有限；AI 运行时生成的条件也走同一缓存（带上限保护）。
+const COMPILED = new Map()
+
+// #MAX_CACHE
+// 缓存上限：防御"运行时不断生成新条件"（如 AI 注入）导致内存无限增长。
+const MAX_CACHE = 5000
+
+// #conditionCacheSize
+// 当前缓存条目数（测试与可观测性用）。
+//
+// @returns {number} 条目数
+export function conditionCacheSize() {
+  // 返回大小。
+  return COMPILED.size
+}
+
+// #clearConditionCache
+// 清空编译缓存（测试用；运行时一般不需要）。
+//
+// @returns {void}
+export function clearConditionCache() {
+  // 清空。
+  COMPILED.clear()
+}
+
 // #check
 // 将字符串形式的 JS 条件表达式编译为函数并求值。
 // 输入是字符串，输出是布尔值——这是整个 condition 引擎的唯一对外入口。
@@ -30,13 +62,20 @@
 export function check(condition, properties) {
   // try...catch 包裹整个求值过程，将 JS 引擎的原始错误包装为更友好的消息。
   try {
-    // new Function 是 JS 的"编译期"调用——将字符串源代码编译为可调用的函数对象。
-    // 第一个参数 'params' 是函数形参名。
-    // 第二个参数是函数体字符串：
-    //   "use strict" 启用严格模式，防止误用全局 this；
-    //   return (condition) 将条件表达式的结果返回。
-    //   condition 两侧的括号 () 使 return 后面可以跟多行表达式或逗号表达式。
-    const fn = new Function('params', `"use strict"; return (${condition})`)
+    // 先查编译缓存（命中则直接调用，省掉每次的编译开销）。
+    let fn = COMPILED.get(condition)
+    // 未命中：编译一次并缓存。
+    if (!fn) {
+      // new Function 是 JS 的"编译期"调用——将字符串源代码编译为可调用的函数对象。
+      // 第一个参数 'params' 是函数形参名。
+      // 第二个参数是函数体字符串：
+      //   "use strict" 启用严格模式，防止误用全局 this；
+      //   return (condition) 将条件表达式的结果返回。
+      //   condition 两侧的括号 () 使 return 后面可以跟多行表达式或逗号表达式。
+      fn = new Function('params', `"use strict"; return (${condition})`)
+      // 入缓存（超过上限则不再增长；编译失败会抛错，不会写入坏条目）。
+      if (COMPILED.size < MAX_CACHE) COMPILED.set(condition, fn)
+    }
     // Boolean() 将求值结果强制转换为布尔值，处理 truthy/falsy 值。
     // fn(properties) 将调用方传入的 properties 对象原引用作为 params 传入。
     // 属性对象中的键（如 CHR、INT）在函数体内通过 params.CHR、params.INT 访问。

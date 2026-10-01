@@ -20,8 +20,8 @@
 // test：定义单个测试用例。
 // expect：断言函数。
 import { describe, test, expect, it } from 'vitest'
-// 导入被测对象：check() 函数。
-import { check } from './index.js'
+// 导入被测对象：check() 函数 + 编译缓存探针。
+import { check, clearConditionCache, conditionCacheSize } from './index.js'
 
 // 顶层 describe，包含所有测试组。
 describe('condition engine', () => {
@@ -277,6 +277,45 @@ describe('condition engine', () => {
       // params.XXX 在 properties 对象中不存在，读取结果为 undefined。
       // undefined > 5 在 JS 中是 false，不会抛异常。
       expect(check('params.XXX > 5', props)).toBe(false)
+    })
+  })
+
+  // === 测试组 9：编译缓存（性能改动的护栏）===
+  describe('compile cache', () => {
+    test('相同条件命中缓存：语义不变、缓存不增长', () => {
+      // 从干净状态开始。
+      clearConditionCache()
+      // 首次求值 → 编译并缓存。
+      expect(check('params.CHR > 5', { CHR: 10 })).toBe(true)
+      expect(conditionCacheSize()).toBe(1)
+      // 同一条条件换参数：命中缓存，结果随参数变化（不是把结果也缓存了）。
+      expect(check('params.CHR > 5', { CHR: 1 })).toBe(false)
+      expect(conditionCacheSize()).toBe(1)
+      // 新条件才增长。
+      expect(check('params.CHR > 6', { CHR: 10 })).toBe(true)
+      expect(conditionCacheSize()).toBe(2)
+    })
+
+    test('语法错误条件仍然抛错且不污染缓存', () => {
+      // 干净状态。
+      clearConditionCache()
+      // 抛错（错误消息带条件原文，便于定位）。
+      expect(() => check('params.CHR >', {})).toThrow(/Condition evaluation failed/)
+      // 编译失败不写缓存。
+      expect(conditionCacheSize()).toBe(0)
+    })
+
+    test('缓存不改变"条件可写 params"的副作用语义', () => {
+      // 干净状态。
+      clearConditionCache()
+      // 同一条件求值两次：第二次命中缓存，但副作用必须照旧发生。
+      const target = { CHR: 1 }
+      // 第一次（编译）。
+      check('params.CHR += 4', target)
+      // 第二次（命中缓存）。
+      check('params.CHR += 4', target)
+      // 1 + 4 + 4 = 9（若缓存把求值变成了纯函数，这里会是 5）。
+      expect(target.CHR).toBe(9)
     })
   })
 
