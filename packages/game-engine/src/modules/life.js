@@ -106,7 +106,10 @@ class Life {
   #propertyAllocateLimit // 属性分配范围
   #defaultPropertys    // 默认属性
   #specialThanks       // 特别鸣谢
-  #initialData         // 初始数据
+  // 初始数据：**构造即具备可读基线**，因为属性分配页要在 remake 之前就计算可用点数
+  // （原实现只在 remake() 里赋值，导致重建前读取 TLT 抛 TypeError）。
+  // config() 会用默认属性重建，remake(talents) 再写入实际选择的天赋。
+  #initialData = { TLT: [] }
 
   // #initial
   // 初始化全部模块数据。
@@ -162,6 +165,9 @@ class Life {
     this.#propertyAllocateLimit = propertyAllocateLimit
     // 默认属性。
     this.#defaultPropertys = defaultPropertys
+    // 初始数据基线：config 之后即可安全读取（点数 = 默认 + 0 个天赋加成）。
+    // 保留 TLT 空数组，等 remake(talents) 写入实际选择。
+    this.#initialData = { ...cloneUtil(this.#defaultPropertys || {}), TLT: [] }
     // 天赋配置（抽取池大小 + 概率）。
     this.#talent.config()
     // 属性配置（judge 分档）。
@@ -273,6 +279,7 @@ class Life {
   // @returns {number} 可用点数
   getPropertyPoints() {
     // 默认点数 + 已选天赋的 status 加成。
+    // #initialData 由字段初始化器保证存在；TLT 在 remake 之前为空数组（加成为 0）。
     return this.#defaultPropertyPoints + this.#talent.allocationAddition(this.#initialData.TLT)
   }
 

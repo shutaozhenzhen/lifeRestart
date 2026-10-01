@@ -348,6 +348,8 @@ class Talent {
   // @param {string|Array<string>} talents - 天赋 ID 或数组
   // @returns {number} 额外分配点数
   allocationAddition(talents) {
+    // 空值：视为无加成（防御：remake 之前 TLT 可能缺失，不能让属性页崩掉）。
+    if (talents === undefined || talents === null || talents === '') return 0
     // 数组：递归求和。
     if (Array.isArray(talents)) {
       // 累加器。

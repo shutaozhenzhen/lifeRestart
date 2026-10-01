@@ -90,8 +90,8 @@ describe('life - initial/config', () => {
   test('initial loads module totals', async () => {
     // 重新初始化（新实例避免二次解析）。
     const life2 = await makeLife()
-    // 天赋总数。
-    expect(life2.initial()).resolves.toMatchObject({ TTLT: 12, TEVT: 6, TACHV: 3 })
+    // 天赋总数（await：vitest 已警告未 await 的 resolves 断言将在下个大版本失败）。
+    await expect(life2.initial()).resolves.toMatchObject({ TTLT: 12, TEVT: 6, TACHV: 3 })
   })
 
   test('config sets limits', () => {
@@ -129,6 +129,14 @@ describe('life - remake/start', () => {
     expect(life.propertys.CHR).toBe(5)
     // 天赋写入。
     expect(life.request('PROPERTY').get('TLT')).toContain('t_001')
+  })
+
+  test('getPropertyPoints works before remake (属性页先读数)', () => {
+    // 回归：曾因 #initialData 只在 remake() 内赋值，属性分配页在 remake 之前
+    // 读取点数 → TypeError: Cannot read properties of undefined (reading 'TLT')。
+    expect(() => life.getPropertyPoints()).not.toThrow()
+    // 尚未选择天赋 → 只有默认点数。
+    expect(life.getPropertyPoints()).toBe(20)
   })
 
   test('getPropertyPoints includes talent bonus', () => {

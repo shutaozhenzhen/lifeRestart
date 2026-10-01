@@ -241,6 +241,15 @@ describe('talent - allocationAddition', () => {
     // 读取 status。
     expect(custom.allocationAddition('s1')).toBe(2)
   })
+
+  test('tolerates missing input (remake 之前 TLT 为空)', () => {
+    // 回归：属性分配页在 remake 之前就读取点数，TLT 可能缺失/为空。
+    expect(talent.allocationAddition(undefined)).toBe(0)
+    expect(talent.allocationAddition(null)).toBe(0)
+    expect(talent.allocationAddition('')).toBe(0)
+    // 空数组。
+    expect(talent.allocationAddition([])).toBe(0)
+  })
 })
 
 // ========== 测试组 8：do ==========
