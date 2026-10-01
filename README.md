@@ -145,6 +145,13 @@ AI 连接测试经 vite 代理 `/ai-proxy` 转发到本地代理服务。
 重开次数、达成成就、已见事件带 `lifeRestart:` 前缀写入 localStorage，**跨局累积**
 （重开次数在点「↻ 重开」时 +1）。引擎 `storage` 未注入时会退回内存实现，这些数据会恒为空。
 
+**成就达成提示**：达成成就时右上角弹出提示卡（🏆 成就达成 + 名称 + 描述 + 星级），**4 秒自动消失**、
+也可点击关闭；同一条成就不堆叠，最多同时显示 3 条。因为成就的触发时机有四种
+（`START` 开局 / `TRAJECTORY` 逐年 / `SUMMARY` 开总结页 / `END` 点重开），提示做成**全局组件**
+挂在 `App.vue`（与日志悬浮窗同级），所以任何页面都不会漏。链路：
+引擎 `achieve()` → `emit('achievement', 成就对象)` → `store.handleEngineEvent()` → `store.achievementToasts`
+→ `components/AchievementToast.vue`；同时记一条 `[UI][achievement] 达成成就：xxx` 进日志（报告可核对）。
+
 **随机种子与复现**：每局开始都会分配一颗 **32 位种子**（主页可留空自动生成，也可手填旧种子），
 所有随机（天赋抽卡、事件抽取、RDM 效果）都来自 `createRng(seed)` —— **同种子 + 同样选择 = 同一局人生**。
 种子的显示位置：主页输入框、轨迹页状态栏（点一下复制）、总结页（复制 / 「用此种子再来一局」）、
@@ -257,10 +264,10 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
 | `packages/game-engine` | 620 | condition（含**编译缓存**）/ compat / params / 各模块 / mod / ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 175 | 纯逻辑（日志/自动播放/storage/mods-state/**数据加载**/**模拟驱动器**/**统计展示**）+ **8 个页面组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
+| `packages/frontend` | 189 | 纯逻辑（日志/自动播放/storage/mods-state/**数据加载**/**模拟驱动器**/**统计展示**）+ **11 个组件/页面测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
-| **合计** | **807** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
+| **合计** | **821** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
 
 ### 前端测试分层（2026-10 补齐）
 
