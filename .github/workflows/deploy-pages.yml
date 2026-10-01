@@ -37,11 +37,10 @@ jobs:
         uses: actions/checkout@v4
 
       # pnpm（前端依赖 game-engine: workspace:*，必须用 pnpm 安装，npm 不支持）。
+      # 不写 version：版本统一由仓库根 package.json 的 packageManager 字段决定
+      # （与 test.yml 同一来源，避免两处版本漂移）。
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          # 与仓库 pnpm-workspace.yaml 的 allowBuilds 字段保持一致（pnpm 11+）。
-          version: 12
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -49,12 +48,10 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # 注意：仓库 pnpm-lock.yaml 与 packages/frontend/package.json 不一致
-      # （lockfile 缺 frontend 的 vitest 依赖），故不能使用 --frozen-lockfile。
-      # 待在有正常 pnpm 环境的机器上跑 `pnpm install --lockfile-only` 重算并提交
-      # lockfile 后，可改回 `pnpm install --frozen-lockfile`。
+      # lockfile 已用 pnpm 11.28.2 重算并提交（补齐 frontend 的 vitest 依赖），
+      # 冻结安装通过 → 与 test.yml 一致，使用 --frozen-lockfile 保证依赖可复现。
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Build frontend
         run: pnpm --filter frontend build

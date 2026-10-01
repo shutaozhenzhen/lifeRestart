@@ -1,0 +1,53 @@
+# ============================================
+# 全量测试 CI
+# ============================================
+# 说明：
+#   - 与 deploy-pages.yml 分工：本 workflow 只回答「测试是否全绿」，失败即红；
+#     部署 workflow 只负责构建 + 发布，两者互不阻塞。
+#   - 覆盖 4 个有测试的包：packages/game-engine（531）/ packages/frontend（13）
+#     / platforms/electron（5）/ platforms/web（7），共 556 用例。
+#     platforms/mobile 是脚手架（package.json 无 test 脚本），由 scripts/test-all.mjs 自动跳过。
+#   - 依赖安装使用 --frozen-lockfile：lockfile 与 package.json 不一致时**直接失败**，
+#     避免再出现「本机能跑、干净环境装不上」的漂移。
+name: Test
+
+# 触发：推送到 main、任何 PR、以及手动触发。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 只读权限即可（不需要 Pages 相关权限）。
+permissions:
+  contents: read
+
+# 同一分支同时只跑一个测试任务，新推送取消旧任务。
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm 版本统一来自仓库根 package.json 的 packageManager 字段（单一来源，
+      # 与 deploy-pages.yml 相同），避免两处各写一个版本号产生漂移。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 根 scripts/test-all.mjs：不依赖全局 pnpm，逐包执行 vitest 并汇总结果。
+      - name: Run all workspace tests
+        run: pnpm test
