@@ -16,16 +16,14 @@
 import { defineStore } from 'pinia'
 // markRaw：Life 实例含 # 私有字段，reactive 代理会破坏私有字段访问（Vue 响应式代理问题）。
 import { markRaw } from 'vue'
-// 导入 Life 引擎。
-import Life from 'game-engine/src/modules/life.js'
+// 导入 Life 引擎（应用侧唯一构造入口：create-life 负责装配 storage/logger）。
+import { createAppLife } from '../life/create-life.js'
 // 日志器工厂（前端配置界面创建，注入引擎全链路）。
 import { createLogger } from 'game-engine/src/functions/logger.js'
 // 日志格式化/报告构建（纯函数，供悬浮窗导出与单测）。
 import { formatLogLine, countByLevel, collectLogMeta, buildLogReport } from '../utils/log-report.js'
 // Mod 启停状态（报告里带上，便于复现）。
 import { loadModsState } from '../utils/mods-state.js'
-// 引擎存储适配器（重开次数 / 成就 / 已见事件的跨局持久化）。
-import { createLifeStorage } from '../utils/life-storage.js'
 
 // 日志缓冲上限：1000 条在 trace 级下也够覆盖一次完整复现（每条约 100 字节）。
 const LOG_BUFFER_LIMIT = 1000
@@ -127,10 +125,9 @@ export const useGameStore = defineStore('game', {
           error: (m) => this.pushLog('error', m),
         },
       })
-      // 创建 Life 实例（注入日志器与存储）。markRaw 防止被 reactive 代理（私有字段保护）。
-      // storage：TMS 重开次数 / ACHV 成就 / AEVT 已见事件的跨局持久化——
-      // 不注入时 Property 会退回"每个实例一个内存 storage"，导致总结页数据永远为空。
-      this.life = markRaw(new Life({ data, logger, storage: createLifeStorage() }))
+      // 创建 Life 实例：经 create-life 统一装配（数据 + 日志 + **持久化 storage**）。
+      // markRaw 防止被 reactive 代理（Life 含 # 私有字段，被代理会崩）。
+      this.life = markRaw(createAppLife({ data, logger }))
       // 初始化。
       await this.life.initial()
       // 配置。

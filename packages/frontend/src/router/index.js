@@ -32,28 +32,32 @@ import ModManageView from '../views/ModManageView.vue'
 import SettingsView from '../views/SettingsView.vue'
 
 // 路由表。
+// 具名导出：测试用**同一份**路由表创建内存 history 实例，避免测试与线上路由分叉。
+export const routes = [
+  // 主页。
+  { path: '/', name: 'home', component: HomeView },
+  // 天赋选择页。
+  { path: '/talent', name: 'talent', component: TalentView },
+  // 属性分配页。
+  { path: '/property', name: 'property', component: PropertyView },
+  // 人生轨迹页。
+  { path: '/game', name: 'game', component: GameView },
+  // 人生总结页。
+  { path: '/summary', name: 'summary', component: SummaryView },
+  // Mod 管理页。
+  { path: '/mods', name: 'mods', component: ModManageView },
+  // 设置页（全局配置）。
+  { path: '/settings', name: 'settings', component: SettingsView },
+  // 未知路径回主页。
+  { path: '/:pathMatch(.*)*', redirect: '/' },
+]
+
+// 路由实例（Hash 历史：静态托管无需 404 回退）。
 export const router = createRouter({
   // Hash 历史模式。
   history: createWebHashHistory(),
   // 路由定义。
-  routes: [
-    // 主页。
-    { path: '/', name: 'home', component: HomeView },
-    // 天赋选择页。
-    { path: '/talent', name: 'talent', component: TalentView },
-    // 属性分配页。
-    { path: '/property', name: 'property', component: PropertyView },
-    // 人生轨迹页。
-    { path: '/game', name: 'game', component: GameView },
-    // 人生总结页。
-    { path: '/summary', name: 'summary', component: SummaryView },
-    // Mod 管理页。
-    { path: '/mods', name: 'mods', component: ModManageView },
-    // 设置页（全局配置）。
-    { path: '/settings', name: 'settings', component: SettingsView },
-    // 未知路径回主页。
-    { path: '/:pathMatch(.*)*', redirect: '/' },
-  ],
+  routes,
 })
 
 // 导航日志：每次路由切换打 UI 日志（翻页行为可观测，常显进日志面板）。
