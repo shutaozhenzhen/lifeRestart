@@ -64,6 +64,12 @@ export const useGameStore = defineStore('game', {
     // 完整人生轨迹：每年一条 { age, isEnd, items }，供轨迹页逐条渲染全部历史。
     // （原实现每年覆盖 content，导致页面上只剩最新一岁。）
     history: [],
+    // 生命是否结束（**响应式镜像**）。
+    // 为什么需要镜像：Life 实例是 markRaw 的，模板里直接读 life.request('PROPERTY').isEnd()
+    // 不是响应式依赖 → computed 会永久缓存首次结果（false），导致死亡后仍继续推进。
+    isEnd: false,
+    // 当前生命值（同上，响应式镜像）。
+    lif: 1,
     // 属性分配（CHR/INT/STR/MNY）。
     allocation: { CHR: 0, INT: 0, STR: 0, MNY: 0 },
     // 分配边界 [min, max]。
@@ -104,6 +110,8 @@ export const useGameStore = defineStore('game', {
       this.talentPool = []
       this.selectedTalents = []
       this.clearTrace()
+      this.isEnd = false
+      this.lif = 1
       this.allocation = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
       // 创建日志器：级别从配置读取，输出到浏览器 console + 界面缓冲。
       // 引擎内核（Life/属性/天赋/事件/成就/角色/数据加载/Mod 钩子）全部日志经此汇入。
@@ -137,6 +145,12 @@ export const useGameStore = defineStore('game', {
       const p = this.life.propertys
       // 写入响应式状态。
       this.propertys = { ...p }
+      // 生命值镜像（引擎实例是 markRaw，模板直接读引擎内部不会触发更新）。
+      const lif = this.life.request('PROPERTY').get('LIF')
+      // 非数字时回退 1（开局前 LIF 可能尚未建立）。
+      this.lif = typeof lif === 'number' ? lif : 1
+      // 结束标志镜像（LIF < 1）——自动播放据此停止、按钮据此禁用。
+      this.isEnd = this.life.request('PROPERTY').isEnd()
     },
 
     // 开始一局。
@@ -155,6 +169,8 @@ export const useGameStore = defineStore('game', {
       this.sync()
       // 记录当前这岁流水（供需要"最新一岁"的调用方）。
       this.content = result.content
+      // 结束标志（引擎返回值，与 sync 的镜像一致；死亡那一年立刻置位 → 自动播放停止）。
+      this.isEnd = result.isEnd
       // 累积到完整轨迹：条目做浅拷贝，避免后续被引擎就地修改（钩子可能回写 content）。
       this.history.push({
         // 年龄。
@@ -278,6 +294,21 @@ export const useGameStore = defineStore('game', {
       this.content = []
       // 完整轨迹。
       this.history = []
+    },
+
+    // 推进一年，并回答「还能不能继续」（自动播放/手动按钮共用的守卫）。
+    //
+    // 把这条规则放在 store 而不是组件里：视图只负责渲染，
+    // 「结束后不再推进」这条约束就可以被单测直接钉住（曾出现死亡后仍继续推进）。
+    //
+    // @returns {boolean} 本次推进后是否仍可继续（已结束/未初始化 → false，且不推进）
+    advanceYear() {
+      // 未初始化或已结束：不推进，返回 false。
+      if (!this.life || this.isEnd) return false
+      // 推进一年。
+      this.next()
+      // 结束后返回 false（自动播放据此停止）。
+      return !this.isEnd
     },
 
     // 调整单个属性分配。

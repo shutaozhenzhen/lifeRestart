@@ -25,10 +25,12 @@ const propsList = [
   { key: 'SPR', label: '快乐' },
 ]
 
-// 当前生命值。
-const lif = computed(() => (store.life ? store.life.request('PROPERTY').get('LIF') : 1))
-// 是否结束。
-const isEnd = computed(() => (store.life ? store.life.request('PROPERTY').isEnd() : false))
+// 当前生命值（读 store 的响应式镜像）。
+// 注意：不能写成 life.request('PROPERTY').get('LIF')——Life 实例是 markRaw 的，
+// 引擎内部状态不是响应式依赖，computed 会永久缓存首次结果（曾导致死亡后仍继续推进）。
+const lif = computed(() => store.lif)
+// 是否结束（同上，来自 store 的响应式镜像）。
+const isEnd = computed(() => store.isEnd)
 // 当前年龄（引擎 AGE 开局前为 -1，钳到 0）。
 const age = computed(() => Math.max(0, Number(store.propertys.AGE) || 0))
 
@@ -45,14 +47,12 @@ const listEl = ref(null)
 const stick = ref(true)
 
 // #advance
-// 推进一年（手动按钮与自动播放共用）。
+// 推进一年（手动按钮与自动播放共用；守卫在 store.advanceYear 内）。
 //
 // @returns {void}
 function advance() {
-  // 已结束则不再推进。
-  if (isEnd.value) return
-  // 推进（store 记录流水 + 累积轨迹）。
-  store.next()
+  // 推进（store 记录流水 + 累积轨迹；已结束会自行返回 false 且不推进）。
+  store.advanceYear()
 }
 
 // #onTick
@@ -60,15 +60,10 @@ function advance() {
 //
 // @returns {boolean} 是否继续
 function onTick() {
-  // 已结束：停。
-  if (isEnd.value) {
-    playing.value = false
-    return false
-  }
-  // 推进一年。
-  advance()
-  // 这年结束后若人生终止，停止播放。
-  if (isEnd.value) {
+  // 推进一年并询问是否还能继续。
+  const keepGoing = store.advanceYear()
+  // 结束：同步按钮状态并停止播放。
+  if (!keepGoing) {
     playing.value = false
     return false
   }

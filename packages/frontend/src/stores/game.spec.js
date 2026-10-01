@@ -14,10 +14,15 @@
  *   J. 日志缓冲上限（超出丢弃最旧，保留最新）
  *   K. 人生轨迹累积（history 逐年追加；原实现每年覆盖 content，页面只剩一条）
  *   L. clearTrace：开局/重开清空轨迹
+ *   M. 死亡后 isEnd/lif 响应式镜像更新（原实现直接读 markRaw 引擎 → computed 永久缓存 false，
+ *      导致"死亡后还在继续"推进）
+ *   N. advanceYear 守卫：人生结束后返回 false 且不再推进（自动播放据此停止）
  */
 
 // 导入 vitest 测试 DSL。
 import { describe, test, expect, beforeEach, vi } from 'vitest'
+// Vue 响应式（M 用例验证「模板读法」的响应性：store 镜像 vs 直接读引擎）。
+import { computed } from 'vue'
 // Pinia（Node 环境）。
 import { createPinia, setActivePinia } from 'pinia'
 // store。
@@ -184,6 +189,8 @@ describe('gameStore 异常回归测试', () => {
       remake() { remakeCount++ },
       start() { startCount++ },
       getPropertyPoints: () => 20,
+      // sync() 还要读属性模块做 LIF/isEnd 镜像。
+      request: () => ({ get: () => 1, isEnd: () => false }),
     }
     // 模拟从天赋页进入（尚未确认天赋、尚未开局）。
     store.talentsConfirmed = false
@@ -308,5 +315,57 @@ describe('gameStore 人生轨迹累积', () => {
     // 新的一局（begin）重置轨迹。
     store.begin({ CHR: 5 })
     expect(store.history).toEqual([])
+  })
+
+  test('M：死亡后 isEnd 响应式更新（回归：曾因非响应式缓存而"死亡后还在继续"）', async () => {
+    // store。
+    const store = useGameStore()
+    // 初始化 + 开局。
+    await store.init(buildData())
+    store.begin({ CHR: 5 })
+    // 组件的两种读法：
+    //   1) 修复后：读 store 的响应式镜像。
+    const mirrored = computed(() => store.isEnd)
+    //   2) 根因写法：直接读 markRaw 的引擎实例（不是响应式依赖 → 永久缓存首次结果）。
+    const raw = computed(() => (store.life ? store.life.request('PROPERTY').isEnd() : false))
+    // 先各读一次，触发 computed 缓存。
+    expect(mirrored.value).toBe(false)
+    expect(raw.value).toBe(false)
+    // 生命归零（等价于死亡事件）。
+    store.life.request('PROPERTY').set('LIF', 0)
+    // 触发同步（next() 内部也会调用 sync）。
+    store.sync()
+    // 修复后：镜像立刻为 true → 自动播放停止、按钮禁用、总结可点。
+    expect(mirrored.value).toBe(true)
+    // 根因复现：直接读引擎的 computed 仍是缓存的 false（这就是"死亡后还在继续"的原因）。
+    expect(raw.value).toBe(false)
+    // 生命值镜像同步（非数字兜底为 1，此处是真实的 0）。
+    expect(store.lif).toBe(0)
+    // 死亡后引擎仍可被推进（引擎语义允许），但结束标志保持为真 → UI 层守卫会拦住。
+    const r = store.next()
+    expect(r.isEnd).toBe(true)
+    expect(store.isEnd).toBe(true)
+  })
+
+  test('N：advanceYear 在人生结束后拒绝推进（自动播放据此停止）', async () => {
+    // store + 开局。
+    const store = useGameStore()
+    await store.init(buildData())
+    store.begin({ CHR: 5 })
+    // 拉满生命：还能继续。
+    store.life.request('PROPERTY').set('LIF', 100)
+    expect(store.advanceYear()).toBe(true)
+    // 轨迹 +1。
+    expect(store.history.length).toBe(1)
+    // 模拟死亡（生命归零）。
+    store.life.request('PROPERTY').set('LIF', 0)
+    store.sync()
+    expect(store.isEnd).toBe(true)
+    // 结束后：返回 false，且**不再推进**（轨迹条数不变）→ 自动播放 onTick 收到 false 即停。
+    expect(store.advanceYear()).toBe(false)
+    expect(store.history.length).toBe(1)
+    // 未初始化时同样安全。
+    const fresh = useGameStore()
+    expect(fresh.advanceYear()).toBe(false)
   })
 })
