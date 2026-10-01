@@ -153,6 +153,8 @@ export function buildLogReport({ logs = [], meta = {}, now = new Date() } = {}) 
     `视口尺寸 : ${meta.viewport || UNKNOWN}`,
     `游戏状态 : ${meta.game || UNKNOWN}`,
     `数据源   : ${meta.dataSource || UNKNOWN}`,
+    // 随机种子：拿着它能在主页「种子」框里复现同一局（mulberry32，见 README）。
+    `随机种子 : ${meta.seed === null || meta.seed === undefined ? UNKNOWN : `${meta.seed}（填入主页种子框可复现同一局）`}`,
     `Mod 状态 : ${meta.mods || UNKNOWN}`,
     '===== 日志开始（最旧 → 最新） =====',
   ]

@@ -164,4 +164,15 @@ describe('log-report - buildLogReport', () => {
     // 也能产出可读文本。
     expect(buildLogReport()).toContain('===== 人生重开模拟器 日志报告 =====')
   })
+
+  test('报告头带上随机种子（拿到报告就能复现那一局）', () => {
+    // 有种子。
+    const withSeed = buildLogReport({ logs: [], meta: { seed: 4242 }, now: FIXED })
+    expect(withSeed).toContain('随机种子 : 4242（填入主页种子框可复现同一局）')
+    // 未开局（种子为 null）→ 未知。
+    const without = buildLogReport({ logs: [], meta: { seed: null }, now: FIXED })
+    expect(without).toContain('随机种子 : （未知）')
+    // 连 meta 都没有也不崩。
+    expect(buildLogReport({ logs: [] })).toContain('随机种子 : （未知）')
+  })
 })

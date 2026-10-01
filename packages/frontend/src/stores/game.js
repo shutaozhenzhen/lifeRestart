@@ -18,6 +18,8 @@ import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 // 导入 Life 引擎（应用侧唯一构造入口：create-life 负责装配 storage/logger）。
 import { createAppLife } from '../life/create-life.js'
+// 随机源：mulberry32 种子 RNG + 种子生成/规范化（每局固定种子 → 可复现）。
+import { createRng, createSeed, normalizeSeed } from 'game-engine/src/functions/util.js'
 // 日志器工厂（前端配置界面创建，注入引擎全链路）。
 import { createLogger } from 'game-engine/src/functions/logger.js'
 // 日志格式化/报告构建（纯函数，供悬浮窗导出与单测）。
@@ -82,6 +84,10 @@ export const useGameStore = defineStore('game', {
     errorSeq: 0,
     // 当前数据源描述（主页选原版数据 / fixture 降级时写入，报告里带上）。
     dataSource: '',
+    // 本局随机种子（mulberry32；页面显示 + 报告带上，同种子可复现同一局）。
+    seed: null,
+    // 本局使用的原始数据（markRaw，供「同种子复现」重开一局；不参与渲染）。
+    rawData: null,
   }),
 
   // 计算属性。
@@ -103,7 +109,10 @@ export const useGameStore = defineStore('game', {
   // 动作。
   actions: {
     // 初始化引擎。
-    async init(data) {
+    // @param {object} data - 游戏数据
+    // @param {object} [options]
+    // @param {number|string|null} [options.seed] - 本局随机种子（缺省自动生成；给值则复现）
+    async init(data, { seed } = {}) {
       // 重置单局状态：从主页重新开始时，不能残留上一局的进度标记与选择。
       this.started = false
       this.talentsConfirmed = false
@@ -125,9 +134,15 @@ export const useGameStore = defineStore('game', {
           error: (m) => this.pushLog('error', m),
         },
       })
-      // 创建 Life 实例：经 create-life 统一装配（数据 + 日志 + **持久化 storage**）。
+      // 本局随机种子：显式指定优先（复现），否则随机生成一个并**记录下来供页面显示**。
+      // 之后所有随机（天赋抽卡、事件抽取、RDM 效果）都走 createRng(seed)，
+      // 因此"同种子 + 同操作顺序 = 同一局人生"。
+      this.seed = normalizeSeed(seed) ?? createSeed()
+      // 创建 Life 实例：经 create-life 统一装配（数据 + 日志 + **持久化 storage** + 种子随机源）。
       // markRaw 防止被 reactive 代理（Life 含 # 私有字段，被代理会崩）。
-      this.life = markRaw(createAppLife({ data, logger }))
+      this.life = markRaw(createAppLife({ data, logger, random: createRng(this.seed) }))
+      // 保留原始数据引用（markRaw 保护，避免 Vue 深度代理 3.5MB 数据），供"同种子复现"重开一局。
+      this.rawData = markRaw(data)
       // 初始化。
       await this.life.initial()
       // 配置。
@@ -138,9 +153,22 @@ export const useGameStore = defineStore('game', {
       this.sync()
     },
 
+    // 用指定种子重新开一局（复现入口：总结页「复现此局」按钮调用）。
+    // 数据沿用上一局的引用，因此不需要重新加载。
+    //
+    // @param {number|string} seed - 种子
+    // @returns {Promise<boolean>} 是否成功（无数据时 false）
+    async restartWithSeed(seed) {
+      // 没有数据（例如直接刷新到总结页）→ 交给调用方引导回主页。
+      if (!this.rawData) return false
+      // 复用同一份数据重新初始化（种子相同 → 随机序列相同）。
+      await this.init(this.rawData, { seed })
+      // 成功。
+      return true
+    },
+
     // 从引擎同步属性到响应式状态。
-    sync() {
-      // 引擎不可用则跳过。
+    sync() {      // 引擎不可用则跳过。
       if (!this.life) return
       // 读取六个属性。
       const p = this.life.propertys
@@ -433,8 +461,8 @@ export const useGameStore = defineStore('game', {
       return buildLogReport({
         // 当前缓冲（已是「最旧 → 最新」顺序）。
         logs: this.logBuffer,
-        // 头部信息。
-        meta: { level: this.logLevel, ...env, game, mods, dataSource: this.dataSource || null },
+        // 头部信息（seed：报告直接可复现，见 README「随机种子」）。
+        meta: { level: this.logLevel, ...env, game, mods, seed: this.seed, dataSource: this.dataSource || null },
       })
     },
 
