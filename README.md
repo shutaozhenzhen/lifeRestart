@@ -121,6 +121,16 @@ cd lifeRestart && pnpm --filter frontend dev
 页面流转：`/` → `/talent` → `/property` → `/game` → `/summary`，另有 `/mods`（Mod 管理）与 `/settings`（日志等级 + 实时日志面板）。
 AI 连接测试经 vite 代理 `/ai-proxy` 转发到本地代理服务。
 
+**轨迹页**（`/game`）：顶部为紧凑状态栏（年龄/生命 + 五维属性一行胶囊），下方是**逐年完整轨迹列表**
+（每年一岁一条，事件/天赋/天赋替换分类着色，新条目逐条入场并自动跟随最新，向上翻会暂停跟随、可点「回到最新」）。
+支持**自动播放**（慢 1.6s / 正常 0.8s / 快 0.3s，进页面即开始，人生结束自动停，速度写入 localStorage），
+也可手点「下一年」。
+
+**全局日志悬浮窗**（右下角，任意页面常驻，含渲染崩溃的页面——它挂在路由出口之外）：
+出现 error 级日志（含 `window` 未捕获异常、Vue 渲染异常）会自动展开并亮角标；
+一键**复制**或**下载**报告（`liferestart-log-YYYYMMDD-HHmmss.txt`），报告含页面地址、路由、UA、视口、
+游戏与 Mod 状态以及全部日志（缓冲上限 1000 条）。快捷键 `Ctrl+Shift+L` 随时收放。
+
 ## 在线版（GitHub Pages）
 
 线上试玩：**<https://shutaozhenzhen.github.io/lifeRestart/>**
