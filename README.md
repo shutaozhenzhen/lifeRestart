@@ -45,7 +45,9 @@ lifeRestart/
 ## 环境要求
 
 - **Node.js ≥ 20**（开发验证于 v24）
-- **pnpm**（monorepo workspace；可用 `corepack pnpm`）
+- **pnpm 11.28.2**（monorepo workspace；版本由根 `package.json` 的 `packageManager` 字段固定，
+  可用 `corepack enable` 后直接使用 `pnpm`）
+- **跑测试不需要 pnpm**：根 `scripts/test-all.mjs` 用 Node 直接编排各包的 vitest（有 Node/npm 即可）
 - 仅引擎与测试无需浏览器；前端需 `vite`，桌面/移动打包需额外工具链
 
 ## 快速开始
@@ -54,12 +56,13 @@ lifeRestart/
 cd lifeRestart
 pnpm install
 
-# 全量测试（递归跑 packages/* 与 platforms/*）
-pnpm test
+# 全量测试（一条命令跑完成 workspace 内所有测试包；不依赖全局 pnpm）
+pnpm test                   # 等价于 node scripts/test-all.mjs
+node scripts/test-all.mjs   # 没有 pnpm 的环境用这条（npm test 亦可）
 
-# 或单独跑
-cd packages/game-engine && pnpm test     # 引擎 531 用例
-cd packages/frontend    && pnpm test     # 前端 13 用例（异常回归）
+# 只跑单个包（参数按目录名/包名子串匹配）
+node scripts/test-all.mjs game-engine   # 引擎 531 用例
+node scripts/test-all.mjs frontend      # 前端 13 用例（异常回归）
 ```
 
 ## CLI 原型
@@ -134,9 +137,11 @@ AI 连接测试经 vite 代理 `/ai-proxy` 转发到本地代理服务。
 
 部署前置：仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**（一次性）。
 
-> ⚠️ 仓库 `pnpm-lock.yaml` 与 `packages/frontend/package.json` 暂不一致（lockfile 缺 frontend 的 `vitest`），
-> workflow 因此使用 `pnpm install --no-frozen-lockfile`。在有正常 pnpm 环境的机器上跑 `pnpm install --lockfile-only`
-> 重算并提交 lockfile 后，可改回 `--frozen-lockfile`。
+> ✅ lockfile 已用 pnpm 11.28.2 重算（补齐 `packages/frontend` 的 `vitest` 依赖），
+> 两个 workflow 均使用 `pnpm install --frozen-lockfile`。
+> 日后再改依赖时的正确姿势：在**没有 `node_modules` 的干净目录**里执行 `pnpm install --lockfile-only`
+> 重算 lockfile（pnpm 在已有 `node_modules` 时只对照自己的安装记录，**不会**改写仓库 lockfile），
+> 提交后才能继续保持冻结安装。
 
 ## 平台打包
 
@@ -171,14 +176,18 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 | `packages/frontend` | 13 | 前端异常回归：markRaw 私有字段、引擎页守卫、Mod 状态持久化、日志链路 |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
+| **合计** | **556** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
 
-源码为**逐行中文注释**。
+源码为**逐行中文注释**。测试在 CI 中自动执行：`.github/workflows/test.yml`（push/PR 触发，
+`pnpm install --frozen-lockfile` + `pnpm test`），与 Pages 部署 workflow 相互独立。
 
 ## 进度
 
 - **阶段一 ~ 四（Step 1–22）**：全部完成 —— 引擎内核、Vue 前端 UI、Mod 系统、AI 集成（含代理服务）
 - **阶段五（平台打包 Step 23–26）**：Step 23（Electron）/ 24（Web）/ 26（跨平台一致性）完成；Step 25（Capacitor 移动端）为脚手架，待 Android SDK 环境验证
 - **GitHub Pages 在线版**：已上线 <https://shutaozhenzhen.github.io/lifeRestart/>（阶段五延伸，纯静态托管；AI 不可用）
+- **工程化基线（2026-09-30）**：lockfile 重算 + 全流程 `--frozen-lockfile`；根目录 `pnpm test`
+  不再依赖全局 pnpm；新增测试 CI；上游 `remake` 已重构为 TS monorepo（数据路径未变，Data Mod 无需重转）
 
 ## 数据来源与许可
 
