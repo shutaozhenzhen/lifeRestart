@@ -15,7 +15,8 @@
  * 用法：
  *   node scripts/test-all.mjs                          # 全量（workspace 内所有有测试的包）
  *   node scripts/test-all.mjs frontend                 # 只跑名字/目录名匹配 frontend 的包
- *   node scripts/test-all.mjs -- --reporter=verbose    # 以 - 开头的参数透传给 vitest
+ *   node scripts/test-all.mjs game-engine -- -t 属性页  # `--` 之后的参数原样透传给 vitest
+ *   node scripts/test-all.mjs -- --reporter=verbose    # 同上（不改包过滤）
  *
  * 退出码：全部通过为 0；任一包失败为 1（CI 可直接用）。
  */
@@ -126,10 +127,18 @@ function resolveVitestBin(pkgDir) {
 function main() {
   // 命令行参数（去掉 node 与脚本路径）。
   const argv = process.argv.slice(2)
+  // `--` 分隔符位置：其后的参数**原样**透传给 vitest。
+  // 为什么需要它：`-t <pattern>` 这类「带值」参数里，pattern 不以 - 开头，
+  // 若不加分隔符会被误判为「包名过滤」，导致 vitest 只收到空的 -t（静默零用例退出）。
+  const sep = argv.indexOf('--')
+  // 分隔符之前：包名过滤 + 无值开关。
+  const head = sep >= 0 ? argv.slice(0, sep) : argv
+  // 分隔符之后：全部透传。
+  const tail = sep >= 0 ? argv.slice(sep + 1) : []
   // 过滤器：不以 - 开头的参数按「包名/目录名子串」匹配。
-  const filters = argv.filter((a) => !a.startsWith('-'))
-  // 透传参数：以 - 开头的参数原样交给 vitest。
-  const passthrough = argv.filter((a) => a.startsWith('-'))
+  const filters = head.filter((a) => !a.startsWith('-'))
+  // 透传参数：以 - 开头的参数 + `--` 之后的全部参数。
+  const passthrough = [...head.filter((a) => a.startsWith('-')), ...tail]
   // globs → 目录 → 有效包。
   const candidates = expandWorkspaceDirs(parseWorkspaceGlobs(join(root, 'pnpm-workspace.yaml')))
   // 待执行列表与跳过列表。
