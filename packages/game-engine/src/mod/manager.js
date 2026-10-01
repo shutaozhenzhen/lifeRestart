@@ -17,6 +17,8 @@ import { readFileSync, existsSync, readdirSync, renameSync, rmSync, mkdirSync, w
 import { join } from 'node:path'
 // manifest 校验。
 import { validateManifest } from './manifest.js'
+// 共用的 zip 解析（浏览器与 Node 同一实现；未注入 unzip 时走它）。
+import { readModPackage } from './zip.js'
 // 权限常量。
 export { PERMISSION_LABELS, VALID_PERMISSIONS } from './permissions.js'
 
@@ -50,40 +52,62 @@ export function importZip({ zipData, modsDir, unzip, log }) {
   const logger = log || { info: () => {}, error: () => {} }
   // 错误。
   const errors = []
-  // 解压。
+  // 解压结果 / manifest / Mod 名（两条路径都会填好）。
   let files
-  try {
-    // 解压。
-    files = unzip(zipData)
-  } catch (e) {
-    // 记录。
-    return { ok: false, errors: [`zip 解压失败: ${e.message}`] }
-  }
-  // 找 manifest。
-  const manifestEntry = Object.keys(files).find(f => f.endsWith('manifest.json'))
-  // 无 manifest。
-  if (!manifestEntry) {
-    // 记录。
-    return { ok: false, errors: ['zip 缺少 manifest.json'] }
-  }
-  // 解析 manifest。
   let manifest
-  try {
-    // 解析。
-    manifest = JSON.parse(files[manifestEntry])
-  } catch (e) {
-    // 记录。
-    return { ok: false, errors: [`manifest.json 不是合法 JSON: ${e.message}`] }
+  let name
+  // 有注入的 unzip → 走旧路径（兼容既有调用与测试的替身实现）；
+  // 没有 → 走**共用的 zip 模块**（浏览器/CLI/Electron 同一实现：解压 + 路径安全 +
+  // 尺寸上限 + 包装目录剥离 + manifest 校验）。
+  if (typeof unzip === 'function') {
+    // 解压。
+    try {
+      // 解压。
+      files = unzip(zipData)
+    } catch (e) {
+      // 记录。
+      return { ok: false, errors: [`zip 解压失败: ${e.message}`] }
+    }
+    // 找 manifest。
+    const manifestEntry = Object.keys(files).find(f => f.endsWith('manifest.json'))
+    // 无 manifest。
+    if (!manifestEntry) {
+      // 记录。
+      return { ok: false, errors: ['zip 缺少 manifest.json'] }
+    }
+    // 解析 manifest。
+    try {
+      // 解析。
+      manifest = JSON.parse(files[manifestEntry])
+    } catch (e) {
+      // 记录。
+      return { ok: false, errors: [`manifest.json 不是合法 JSON: ${e.message}`] }
+    }
+    // 校验 manifest。
+    const check = validateManifest(manifest)
+    // 非法。
+    if (!check.ok) {
+      // 记录。
+      return { ok: false, errors: [`manifest 非法: ${check.errors.join('; ')}`] }
+    }
+    // Mod 名。
+    name = manifest.name
+  } else {
+    // 共用 zip 模块解析。
+    const parsed = readModPackage(zipData, { log: logger })
+    // 解析失败。
+    if (!parsed.ok) {
+      // 返回（错误已可读）。
+      return { ok: false, errors: parsed.errors }
+    }
+    // 采用结果（文件已归一化到 Mod 根、manifest 已校验）。
+    files = parsed.files
+    manifest = parsed.manifest
+    name = parsed.name
+    // 路径/尺寸警告带出来（不影响安装，但要让用户看到）。
+    for (const w of parsed.errors) errors.push(w)
+    for (const s of parsed.skipped || []) errors.push(`已跳过：${s}`)
   }
-  // 校验 manifest。
-  const check = validateManifest(manifest)
-  // 非法。
-  if (!check.ok) {
-    // 记录。
-    return { ok: false, errors: [`manifest 非法: ${check.errors.join('; ')}`] }
-  }
-  // Mod 名。
-  const name = manifest.name
   // 目标目录。
   const targetDir = join(modsDir, name)
   // 已存在。
