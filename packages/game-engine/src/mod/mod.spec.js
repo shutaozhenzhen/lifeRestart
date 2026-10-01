@@ -20,6 +20,8 @@ import { tmpdir } from 'node:os'
 import { validateManifest, resolveOrder } from './manifest.js'
 // Mod 加载器。
 import { createModLoader, scanMods } from './loader.js'
+// Node 文件源（平台无关内核的 fs 实现）。
+import { createNodeSource } from './source-node.js'
 // gameAPI。
 import { createGameAPI, createHookBus } from './gameapi.js'
 // 参数注册表。
@@ -27,49 +29,49 @@ import { createParamRegistry } from '../params/param-registry.js'
 
 // ========== 测试组 1：validateManifest ==========
 describe('mod - validateManifest', () => {
-  test('valid manifest passes', () => {
+  test('valid manifest passes', async () => {
     // 合法 manifest。
     const m = { name: 'my-mod', version: '1.0.0', author: 'a', permissions: ['hooks'] }
     // 校验。
     expect(validateManifest(m).ok).toBe(true)
   })
 
-  test('missing name fails', () => {
+  test('missing name fails', async () => {
     // 缺 name。
     const m = { version: '1.0.0' }
     // 校验。
     expect(validateManifest(m).ok).toBe(false)
   })
 
-  test('missing version fails', () => {
+  test('missing version fails', async () => {
     // 缺 version。
     const m = { name: 'x' }
     // 校验。
     expect(validateManifest(m).ok).toBe(false)
   })
 
-  test('invalid name chars fail', () => {
+  test('invalid name chars fail', async () => {
     // 非法字符。
     const m = { name: 'bad name!', version: '1.0.0' }
     // 校验。
     expect(validateManifest(m).ok).toBe(false)
   })
 
-  test('unknown permission fails', () => {
+  test('unknown permission fails', async () => {
     // 未知权限。
     const m = { name: 'x', version: '1', permissions: ['hack'] }
     // 校验。
     expect(validateManifest(m).ok).toBe(false)
   })
 
-  test('valid permissions pass', () => {
+  test('valid permissions pass', async () => {
     // 合法权限。
     const m = { name: 'x', version: '1', permissions: ['ai', 'network', 'storage', 'hooks'] }
     // 校验。
     expect(validateManifest(m).ok).toBe(true)
   })
 
-  test('non-object manifest fails', () => {
+  test('non-object manifest fails', async () => {
     // 非对象。
     expect(validateManifest('nope').ok).toBe(false)
     // null。
@@ -79,7 +81,7 @@ describe('mod - validateManifest', () => {
 
 // ========== 测试组 2：resolveOrder ==========
 describe('mod - resolveOrder', () => {
-  test('sorts dependencies first', () => {
+  test('sorts dependencies first', async () => {
     // 两个 Mod：b 依赖 a。
     const mods = [
       { name: 'b', dependencies: ['a'] },
@@ -91,7 +93,7 @@ describe('mod - resolveOrder', () => {
     expect(order.indexOf('a')).toBeLessThan(order.indexOf('b'))
   })
 
-  test('detects circular dependency', () => {
+  test('detects circular dependency', async () => {
     // 互相依赖。
     const mods = [
       { name: 'a', dependencies: ['b'] },
@@ -103,7 +105,7 @@ describe('mod - resolveOrder', () => {
     expect(errors.some(e => e.includes('循环依赖'))).toBe(true)
   })
 
-  test('reports missing dependency', () => {
+  test('reports missing dependency', async () => {
     // 依赖不存在。
     const mods = [{ name: 'a', dependencies: ['ghost'] }]
     // 排序。
@@ -112,7 +114,7 @@ describe('mod - resolveOrder', () => {
     expect(errors.some(e => e.includes('缺失依赖'))).toBe(true)
   })
 
-  test('no dependencies returns insertion order', () => {
+  test('no dependencies returns insertion order', async () => {
     // 无依赖。
     const mods = [{ name: 'x' }, { name: 'y' }]
     // 排序。
@@ -121,7 +123,7 @@ describe('mod - resolveOrder', () => {
     expect(order).toEqual(['x', 'y'])
   })
 
-  test('chain dependency sorts transitively', () => {
+  test('chain dependency sorts transitively', async () => {
     // 链：c→b→a。
     const mods = [
       { name: 'c', dependencies: ['b'] },
@@ -166,35 +168,35 @@ describe('mod - createModLoader', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  test('scans mods and loads in order', () => {
+  test('scans mods and loads in order', async () => {
     // Mod a。
     makeMod('a', { name: 'a', version: '1' }, { 'talents.json': { t1: { id: 't1', name: 'A天赋' } } })
     // Mod b 依赖 a。
     makeMod('b', { name: 'b', version: '1', dependencies: ['a'] }, { 'talents.json': { t2: { id: 't2', name: 'B天赋' } } })
     // 加载器。
-    const loader = createModLoader({ modsDir: tempDir })
+    const loader = await createModLoader({ source: createNodeSource(tempDir) })
     // 无错误。
     expect(loader.errors).toEqual([])
     // 加载全部。
-    const { data } = loader.loadAll()
+    const { data } = await loader.loadAll()
     // 两个天赋合并。
     expect(data.talents.t1.name).toBe('A天赋')
     expect(data.talents.t2.name).toBe('B天赋')
   })
 
-  test('later mod overrides same id', () => {
+  test('later mod overrides same id', async () => {
     // 两个 Mod 同名天赋。
     makeMod('a', { name: 'a', version: '1' }, { 'talents.json': { t1: { id: 't1', name: '原始' } } })
     makeMod('b', { name: 'b', version: '1' }, { 'talents.json': { t1: { id: 't1', name: '覆盖' } } })
     // 加载器。
-    const loader = createModLoader({ modsDir: tempDir })
+    const loader = await createModLoader({ source: createNodeSource(tempDir) })
     // 加载。
-    const { data } = loader.loadAll()
+    const { data } = await loader.loadAll()
     // 后加载者覆盖。
     expect(data.talents.t1.name).toBe('覆盖')
   })
 
-  test('executes code.js with gameAPI', () => {
+  test('executes code.js with gameAPI', async () => {
     // Mod 含 code.js：注册钩子 + 注入天赋。
     const dir = makeMod('code-mod', { name: 'code-mod', version: '1' })
     // 写 code.js（原生 JS，非 JSON）。
@@ -203,11 +205,11 @@ describe('mod - createModLoader', () => {
       'gameAPI.addTalent({ id: "code_t1", name: "代码天赋", grade: 1 });'
     )
     // 加载器。
-    const loader = createModLoader({ modsDir: tempDir })
+    const loader = await createModLoader({ source: createNodeSource(tempDir) })
     // 记录钩子触发。
     const bus = createHookBus()
     // 加载并执行。
-    const { data } = loader.loadAll({
+    const { data } = await loader.loadAll({
       createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus }),
     })
     // code.js 注入的天赋。
@@ -220,52 +222,52 @@ describe('mod - createModLoader', () => {
     })
   })
 
-  test('code.js exception is isolated', () => {
+  test('code.js exception is isolated', async () => {
     // Mod code.js 抛错。
     const dir = makeMod('bad-mod', { name: 'bad-mod', version: '1' })
     // 抛错代码。
     writeFileSync(join(dir, 'code.js'), 'throw new Error("boom")')
     // 加载器。
-    const loader = createModLoader({ modsDir: tempDir })
+    const loader = await createModLoader({ source: createNodeSource(tempDir) })
     // 加载不抛（异常被隔离）。
-    expect(() => loader.loadAll({ createAPI: () => createGameAPI({ data: {} }) })).not.toThrow()
+    await expect(loader.loadAll({ createAPI: () => createGameAPI({ data: {} }) })).resolves.toBeTruthy()
   })
 
-  test('invalid manifest is rejected', () => {
+  test('invalid manifest is rejected', async () => {
     // 非法 manifest。
     makeMod('bad', { version: '1' })
     // 加载器。
-    const loader = createModLoader({ modsDir: tempDir })
+    const loader = await createModLoader({ source: createNodeSource(tempDir) })
     // 报错。
     expect(loader.errors.some(e => e.includes('非法'))).toBe(true)
     // 不加载。
     expect(loader.mods.length).toBe(0)
   })
 
-  test('missing manifest reported', () => {
+  test('missing manifest reported', async () => {
     // 无 manifest 的目录。
     mkdirSync(join(tempDir, 'nomod'), { recursive: true })
     // 加载器。
-    const loader = createModLoader({ modsDir: tempDir })
+    const loader = await createModLoader({ source: createNodeSource(tempDir) })
     // 报错。
     expect(loader.errors.some(e => e.includes('缺少 manifest'))).toBe(true)
   })
 
-  test('disabled directory is skipped', () => {
+  test('disabled directory is skipped', async () => {
     // disabled 目录。
     makeMod('disabled', { name: 'x', version: '1' })
     // 加载器（disabled 应是目录被排除）。
-    const loader = createModLoader({ modsDir: tempDir })
+    const loader = await createModLoader({ source: createNodeSource(tempDir) })
     // disabled 被跳过。
     expect(loader.mods.some(m => m.name === 'x')).toBe(false)
   })
 
-  test('scanMods returns mod list', () => {
+  test('scanMods returns mod list', async () => {
     // 两个 Mod。
     makeMod('a', { name: 'a', version: '1' })
     makeMod('b', { name: 'b', version: '1' })
     // 扫描。
-    const { mods } = scanMods(tempDir)
+    const { mods } = await scanMods({ source: createNodeSource(tempDir) })
     // 两个。
     expect(mods).toHaveLength(2)
   })
@@ -273,7 +275,7 @@ describe('mod - createModLoader', () => {
 
 // ========== 测试组 4：createGameAPI ==========
 describe('mod - createGameAPI', () => {
-  test('hook on/emit/off works', () => {
+  test('hook on/emit/off works', async () => {
     // API。
     const api = createGameAPI({ data: {} })
     // 记录。
@@ -349,7 +351,7 @@ describe('mod - createGameAPI', () => {
     expect(last).toEqual({ prop: 'CHR', value: 10 })
   })
 
-  test('addTalent with conflict overrides', () => {
+  test('addTalent with conflict overrides', async () => {
     // API。
     const api = createGameAPI({ data: {} })
     // 添加。
@@ -360,7 +362,7 @@ describe('mod - createGameAPI', () => {
     expect(api.getTalent('t1').name).toBe('第二版')
   })
 
-  test('addEvent/removeEvent works', () => {
+  test('addEvent/removeEvent works', async () => {
     // API。
     const api = createGameAPI({ data: {} })
     // 添加。
@@ -373,7 +375,7 @@ describe('mod - createGameAPI', () => {
     expect(api.getEvent('e1')).toBeUndefined()
   })
 
-  test('addAchievement works', () => {
+  test('addAchievement works', async () => {
     // API。
     const api = createGameAPI({ data: {} })
     // 添加。
@@ -382,7 +384,7 @@ describe('mod - createGameAPI', () => {
     expect(api.getAchievement('a1').name).toBe('成就')
   })
 
-  test('removeTalent works', () => {
+  test('removeTalent works', async () => {
     // API。
     const api = createGameAPI({ data: {} })
     // 添加。
@@ -393,7 +395,7 @@ describe('mod - createGameAPI', () => {
     expect(api.getTalent('t1')).toBeUndefined()
   })
 
-  test('createHookBus standalone works', () => {
+  test('createHookBus standalone works', async () => {
     // 总线。
     const bus = createHookBus()
     // 注册。
@@ -419,7 +421,7 @@ describe('mod - createGameAPI', () => {
     expect(calls).toEqual([{ age: 5 }])
   })
 
-  test('gameAPI.ai unavailable when no ai config', () => {
+  test('gameAPI.ai unavailable when no ai config', async () => {
     // 无 AI 配置。
     const api = createGameAPI({ data: {} })
     // 不可用。
@@ -446,7 +448,7 @@ describe('mod - createGameAPI', () => {
     expect(gen).toEqual({ id: 'gen-me' })
   })
 
-  test('gameAPI.param defines and reads custom params', () => {
+  test('gameAPI.param defines and reads custom params', async () => {
     // 参数注册表。
     const registry = createParamRegistry()
     // 定义基础参数。

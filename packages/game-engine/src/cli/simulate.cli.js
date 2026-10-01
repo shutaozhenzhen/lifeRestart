@@ -24,7 +24,7 @@ import { writeFileSync } from 'node:fs'
 // 模拟内核（推荐入口）。
 import { createSimulation } from '../sim/simulator.js'
 // Mod 加载（可选：真实数据 + 钩子）。
-import { createModLoader } from '../mod/loader.js'
+import { createNodeModLoader } from '../mod/loader-node.js'
 import { createGameAPI, createHookBus } from '../mod/gameapi.js'
 // fixture 数据（无 --mods 时的默认数据源）。
 import { clone } from '../functions/util.js'
@@ -69,13 +69,13 @@ export function buildFixtureData() {
 // @param {string} params.modsDir - mods 目录
 // @param {object} params.log - 日志器
 // @returns {object} 合并后的数据
-export function loadModData({ modsDir, log }) {
-  // 加载器。
-  const loader = createModLoader({ modsDir, log })
+export async function loadModData({ modsDir, log }) {
+  // 加载器（Node 文件源）。
+  const loader = await createNodeModLoader({ modsDir, log })
   // 共享钩子总线。
   const bus = createHookBus()
   // 加载 + 执行 code.js（未配置 AI → ai-mod 只注册不调用）。
-  const { data } = loader.loadAll({
+  const { data } = await loader.loadAll({
     // 注入 gameAPI（无 AI 配置）。
     createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, log }),
   })
@@ -174,7 +174,7 @@ export function formatReport(stats, { elapsedMs, talentName } = {}) {
 // @returns {Promise<{stats: object, results: Array, elapsedMs: number, data: object}>} 结果
 export async function simulateCli({ runs = 50, seed = null, modsDir = null, strategy, chunk = 10, onProgress, log } = {}) {
   // 数据源：Mod（真实数据）或 fixture。
-  const data = modsDir ? loadModData({ modsDir, log }) : buildFixtureData()
+  const data = modsDir ? await loadModData({ modsDir, log }) : buildFixtureData()
   // 开始计时。
   const startedAt = Date.now()
   // 创建模拟环境（同一个 RNG 注入 Life 与策略层 → 可复现）。

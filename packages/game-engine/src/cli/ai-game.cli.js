@@ -17,7 +17,7 @@
  */
 
 // 导入。
-import { createModLoader } from '../mod/loader.js'
+import { createNodeModLoader } from '../mod/loader-node.js'
 import { createGameAPI, createHookBus } from '../mod/gameapi.js'
 import { createAIClient } from '../ai/ai-client.js'
 // AI Mod 工厂。
@@ -93,11 +93,11 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 状态。
   log.info(`AI: ${aiConfig ? (aiConfig.apiKey === 'mock' ? 'mock 模式' : aiConfig.model) : '未启用（原版）'}`)
   // 加载 Mod（含 ai-mod code.js）。
-  const loader = createModLoader({ modsDir, log })
+  const loader = await createNodeModLoader({ modsDir, log })
   // 共享总线。
   const bus = createHookBus()
   // 加载 + 执行 code.js。
-  const { data } = loader.loadAll({
+  const { data } = await loader.loadAll({
     createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, ai: aiConfig, aiModFactory: createAIMod, log }),
   })
   // 加载器错误。

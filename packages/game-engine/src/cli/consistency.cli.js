@@ -44,7 +44,7 @@ export async function prepareRun({ modsDir, mockAi = false } = {}) {
     // AI 配置（mock 为确定性客户端）。
     const aiConfig = mockAi ? makeAIConfig(['--mock-ai']) : null
     // 加载 mods 数据 + 钩子。
-    const r = loadModData({ modsDir, aiConfig, log: silentLog })
+    const r = await loadModData({ modsDir, aiConfig, log: silentLog })
     // 返回。
     return { data: r.data, bus: aiConfig ? r.bus : null }
   }

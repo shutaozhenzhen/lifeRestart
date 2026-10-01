@@ -260,9 +260,9 @@ describe('simulate.cli - runCli（输出与导出）', () => {
 })
 
 describe('simulate.cli - 真实数据路径', () => {
-  test('loadModData：加载 mods/ 得到真实规模数据', () => {
-    // 加载。
-    const data = loadModData({ modsDir: MODS_DIR })
+  test('loadModData：加载 mods/ 得到真实规模数据', async () => {
+    // 加载（异步：加载器为两个平台共用而统一成 async）。
+    const data = await loadModData({ modsDir: MODS_DIR })
     // 规模与 README 描述一致（Data Mod：age 501 / talents 184 / events 1720）。
     expect(Object.keys(data.age).length).toBeGreaterThan(400)
     expect(Object.keys(data.talents).length).toBeGreaterThan(150)

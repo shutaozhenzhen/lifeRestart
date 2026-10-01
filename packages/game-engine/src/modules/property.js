@@ -65,11 +65,19 @@ class Property {
     if (params) this.#registry.defineAll(params)
   }
 
+  // #registry
+  // 参数注册表（供 Mod 的 gameAPI.param 使用：注册新属性/读写参数）。
+  // 之所以要暴露：Mod 支持要能在**浏览器**里跑，而 gameAPI.param 需要拿到这个注册表；
+  // 之前只有 Life 内部持有，前端无法构造 gameAPI（只能走 Node 侧）。
+  get registry() {
+    // 返回注册表。
+    return this.#registry
+  }
+
   // #TYPES
   // 属性类型常量（由注册表参数名派生，保持向后兼容）。
   // 供 Life/外部模块引用，实际读写走注册表。
-  get TYPES() {
-    // 从注册表参数名生成 { NAME: 'NAME' }。
+  get TYPES() {    // 从注册表参数名生成 { NAME: 'NAME' }。
     const types = {}
     // 逐个。
     for (const name of this.#registry.names) types[name] = name

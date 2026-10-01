@@ -14,7 +14,7 @@
  */
 
 // 导入。
-import { createModLoader } from '../mod/loader.js'
+import { createNodeModLoader } from '../mod/loader-node.js'
 import { createGameAPI, createHookBus } from '../mod/gameapi.js'
 import { createAIClient } from '../ai/ai-client.js'
 // AI Mod 工厂（code.js 经 gameAPI.createAIMod 使用）。
@@ -89,7 +89,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   if (aiConfig) log.info(`AI 客户端: ${aiConfig.apiKey === 'mock' ? 'mock 模式' : aiConfig.model}`)
   else log.info('未配置 AI（设 AI_API_KEY 或加 --mock-ai 启用）')
   // 创建加载器。
-  const loader = createModLoader({ modsDir, log })
+  const loader = await createNodeModLoader({ modsDir, log })
   // 打印依赖图与顺序。
   console.log('=== Mod 依赖图 ===')
   // 每个 Mod。
@@ -113,7 +113,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 共享钩子总线（loader 的 code.js 与演示共用同一总线，AI 钩子才能互相触发）。
   const bus = createHookBus()
   // 加载数据并执行各 Mod 的 code.js（注入 gameAPI + AI 客户端 + AI Mod 工厂 + 共享总线）。
-  const { data, codeList } = loader.loadAll({
+  const { data, codeList } = await loader.loadAll({
     createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, ai: aiConfig, aiModFactory: createAIMod, log }),
   })
   // 数据统计。

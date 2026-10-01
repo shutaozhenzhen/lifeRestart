@@ -670,6 +670,10 @@ class Life {
 
   // 属性类型常量。
   get PropertyTypes() { return this.#property.TYPES }
+  // 参数注册表（Mod 的 gameAPI.param 用；浏览器侧构造 gameAPI 需要它）。
+  get params() { return this.#property.registry }
+  // 钩子总线（只读引用，供外部查询已注册的钩子）。
+  get hooks() { return this.#hooks }
   // 成就时机常量。
   get AchievementOpportunity() { return this.#achievement.Opportunity }
   // 天赋选择上限。

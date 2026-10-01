@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 // 被测模块：mod 加载器。
 import { createModLoader } from './loader.js'
+// Node 文件源。
+import { createNodeSource } from './source-node.js'
 
 // 本文件目录（src/mod/）。
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -36,11 +38,11 @@ describe('仓库内置 Data Mod（防 gitignore 回归）', () => {
   })
 
   // 数据必须可被加载器读取，且各数据集非空。
-  test('Data Mod 可被加载且 age/talents/events/achievements/characters 非空', () => {
+  test('Data Mod 可被加载且 age/talents/events/achievements/characters 非空', async () => {
     // 创建加载器。
-    const loader = createModLoader({ modsDir: MODS_DIR })
+    const loader = await createModLoader({ source: createNodeSource(MODS_DIR) })
     // 加载合并数据。
-    const { data } = loader.loadAll()
+    const { data } = await loader.loadAll()
     // 无扫描/排序错误。
     expect(loader.errors).toEqual([])
     // 各数据集非空。

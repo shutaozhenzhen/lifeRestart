@@ -16,7 +16,7 @@
  */
 
 // 导入。
-import { createModLoader } from '../mod/loader.js'
+import { createNodeModLoader } from '../mod/loader-node.js'
 import { createGameAPI, createHookBus } from '../mod/gameapi.js'
 import { createAIClient } from '../ai/ai-client.js'
 // AI Mod 工厂。
@@ -77,13 +77,13 @@ export function makeAIConfig(argv) {
 // @param {object|null} params.aiConfig - AI 配置
 // @param {object} params.log - 日志器
 // @returns {{data: object, bus: object}} 数据与共享总线
-export function loadModData({ modsDir, aiConfig, log }) {
-  // 加载器。
-  const loader = createModLoader({ modsDir, log })
+export async function loadModData({ modsDir, aiConfig, log }) {
+  // 加载器（Node 文件源；浏览器侧走同内核的 fetch 源）。
+  const loader = await createNodeModLoader({ modsDir, log })
   // 共享总线。
   const bus = createHookBus()
   // 加载 + 执行 code.js。
-  const { data } = loader.loadAll({
+  const { data } = await loader.loadAll({
     createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, ai: aiConfig, aiModFactory: createAIMod, log }),
   })
   // 返回。
