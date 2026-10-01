@@ -24,6 +24,8 @@ import { createLogger } from 'game-engine/src/functions/logger.js'
 import { formatLogLine, countByLevel, collectLogMeta, buildLogReport } from '../utils/log-report.js'
 // Mod 启停状态（报告里带上，便于复现）。
 import { loadModsState } from '../utils/mods-state.js'
+// 引擎存储适配器（重开次数 / 成就 / 已见事件的跨局持久化）。
+import { createLifeStorage } from '../utils/life-storage.js'
 
 // 日志缓冲上限：1000 条在 trace 级下也够覆盖一次完整复现（每条约 100 字节）。
 const LOG_BUFFER_LIMIT = 1000
@@ -125,8 +127,10 @@ export const useGameStore = defineStore('game', {
           error: (m) => this.pushLog('error', m),
         },
       })
-      // 创建 Life 实例（注入日志器）。markRaw 防止被 reactive 代理（私有字段保护）。
-      this.life = markRaw(new Life({ data, logger }))
+      // 创建 Life 实例（注入日志器与存储）。markRaw 防止被 reactive 代理（私有字段保护）。
+      // storage：TMS 重开次数 / ACHV 成就 / AEVT 已见事件的跨局持久化——
+      // 不注入时 Property 会退回"每个实例一个内存 storage"，导致总结页数据永远为空。
+      this.life = markRaw(new Life({ data, logger, storage: createLifeStorage() }))
       // 初始化。
       await this.life.initial()
       // 配置。

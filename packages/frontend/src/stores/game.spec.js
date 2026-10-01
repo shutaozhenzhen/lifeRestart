@@ -17,6 +17,7 @@
  *   M. 死亡后 isEnd/lif 响应式镜像更新（原实现直接读 markRaw 引擎 → computed 永久缓存 false，
  *      导致"死亡后还在继续"推进）
  *   N. advanceYear 守卫：人生结束后返回 false 且不再推进（自动播放据此停止）
+ *   O. 重开次数/成就跨局持久化（引擎 storage 注入；未注入时永远 0）
  */
 
 // 导入 vitest 测试 DSL。
@@ -367,5 +368,25 @@ describe('gameStore 人生轨迹累积', () => {
     // 未初始化时同样安全。
     const fresh = useGameStore()
     expect(fresh.advanceYear()).toBe(false)
+  })
+
+  test('O：重开次数跨局持久化（回归：未注入 storage → 永远是 0）', async () => {
+    // 第一局。
+    const store = useGameStore()
+    await store.init(buildData())
+    store.begin({ CHR: 5 })
+    store.life.request('PROPERTY').set('LIF', 100)
+    store.next()
+    // 模拟总结页点「重开」：次数 +1（写入注入的 storage）。
+    store.life.times = store.life.times + 1
+    expect(store.life.times).toBe(1)
+    // 已落到 localStorage（键带 lifeRestart: 前缀，不污染前端自己的键）。
+    expect(storeData['lifeRestart:times']).toBe('1')
+    // 新的一局（全新 pinia ≈ 刷新页面后重新开始），localStorage 保留。
+    setActivePinia(createPinia())
+    const store2 = useGameStore()
+    await store2.init(buildData())
+    // 新实例读回次数（旧实现是内存 storage → 恒为 0）。
+    expect(store2.life.times).toBe(1)
   })
 })

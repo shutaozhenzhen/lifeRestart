@@ -1,21 +1,33 @@
 <script setup>
 // 人生总结页（对应原版 summary.js）。
-// 显示各属性分档评价、达成成就列表、重开次数，支持重开。
+//
+// 本轮修复（用户反馈"总结页全是 —"）：
+//   1. 评价分档缺省：引擎 config() 未注入 judge 表 → judge() 全返回 undefined。
+//      已在引擎侧修（内置默认表 src/params/judge-config.js），本页把 J_* 键翻成中文。
+//   2. 重开次数/成就/事件收集一直为 0：前端没给引擎注入 storage →
+//      引擎退回内存实现，跨局数据全部丢失。已在 store.init 注入 localStorage 适配器。
+//   3. 165 条成就一览到底、页面很长：改成固定高度滚动区。
+//   4. statistics 取了却没用上：补「统计」区（成就/天赋/事件收集）。
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
+// i18n：评价键（J_Normal/J_Good/J_Great）→ 可见文案。
+import { loadLocale, t } from 'game-engine/src/i18n/index.js'
 
 // 路由。
 const router = useRouter()
 // 游戏 store。
 const store = useGameStore()
 
-// 总结数据。
+// 总结数据（各属性分档评价）。
 const summary = ref({})
 // 成就列表。
 const achievements = ref([])
 // 统计信息。
 const statistics = ref({})
+
+// 中文词条表。
+const locale = loadLocale('zh-cn')
 
 // 总结条目展示（键 → 中文名）。
 const summaryLabels = {
@@ -28,7 +40,49 @@ const summaryLabels = {
   HSPR: '最高快乐',
 }
 
-// 挂载时读取总结。
+// 统计条目展示（键 → 中文名）。
+const statisticsLabels = {
+  CACHV: '成就达成数',
+  RTLT: '天赋选择率',
+  REVT: '事件收集率',
+}
+
+// #judgeText
+// 评价键 → 可见文案（缺词条时原样返回键名）。
+//
+// @param {string} key - J_* 评价键
+// @returns {string} 文案
+function judgeText(key) {
+  // 空值返回空串。
+  if (!key) return ''
+  // 翻译。
+  return t(locale, key)
+}
+
+// #formatValue
+// 统计值格式化：比率类转百分比，其余原样。
+//
+// @param {string} key - 统计键
+// @param {object} item - judge 结果 { value, ... }
+// @returns {string} 展示文本
+function formatValue(key, item) {
+  // 无评价（未配置）：占位。
+  if (!item) return '—'
+  // 比率类。
+  if (key === 'RTLT' || key === 'REVT') return `${(Number(item.value || 0) * 100).toFixed(1)}%`
+  // 其余。
+  return String(item.value)
+}
+
+// 统计条目列表（跳过 TMS：页头已显示"重开次数"）。
+const statItems = computed(() =>
+  Object.entries(statistics.value).filter(([key]) => key !== 'TMS')
+)
+
+// 已达成成就数。
+const achievedCount = computed(() => achievements.value.filter((a) => a.isAchieved).length)
+
+// 挂载时读取总结（引擎侧 summary 会触发 SUMMARY 成就检测）。
 onMounted(() => {
   // 需要已开局。
   if (!store.life) {
@@ -37,19 +91,19 @@ onMounted(() => {
     return
   }
   // 读取总结（触发 SUMMARY 成就检测）。
-  summary.value = store.life.summary
+  summary.value = store.life.summary || {}
   // 成就列表。
-  achievements.value = store.life.achievements
+  achievements.value = store.life.achievements || []
   // 统计信息。
-  statistics.value = store.life.statistics
+  statistics.value = store.life.statistics || {}
 })
 
-// 重开次数。
+// 重开次数（引擎 TMS：storage 持久化，跨局累积）。
 const times = computed(() => (store.life ? store.life.times : 0))
 
-// 重开：次数 +1，回到主页。
+// 重开：次数 +1（写入 storage 持久化），回到主页。
 function remake() {
-  // 次数 +1。
+  // 次数 +1（setter 内部会写 storage 并触发 END 成就检测）。
   store.life.times = store.life.times + 1
   // 清空状态（含完整轨迹，见 store.clearTrace）。
   store.selectedTalents = []
@@ -70,18 +124,37 @@ function remake() {
       <h3>属性评价</h3>
       <div v-for="(v, key) in summary" :key="key" class="row">
         <span class="label">{{ summaryLabels[key] || key }}</span>
-        <span class="value">{{ v ? `${v.value}（${v.judge}）` : '—' }}</span>
+        <span class="value">
+          <template v-if="v">{{ v.value }}（{{ judgeText(v.judge) }}）</template>
+          <template v-else>—</template>
+        </span>
       </div>
+      <p v-if="Object.keys(summary).length === 0" class="empty">（暂无评价数据）</p>
     </div>
 
-    <!-- 成就列表 -->
+    <!-- 统计（成就/天赋/事件收集） -->
     <div class="section">
-      <h3>成就（{{ achievements.filter(a => a.isAchieved).length }}/{{ achievements.length }}）</h3>
-      <div v-for="a in achievements" :key="a.id" class="ach" :class="{ done: a.isAchieved }">
-        <span class="ach-name">{{ a.isAchieved ? a.name : (a.hide ? '???' : a.name) }}</span>
-        <span v-if="a.isAchieved" class="ach-check">✓</span>
+      <h3>收集统计</h3>
+      <div v-for="[key, item] in statItems" :key="key" class="row">
+        <span class="label">{{ statisticsLabels[key] || key }}</span>
+        <span class="value">
+          <template v-if="item">{{ formatValue(key, item) }}（{{ judgeText(item.judge) }}）</template>
+          <template v-else>—</template>
+        </span>
       </div>
-      <p v-if="achievements.length === 0" class="empty">（暂无成就）</p>
+      <p v-if="statItems.length === 0" class="empty">（暂无统计数据）</p>
+    </div>
+
+    <!-- 成就列表（固定高度滚动：共 165 条） -->
+    <div class="section">
+      <h3>成就（{{ achievedCount }}/{{ achievements.length }}）</h3>
+      <div class="ach-list">
+        <div v-for="a in achievements" :key="a.id" class="ach" :class="{ done: a.isAchieved }">
+          <span class="ach-name">{{ a.isAchieved ? a.name : (a.hide ? '???' : a.name) }}</span>
+          <span v-if="a.isAchieved" class="ach-check">✓</span>
+        </div>
+        <div v-if="achievements.length === 0" class="empty">（暂无成就）</div>
+      </div>
     </div>
 
     <!-- 操作 -->
@@ -127,12 +200,22 @@ function remake() {
 .row:last-child {
   border-bottom: none;
 }
+.value {
+  color: #ffd700;
+}
+/* 成就：固定高度滚动，避免 165 条把页面撑得很长 */
+.ach-list {
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
 .ach {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 6px 0;
+  padding: 5px 0;
   color: #777;
+  font-size: 13px;
 }
 .ach.done {
   color: #eee;
