@@ -21,6 +21,8 @@ import { ACHIEVEMENTS } from 'game-engine/src/fixtures/achievement-character.fix
 import { discoverMods, loadModBundle } from './mod-runtime.js'
 import { buildModCatalog, enabledModNames } from './mod-catalog.js'
 import { loadModsState } from './mods-state.js'
+// 已安装 Mod 的浏览器存储（IndexedDB，含内存回退）。
+import { getModStore } from './mod-store.js'
 
 // #buildFixtureData
 // 组装 fixture 演示数据（结构 = 原版数据加载结果）。
@@ -145,14 +147,16 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
   if (withMods) {
     // 容错。
     try {
-      // 发现服务器上的 Mod。
-      const discovered = await discoverMods({ fetchImpl })
+      // 已安装 Mod 的本地存储（无 IndexedDB 时退回内存，功能仍在）。
+      const store = await getModStore()
+      // 发现 Mod（本地已安装 + 服务器，本地优先）。
+      const discovered = await discoverMods({ fetchImpl, store })
       // 合并启停/删除状态得到目录（真实 manifest 覆盖展示字段）。
       const catalog = buildModCatalog({ discovered: discovered.mods, saved: loadModsState(storage) })
       // 要加载的 Mod 名（启用且服务器上真的存在）。
       const enabledNames = enabledModNames(catalog)
       // 加载数据与代码。
-      const bundle = await loadModBundle({ fetchImpl, enabled: enabledNames })
+      const bundle = await loadModBundle({ fetchImpl, enabled: enabledNames, store })
       // 合并 Mod 数据（后加载覆盖；与内核里 Mod 之间的合并规则一致）。
       for (const key of Object.keys(bundle.data)) {
         // 合并一个数据集。

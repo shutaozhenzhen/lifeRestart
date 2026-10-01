@@ -13,9 +13,10 @@
  *     浏览器里 Life 由 store 构造，所以拆成两阶段。）
  */
 
-// 引擎：Mod 加载内核 + HTTP 文件源 + 钩子/API + AI 客户端与工厂。
+// 引擎：Mod 加载内核 + HTTP 文件源 + 钩子/API + AI 客户端与工厂 + zip 解析。
 import { createModLoader, scanMods } from 'game-engine/src/mod/loader.js'
 import { createFetchSource } from 'game-engine/src/mod/source-fetch.js'
+import { readModPackage } from 'game-engine/src/mod/zip.js'
 import { createHookBus, createGameAPI } from 'game-engine/src/mod/gameapi.js'
 import { createAIClient } from 'game-engine/src/ai/ai-client.js'
 import { createAIMod } from 'game-engine/src/ai/ai-mod.js'
@@ -84,6 +85,143 @@ export function createBrowserAIConfig({ config, proxyBase = AI_PROXY_BASE, fetch
   return { client, baseUrl: `${String(proxyBase).replace(/\/$/, '')}/v1`, apiKey: config.apiKey, model: config.model }
 }
 
+// #createStoreSource
+// 把"已安装 Mod 存储"（mod-store）适配成文件源。
+//
+// @param {object} store - mod-store 实例
+// @returns {object} 源
+export function createStoreSource(store) {
+  // 返回源。
+  return {
+    // 类型。
+    kind: 'store',
+    // 已安装的 Mod 名。
+    async listMods() {
+      // 列表。
+      return (await store.list()).map((m) => m.name)
+    },
+    // 文件清单。
+    async listFiles(mod) {
+      // 委托。
+      return store.listFiles(mod)
+    },
+    // 读文本。
+    async readText(mod, rel) {
+      // 委托。
+      return store.readText(mod, rel)
+    },
+  }
+}
+
+// #createCompositeSource
+// 组合多个源：Mod 列表取并集，读文件按顺序命中即返回（**本地已安装优先**）。
+//
+// @param {Array<object>} sources - 源列表（前面的优先）
+// @returns {object} 源
+export function createCompositeSource(sources = []) {
+  // 过滤空源。
+  const list = sources.filter(Boolean)
+  // 返回源。
+  return {
+    // 类型。
+    kind: 'composite',
+    // Mod 名并集（保持先后顺序）。
+    async listMods() {
+      // 结果。
+      const names = []
+      // 逐个源。
+      for (const source of list) {
+        // 读列表（源自身失败不影响其它源）。
+        let part = []
+        // 容错。
+        try {
+          // 读。
+          part = (await source.listMods()) || []
+        } catch {
+          // 忽略该源。
+          part = []
+        }
+        // 去重合并。
+        for (const name of part) if (!names.includes(name)) names.push(name)
+      }
+      // 返回。
+      return names
+    },
+    // 文件清单：第一个非 null 的源胜出。
+    async listFiles(mod) {
+      // 逐个源。
+      for (const source of list) {
+        // 尝试。
+        try {
+          // 读。
+          const files = await source.listFiles(mod)
+          // 命中。
+          if (files) return files
+        } catch {
+          // 继续下一个源。
+        }
+      }
+      // 都没命中。
+      return null
+    },
+    // 读文本：第一个非 null 的源胜出。
+    async readText(mod, rel) {
+      // 逐个源。
+      for (const source of list) {
+        // 尝试。
+        try {
+          // 读。
+          const text = await source.readText(mod, rel)
+          // 命中。
+          if (text !== null && text !== undefined) return text
+        } catch {
+          // 继续下一个源。
+        }
+      }
+      // 都没命中。
+      return null
+    },
+  }
+}
+
+// #installModFromZip
+// 从 zip 安装 Mod 到本地存储（**前端 zip 安装的入口**）。
+// 解析/校验/安全防护都在引擎的 zip 模块里（与 CLI 的 manager.importZip 同一实现）。
+//
+// @param {object} params
+// @param {Uint8Array|ArrayBuffer} params.bytes - zip 内容
+// @param {object} params.store - mod-store 实例
+// @param {object} [params.log] - 日志器
+// @returns {Promise<{ok: boolean, name?: string, manifest?: object, errors: string[], files?: number, binaries?: string[]}>} 结果
+export async function installModFromZip({ bytes, store, log } = {}) {
+  // 解析（共用的 zip 模块）。
+  const parsed = readModPackage(bytes, { log })
+  // 失败。
+  if (!parsed.ok) return { ok: false, errors: parsed.errors }
+  // 系统 Mod 名保留：不允许用 zip 覆盖内置/系统 Mod（避免把数据源或 ai-mod 顶掉）。
+  if (['lifeRestart-data', 'ai-mod'].includes(parsed.name)) {
+    // 拒绝。
+    return { ok: false, errors: [`${parsed.name} 是系统 Mod，不能被 zip 覆盖`] }
+  }
+  // 写入本地存储。
+  await store.install({ name: parsed.name, manifest: parsed.manifest, files: parsed.files })
+  // 返回（把路径/尺寸警告一并带出）。
+  return {
+    // 成功。
+    ok: true,
+    // 名字。
+    name: parsed.name,
+    // manifest（界面展示权限用）。
+    manifest: parsed.manifest,
+    // 警告。
+    errors: [...parsed.errors, ...(parsed.skipped || []).map((s) => `已跳过：${s}`)],
+    // 文件数。
+    files: Object.keys(parsed.files).length,
+    // 非文本文件提示。
+    binaries: parsed.binaries || [],
+  }
+}
+
 // #discoverMods
 // 只做"发现"：列出服务器上可用的 Mod（供 Mod 管理页展示 + 计算启用集合）。
 //
@@ -92,9 +230,10 @@ export function createBrowserAIConfig({ config, proxyBase = AI_PROXY_BASE, fetch
 // @param {Function} [params.fetchImpl] - fetch 实现
 // @param {object} [params.log] - 日志器
 // @returns {Promise<{mods: Array<{name: string, manifest: object}>, errors: string[]}>} 发现结果
-export async function discoverMods({ baseUrl = MODS_BASE_URL, fetchImpl, log } = {}) {
-  // 源 + 扫描（与加载器共用同一个 HTTP 源实现）。
-  const source = createFetchSource({ baseUrl, fetchImpl, log })
+export async function discoverMods({ baseUrl = MODS_BASE_URL, fetchImpl, log, store } = {}) {
+  // 源：有本地存储就组合（**本地已安装优先**），否则纯 HTTP。
+  const http = createFetchSource({ baseUrl, fetchImpl, log })
+  const source = store ? createCompositeSource([createStoreSource(store), http]) : http
   // 扫描。
   return scanMods({ source, log })
 }
@@ -108,11 +247,12 @@ export async function discoverMods({ baseUrl = MODS_BASE_URL, fetchImpl, log } =
 // @param {string[]} [params.enabled] - 启用的 Mod 名（缺省全加载）
 // @param {object} [params.log] - 日志器
 // @returns {Promise<{data: object, codes: Array<{name: string, code: string}>, loaded: string[], disabled: string[], errors: string[], hooks: object}>} 结果
-export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enabled, log } = {}) {
+export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enabled, log, store } = {}) {
   // 钩子总线（一次游戏一个：所有 Mod 共享，Life 也注入它）。
   const hooks = createHookBus()
-  // 文件源。
-  const source = createFetchSource({ baseUrl, fetchImpl, log })
+  // 文件源（本地已安装优先 → HTTP）。
+  const http = createFetchSource({ baseUrl, fetchImpl, log })
+  const source = store ? createCompositeSource([createStoreSource(store), http]) : http
   // 加载器（只加载启用的 Mod）。
   const loader = await createModLoader({ source, log, only: enabled })
   // 加载数据与代码（**不**执行 code：浏览器要等 Life 建好拿 params）。

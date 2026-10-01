@@ -9,7 +9,9 @@ import { useRouter } from 'vue-router'
 import { PERMISSION_LABELS } from 'game-engine/src/mod/permissions.js'
 // Mod 目录（原型清单 ↔ 服务器上发现的真实 Mod 合并）与发现接口。
 import { loadModCatalog } from '../utils/mod-catalog.js'
-import { discoverMods } from '../utils/mod-runtime.js'
+import { discoverMods, installModFromZip } from '../utils/mod-runtime.js'
+// 已安装 Mod 的本地存储（IndexedDB，含内存回退）。
+import { getModStore } from '../utils/mod-store.js'
 // 游戏 store（页面操作行为日志：进入页面/按钮操作都记入日志面板）。
 import { useGameStore } from '../stores/game.js'
 // Mod 启停/删除状态持久化（纯函数，可测试）。
@@ -25,15 +27,104 @@ const gameStore = useGameStore()
 onMounted(async () => {
   // 记录（UI 日志常显，不随引擎级别过滤）。
   gameStore.pushLog('info', '[UI][mods] 进入 Mod 管理页')
-  // 发现（超时/404 都会降级为空列表）。
-  const { mods: found, errors } = await discoverMods()
+  // 取本地已安装 Mod 的存储（无 IndexedDB 时自动退回内存）。
+  modStore.value = await getModStore()
+  // 刷新目录（本地已安装 + 服务器，本地优先）。
+  await refreshCatalog()
+})
+
+// #refreshCatalog
+// 重新发现 Mod 并刷新目录（本地已安装 + 服务器）。
+//
+// @returns {Promise<void>}
+async function refreshCatalog() {
+  // 发现（超时/404 都会降级，不影响界面）。
+  const { mods: found, errors } = await discoverMods({ store: modStore.value })
   // 错误记为 warn（报告里可见为什么不生效）。
   for (const e of errors) gameStore.pushLog('warn', `[UI][mods] ${e}`)
   // 合并出真实目录。
   mods.value = loadModCatalog(found)
+  // 记录哪些是本地安装的（界面区分来源 + 提供卸载）。
+  const installed = modStore.value ? await modStore.value.list() : []
+  installedNames.value = installed.map((m) => m.name)
   // 日志：实际可用的 Mod。
-  gameStore.pushLog('info', `[UI][mods] 服务器上发现 ${found.length} 个 Mod：${found.map((m) => m.name).join(', ') || '（无）'}`)
-})
+  gameStore.pushLog('info', `[UI][mods] 可用 Mod ${found.length} 个（本地安装 ${installedNames.value.length} 个）：${found.map((m) => m.name).join(', ') || '（无）'}`)
+}
+
+// #pickZip
+// 打开文件选择框（安装 Mod）。
+//
+// @returns {void}
+function pickZip() {
+  // 触发隐藏的 file input。
+  fileInput.value?.click()
+}
+
+// #onZipPicked
+// 选好 zip 后：解析 + 安装到本地存储 + 刷新目录。
+//
+// @param {Event} event - change 事件
+// @returns {Promise<void>}
+async function onZipPicked(event) {
+  // 取文件。
+  const file = event?.target?.files?.[0]
+  // 清空 input（同一个文件可以再次选择）。
+  if (event?.target) event.target.value = ''
+  // 没选。
+  if (!file) return
+  // 忙状态。
+  installBusy.value = true
+  // 清错误。
+  installError.value = ''
+  // 安装。
+  try {
+    // 读字节。
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    // 解析 + 写入本地存储（解析/校验/安全防护都在引擎 zip 模块里）。
+    const r = await installModFromZip({ bytes, store: modStore.value })
+    // 失败：把原因显示出来（不合格的 zip 必须有可读反馈）。
+    if (!r.ok) {
+      // 展示。
+      installError.value = r.errors.join('；')
+      // 日志。
+      gameStore.pushLog('warn', `[UI][mods] 安装 ${file.name} 失败：${r.errors.join('；')}`)
+      // 结束。
+      return
+    }
+    // 成功提示 + 日志。
+    installError.value = ''
+    installMessage.value = `已安装 ${r.name}（${r.files} 个文件）`
+    gameStore.pushLog('info', `[UI][mods] 已安装 Mod ${r.name}（来自 ${file.name}，${r.files} 个文件）`)
+    // 警告（路径/尺寸/二进制）逐条记。
+    for (const w of r.errors) gameStore.pushLog('warn', `[UI][mods] ${w}`)
+    // 刷新目录。
+    await refreshCatalog()
+  } catch (e) {
+    // 读文件/解压异常。
+    installError.value = `安装失败：${e.message}`
+    // 日志。
+    gameStore.pushLog('warn', `[UI][mods] 安装失败：${e.message}`)
+  } finally {
+    // 解除忙状态。
+    installBusy.value = false
+  }
+}
+
+// #uninstall
+// 卸载本地安装的 Mod（只删本地存储里的副本；服务器上的 Mod 不受影响）。
+//
+// @param {object} mod - 目录项
+// @returns {Promise<void>}
+async function uninstall(mod) {
+  // 确认。
+  if (!confirm(`卸载本地安装的 Mod ${mod.name}？`)) return
+  // 删除。
+  await modStore.value?.remove(mod.name)
+  // 日志。
+  gameStore.pushLog('info', `[UI][mods] 已卸载本地 Mod ${mod.name}`)
+  // 刷新。
+  await refreshCatalog()
+}
 
 // （loadModsState/saveModsState/applyModsState 已抽到 utils/mods-state.js，可单元测试）
 
@@ -81,6 +172,17 @@ const removedMods = ref(savedState.removed || [])
 // Mod 列表：原型清单兜底（发现结果在 onMounted 里合并进来，真实 manifest 覆盖展示字段）。
 // 启停/删除状态经 localStorage 持久化（applyModsState 纯函数，刷新后保留用户选择）。
 const mods = ref(loadModCatalog([]))
+// 本地已安装 Mod 的存储（IndexedDB/内存）。
+const modStore = ref(null)
+// 本地已安装的 Mod 名（界面标来源 + 提供卸载）。
+const installedNames = ref([])
+// 文件选择框（zip 安装）。
+const fileInput = ref(null)
+// 安装中（防重复点击）。
+const installBusy = ref(false)
+// 安装错误 / 成功提示。
+const installError = ref('')
+const installMessage = ref('')
 
 // AI 配置（localStorage 持久化，与 ai-mod 开关解耦：配置仅保存，启用才生效）。
 const aiConfig = ref(loadAIConfig())
@@ -264,6 +366,17 @@ function back() {
     <h2 class="title">Mod 管理</h2>
     <button class="btn back" @click="back">← 返回</button>
 
+    <!-- zip 安装（纯前端：解析与校验走引擎共用 zip 模块，装进浏览器本地存储） -->
+    <div class="install-bar">
+      <input ref="fileInput" class="hidden-file" type="file" accept=".zip,application/zip" @change="onZipPicked" />
+      <button class="btn primary" :disabled="installBusy" @click="pickZip">
+        {{ installBusy ? '安装中…' : '+ 安装 Mod（.zip）' }}
+      </button>
+      <span class="install-hint">zip 里需含 manifest.json（支持包装一层目录）</span>
+    </div>
+    <p v-if="installError" class="install-error">⚠ {{ installError }}</p>
+    <p v-if="installMessage" class="install-ok">{{ installMessage }}</p>
+
     <!-- Mod 列表 -->
     <div v-for="mod in mods" :key="mod.name" class="mod">
       <div class="mod-info">
@@ -283,6 +396,9 @@ function back() {
           {{ aiPanelOpen ? '收起配置' : 'AI 配置' }}
         </button>
         <button v-if="!mod.system" class="btn danger" @click="remove(mod)">删除</button>
+        <!-- 本地安装的 Mod 可以卸载（只删浏览器里的副本） -->
+        <button v-if="installedNames.includes(mod.name)" class="btn danger" @click="uninstall(mod)">卸载</button>
+        <span v-if="installedNames.includes(mod.name)" class="sys-hint">本地安装</span>
         <span v-else class="sys-hint">系统内置</span>
       </div>
       <!-- AI 配置面板（内嵌于 ai-mod 卡片，点开才展开；禁用时灰化，仅保存暂不生效） -->
@@ -362,6 +478,32 @@ function back() {
   padding: 30px;
   max-width: 640px;
   margin: 0 auto;
+}
+/* zip 安装条 */
+.install-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.install-hint {
+  font-size: 12px;
+  color: #8f9bb3;
+}
+.hidden-file {
+  display: none;
+}
+.install-error {
+  font-size: 12px;
+  color: #ffb84d;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+.install-ok {
+  font-size: 12px;
+  color: #4d9de0;
+  margin-bottom: 8px;
 }
 .title {
   text-align: center;
