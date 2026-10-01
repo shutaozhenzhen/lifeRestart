@@ -34,6 +34,10 @@ const LOCALES = {
     GAME_Over: '人生结束',
     GAME_Summary: '人生总结',
     GAME_Times: '重开次数',
+    // 属性分档评价值（judge 配置里的 J_* 键，summary/statistics 用）。
+    J_Normal: '普通',
+    J_Good: '优秀',
+    J_Great: '极佳',
     CMD_Unknown: '未知命令: {cmd}（输入 help 查看）',
   },
   // 英文。
@@ -57,6 +61,10 @@ const LOCALES = {
     GAME_Over: 'Life Over',
     GAME_Summary: 'Life Summary',
     GAME_Times: 'Remake Count',
+    // 属性分档评价值（judge 配置里的 J_* 键）。
+    J_Normal: 'Normal',
+    J_Good: 'Good',
+    J_Great: 'Great',
     CMD_Unknown: 'Unknown command: {cmd} (type help)',
   },
 }

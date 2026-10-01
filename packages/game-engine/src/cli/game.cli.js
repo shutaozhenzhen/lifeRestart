@@ -118,8 +118,8 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
   const ready = (async () => {
     // 初始化数据。
     await life.initial()
-    // 配置（含属性 judge，供 summary）。
-    life.config({ propertyConfig: { judge: makeJudgeConfig() } })
+    // 配置（评价分档用引擎内置默认，见 src/params/judge-config.js）。
+    life.config()
     // 记录初始化完成。
     logger.debug('Life 初始化完成')
   })()
@@ -131,24 +131,6 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
     selected: [],       // 已选天赋
     allocation: {},     // 属性分配
     over: false,        // 是否结束
-  }
-
-  // #makeJudgeConfig
-  // 生成各属性评价分档。
-  // @returns {object} judge 配置
-  function makeJudgeConfig() {
-    // 五个基础属性 + 派生值。
-    const base = ['CHR', 'INT', 'STR', 'MNY', 'SPR', 'HCHR', 'HINT', 'HSTR', 'HMNY', 'HSPR']
-    // 每个属性分档。
-    const judge = {}
-    // 逐属性生成。
-    for (const key of base) judge[key] = [[0, 1, 'J_Normal'], [5, 2, 'J_Good'], [8, 3, 'J_Great']]
-    // 年龄与总分档。
-    judge.HAGE = [[0, 1, 'J_Normal'], [10, 2, 'J_Good'], [20, 3, 'J_Great']]
-    judge.SUM = [[0, 1, 'J_Normal'], [50, 2, 'J_Good'], [100, 3, 'J_Great']]
-    judge.TMS = [[0, 1, 'J_Normal'], [1, 2, 'J_Good'], [5, 3, 'J_Great']]
-    // 返回。
-    return judge
   }
 
   // #resolveTalentId

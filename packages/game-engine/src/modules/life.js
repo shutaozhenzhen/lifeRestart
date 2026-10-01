@@ -24,6 +24,8 @@ import Character from './character.js'
 import { clone as cloneUtil, weightRandom } from '../functions/util.js'
 import { check as checkCondition } from '../condition/index.js'
 import { SILENT_LOGGER } from '../functions/logger.js'
+// 内置默认评价分档（config 未显式传入 propertyConfig 时使用）。
+import { DEFAULT_JUDGE_CONFIG } from '../params/judge-config.js'
 
 class Life {
   // 构造函数：注入依赖。
@@ -170,8 +172,10 @@ class Life {
     this.#initialData = { ...cloneUtil(this.#defaultPropertys || {}), TLT: [] }
     // 天赋配置（抽取池大小 + 概率）。
     this.#talent.config()
-    // 属性配置（judge 分档）。
-    this.#property.config(propertyConfig)
+    // 属性配置（judge 分档）：未显式传入时用引擎内置默认。
+    // 重要性：summary/statistics 完全依赖 judge —— 缺省为空表时评价全为 undefined，
+    // 前端总结页会整列显示 —（历史 bug：前端 config() 空参调用）。
+    this.#property.config(propertyConfig || { judge: DEFAULT_JUDGE_CONFIG })
     // 记录配置摘要。
     this.#log.debug(`config: 点数=${defaultPropertyPoints} 天赋上限=${talentSelectLimit} 分配范围=${JSON.stringify(propertyAllocateLimit)}`)
   }

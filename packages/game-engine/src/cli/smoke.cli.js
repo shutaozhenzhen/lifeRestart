@@ -115,7 +115,8 @@ export async function runWithAI({ seed, data, aiBus, years = 20, startLif = 10, 
   // 初始化。
   await life.initial()
   // 配置。
-  life.config({ propertyConfig: { judge: makeJudgeConfig() } })
+  // 配置（评价分档用引擎内置默认，见 src/params/judge-config.js）。
+  life.config()
   // 开局。
   life.remake([])
   life.start({ CHR: 4, INT: 4, STR: 4, MNY: 4, SPR: 4 })
@@ -203,22 +204,7 @@ export function diffTraces(base, ai) {
   return diff
 }
 
-// #makeJudgeConfig
-// 生成评价分档（与 export 一致）。
-// @returns {object} judge 配置
-function makeJudgeConfig() {
-  // 基础属性。
-  const base = ['CHR', 'INT', 'STR', 'MNY', 'SPR', 'HCHR', 'HINT', 'HSTR', 'HMNY', 'HSPR']
-  // judge 对象。
-  const judge = {}
-  // 逐属性。
-  for (const key of base) judge[key] = [[0, 1, 'J_Normal'], [5, 2, 'J_Good'], [8, 3, 'J_Great']]
-  // 年龄/总分档。
-  judge.HAGE = [[0, 1, 'J_Normal'], [10, 2, 'J_Good'], [20, 3, 'J_Great']]
-  judge.SUM = [[0, 1, 'J_Normal'], [50, 2, 'J_Good'], [100, 3, 'J_Great']]
-  // 返回。
-  return judge
-}
+// #makeJudgeConfig 已移除：评价分档改由引擎内置默认提供（src/params/judge-config.js）。
 
 // #entryPoint
 // 仅直接运行时执行。

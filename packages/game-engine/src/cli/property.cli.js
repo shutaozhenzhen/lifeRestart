@@ -23,6 +23,8 @@
 // 导入模块与工具。
 import Property from '../modules/property.js'
 import { createRng, clone } from '../functions/util.js'
+// 内置评价分档（judge 命令演示用，与 Life.config 默认一致）。
+import { DEFAULT_JUDGE_CONFIG } from '../params/judge-config.js'
 // 共享交互辅助。
 import { runInteractive, makeRng, parseCommand, makeCliLogger } from './cli-util.js'
 
@@ -154,6 +156,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   const { random } = makeRng(process.argv.slice(2))
   // 创建 Property（注入随机源，RDM 可用）。
   const property = new Property({ clone, random })
+  // 注入内置评价分档（judge 命令可演示；同一份表见 src/params/judge-config.js）。
+  property.config({ judge: DEFAULT_JUDGE_CONFIG })
   // 注入基础 age 数据（空，原型演示属性操作为主）。
   property.initial({ age: {}, total: {} })
   // 交互循环。

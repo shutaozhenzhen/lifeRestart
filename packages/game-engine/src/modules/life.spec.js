@@ -22,6 +22,8 @@ import { check } from '../condition/index.js'
 import { clone, createRng } from '../functions/util.js'
 // 日志器（注入测试）。
 import { createLogger } from '../functions/logger.js'
+// i18n（评价键 J_* → 可见文案）。
+import { loadLocale, t } from '../i18n/index.js'
 // fixture。
 import { AGE_DATA, TOTAL } from '../fixtures/property.fixture.js'
 import { TALENTS, EVENTS } from '../fixtures/talent-event.fixture.js'
@@ -332,6 +334,34 @@ describe('life - summary/statistics', () => {
     const list = life.achievements
     // 数组。
     expect(Array.isArray(list)).toBe(true)
+  })
+
+  test('config() 默认注入内置评价分档（回归：曾整列 undefined → 前端显示 —）', async () => {
+    // 复刻前端：不传 propertyConfig。
+    const life2 = new Life({ data: buildData(), random: createRng(42) })
+    // 初始化 + 空参配置。
+    await life2.initial()
+    life2.config()
+    // 开局并推进一年（让 H* 派生值有真实数据）。
+    life2.remake([])
+    life2.start({ CHR: 5 })
+    life2.next()
+    // summary 七个键都必须有评价（而不是 undefined）。
+    const summary = life2.summary
+    for (const key of ['SUM', 'HAGE', 'HCHR', 'HINT', 'HSTR', 'HMNY', 'HSPR']) {
+      expect(summary[key], `${key} 缺少评价`).toBeDefined()
+      expect(summary[key].judge, `${key} 评价键`).toMatch(/^J_/)
+      expect(typeof summary[key].value, `${key} 数值`).toBe('number')
+    }
+    // statistics 四个键同理（此前 CLI 自带的表漏了 CACHV/RTLT/REVT）。
+    const stats = life2.statistics
+    for (const key of ['TMS', 'CACHV', 'RTLT', 'REVT']) {
+      expect(stats[key], `${key} 缺少评价`).toBeDefined()
+      expect(stats[key].judge, `${key} 评价键`).toMatch(/^J_/)
+    }
+    // 评价键能被 i18n 翻成可见文案（前端据此显示"优秀/极佳"而不是 J_Good）。
+    const locale = loadLocale('zh-cn')
+    expect(t(locale, summary.SUM.judge)).not.toBe(summary.SUM.judge)
   })
 })
 
