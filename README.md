@@ -190,11 +190,26 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 534 | condition / compat / params / 各模块 / mod / ai / cli / data-loader |
-| `packages/frontend` | 57 | 前端异常回归：markRaw 私有字段、引擎页守卫、Mod 状态持久化、日志链路；日志报告/导出/异常捕获/自动播放器（纯函数 + 注入式依赖） |
+| `packages/game-engine` | 535 | condition / compat / params / 各模块 / mod / ai / cli / data-loader |
+| `packages/frontend` | 125 | 纯逻辑（日志报告/导出/异常捕获/自动播放/storage/mods-state）+ **7 个页面组件测试** + 全流程集成 |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
-| **合计** | **603** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
+| **合计** | **672** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
+
+### 前端测试分层（2026-10 补齐）
+
+| 层次 | 文件 | 说明 |
+|---|---|---|
+| 接线契约 | `src/life/create-life.spec.js` | 应用侧构造 Life 的**唯一入口**（`src/life/create-life.js`）：断言空参 `config()` 下 summary/statistics 非空、remake 前可读点数、注入 storage 后跨实例保留 |
+| 全流程集成 | `src/router/flow.spec.js` | 真实路由 + 真实组件 + 真实 store 走完 主页→天赋→属性→轨迹→总结；含"死亡后不再推进""总结页无 —""重开次数落盘"等历史 bug 的端到端回归 |
+| 页面组件 | `src/views/*.spec.js` | 7 个 view 各自的行为与数据契约（点数/天赋选择/状态栏/自动播放/评价与统计/日志等级/Mod 开关与 AI 配置） |
+| 公共组件 | `src/components/LogDock.spec.js` | 悬浮窗：角标、自动展开、过滤、复制/下载、清空、快捷键 |
+| 纯逻辑 | `src/utils/*.spec.js`、`src/stores/game.spec.js` | 注入式依赖，Node 环境即可跑 |
+
+- 组件测试用 **happy-dom** + `@vue/test-utils`：在文件首行加 `// @vitest-environment happy-dom` 即可
+  （默认仍是 node 环境，纯逻辑用例不受影响）。
+- 公共装置见 `src/test-utils/setup.js`（fixture 数据、内存 localStorage、fetch 打桩、`mountView` 复用当前 pinia）。
+- 断言原则：页面测试断言**值/文案/状态**，而不是"没抛异常"。
 
 源码为**逐行中文注释**。测试在 CI 中自动执行：`.github/workflows/test.yml`（push/PR 触发，
 `pnpm install --frozen-lockfile` + `pnpm test`），与 Pages 部署 workflow 相互独立。
