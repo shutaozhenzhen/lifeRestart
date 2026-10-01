@@ -44,6 +44,8 @@ export const DEFAULT_JUDGE_CONFIG = {
   TMS: [[0, 1, 'J_Normal'], [1, 2, 'J_Good'], [5, 3, 'J_Great']],
   // ---- 成就达成数 ----
   CACHV: [[0, 1, 'J_Normal'], [1, 2, 'J_Good'], [5, 3, 'J_Great']],
+  // ---- 成就达成率 ----
+  RACHV: RATIO,
   // ---- 天赋收集率 ----
   RTLT: RATIO,
   // ---- 事件收集率 ----

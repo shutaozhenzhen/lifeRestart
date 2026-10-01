@@ -614,9 +614,10 @@ class Life {
 
   // 统计信息。
   get statistics() {
-    // 读取统计属性评价。
+    // 读取统计属性评价（含成就达成率 RACHV —— 模拟/总结都要用）。
     return this.#getJudges(this.PropertyTypes.TMS,
-      this.PropertyTypes.CACHV, this.PropertyTypes.RTLT, this.PropertyTypes.REVT)
+      this.PropertyTypes.CACHV, this.PropertyTypes.RACHV,
+      this.PropertyTypes.RTLT, this.PropertyTypes.REVT)
   }
 
   // 成就列表（按达成时间排序）。
