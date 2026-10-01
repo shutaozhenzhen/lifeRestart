@@ -134,6 +134,11 @@ AI 连接测试经 vite 代理 `/ai-proxy` 转发到本地代理服务。
 一键**复制**或**下载**报告（`liferestart-log-YYYYMMDD-HHmmss.txt`），报告含页面地址、路由、UA、视口、
 游戏与 Mod 状态以及全部日志（缓冲上限 1000 条）。快捷键 `Ctrl+Shift+L` 随时收放。
 
+**总结页**（`/summary`）：属性评价（总评 / 最高年龄 / 五项最高值，带「普通·优秀·极佳」分档）、
+收集统计（成就达成数 / 天赋选择率 / 事件收集率）与成就列表（165 条，固定高度滚动区）。
+重开次数、达成成就、已见事件带 `lifeRestart:` 前缀写入 localStorage，**跨局累积**
+（重开次数在点「↻ 重开」时 +1）。引擎 `storage` 未注入时会退回内存实现，这些数据会恒为空。
+
 ## 在线版（GitHub Pages）
 
 线上试玩：**<https://shutaozhenzhen.github.io/lifeRestart/>**
