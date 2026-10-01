@@ -275,6 +275,24 @@ export function format(str, ...args) {
 // mulberry32 种子随机数生成器。
 // 相同 seed 产生完全相同的随机数序列，用于可复现的测试/对比。
 //
+// 算法（mulberry32，32 位状态 + 32 位输出，公有领域实现，约 5 行）：
+//   1. 状态 a 取 seed 的 32 位无符号形式（`seed >>> 0`）——这就是"种子"进入算法的方式。
+//   2. 每次调用先推进状态：a = (a + 0x6D2B79F5) | 0
+//      （0x6D2B79F5 是定点黄金比例增量，保证状态在 2^32 上均匀遍历 → **周期 2^32**）
+//   3. 对状态做两轮"位混淆"得到输出：
+//        t = imul(a ^ (a >>> 15), 1 | a)
+//        t = (t + imul(t ^ (t >>> 7), 61 | t)) ^ t
+//        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+//      （乘 1|a / 61|t 让低位参与高位，异或右移做雪崩；除法把 32 位整数映射到 [0,1)）
+//
+// 性质与取舍：
+//   - 确定性：同一 seed + **同一调用顺序** → 完全相同的序列（所以"复现"要连用户操作一起复现）。
+//   - 周期 2^32（40 亿个数），远大于一局人生（几千次抽取）与批量模拟（几十万次）。
+//   - 快（无浮点累加、无查表），单局上百年的模拟开销可忽略。
+//   - 统计质量足以支撑游戏判定/蒙特卡洛；**不是密码学安全**随机（不要用于密钥/令牌）。
+//   - 一个实例一条流：要"互不影响的独立流"就用不同 seed 或多个实例（本项目的做法：
+//     批量模拟里同一个 RNG 同时驱动游戏内随机与策略随机，保证整局可复现）。
+//
 // @param {number} seed - 种子（任意 32 位整数）
 // @returns {() => number} 随机函数，每次调用返回 [0,1) 的伪随机数
 export function createRng(seed) {
@@ -290,4 +308,34 @@ export function createRng(seed) {
     // 返回 [0,1) 的伪随机数。
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
+}
+
+// #createSeed
+// 生成一个随机种子（32 位无符号整数，与 createRng 的定义域一致）。
+//
+// 用途：每局游戏开始时生成并**显示出来**，玩家把种子记下来就能复现同一局
+// （createRng(seed) 会给出完全相同的随机序列）。
+//
+// @param {Function} [random] - 随机源（缺省 Math.random；测试可注入定值）
+// @returns {number} 0 ~ 4294967295 的整数种子
+export function createSeed(random = Math.random) {
+  // 取值域上均匀分布的 32 位无符号整数。
+  return Math.floor(random() * 4294967296) >>> 0
+}
+
+// #normalizeSeed
+// 规范化用户输入的种子：空 → null（表示"未指定，请随机生成"），非法 → null，
+// 合法 → 32 位无符号整数（负数/小数/字符串都能安全转换，避免 NaN 传进 createRng）。
+//
+// @param {*} value - 用户输入（数字/字符串/空）
+// @returns {number|null} 规范化后的种子
+export function normalizeSeed(value) {
+  // 空值表示未指定。
+  if (value === null || value === undefined || value === '') return null
+  // 数值化。
+  const num = Number(value)
+  // 非法值（NaN / ±Infinity）按未指定处理。
+  if (!Number.isFinite(num)) return null
+  // 截断为整数并规范到 32 位无符号（-1 → 4294967295）。
+  return Math.trunc(num) >>> 0
 }

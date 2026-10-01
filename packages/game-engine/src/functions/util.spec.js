@@ -20,7 +20,7 @@ import {
   clone, max, min, sum, average,
   weightRandom, listRandom,
   getListValuesMap, mapConvert, getConvertedMap, mapSet, deepMapSet,
-  deepGet, format, createRng,
+  deepGet, format, createRng, createSeed, normalizeSeed,
 } from './util.js'
 
 // ========== 测试组 1：clone ==========
@@ -422,5 +422,70 @@ describe('util - createRng', () => {
       expect(v).toBeGreaterThanOrEqual(0)
       expect(v).toBeLessThan(1)
     }
+  })
+
+  test('种子规范化：负数/小数/字符串与 createRng 定义域一致（32 位无符号）', () => {
+    // 负数 -1 与 4294967295 规范化后是同一个种子 → 序列必须一致。
+    const negative = createRng(-1)
+    const unsigned = createRng(4294967295)
+    for (let i = 0; i < 5; i++) expect(negative()).toBe(unsigned())
+    // 小数 1.9 → 1（Math.imul 前先 >>> 0 会截断，这里显式验证等价性）。
+    const decimal = createRng(1.9)
+    const integer = createRng(1)
+    for (let i = 0; i < 5; i++) expect(decimal()).toBe(integer())
+  })
+})
+
+// ========== 测试组 10：createSeed / normalizeSeed ==========
+describe('util - createSeed / normalizeSeed', () => {
+  test('createSeed：返回 32 位无符号整数，且随随机源变化', () => {
+    // 注入定值随机源，结果可精确预期。
+    expect(createSeed(() => 0)).toBe(0)
+    expect(createSeed(() => 0.5)).toBe(2147483648)
+    // 上界：random 取 1 时按 4294967295 截断（Math.floor(4294967296) >>> 0 = 0，这里用 0.999…）。
+    expect(createSeed(() => 0.99999999)).toBeLessThan(4294967296)
+    // 默认随机源：是整数且在合法区间内。
+    const seed = createSeed()
+    expect(Number.isInteger(seed)).toBe(true)
+    expect(seed).toBeGreaterThanOrEqual(0)
+    expect(seed).toBeLessThan(4294967296)
+  })
+
+  test('createSeed 产出的种子可直接喂给 createRng（可复现）', () => {
+    // 用固定随机源得到一个种子。
+    const seed = createSeed(() => 0.123456)
+    // 两个同种子 RNG 序列一致。
+    const a = createRng(seed)
+    const b = createRng(seed)
+    for (let i = 0; i < 5; i++) expect(a()).toBe(b())
+  })
+
+  test('normalizeSeed：空 → null（表示未指定）', () => {
+    // 三种空值。
+    expect(normalizeSeed(undefined)).toBeNull()
+    expect(normalizeSeed(null)).toBeNull()
+    expect(normalizeSeed('')).toBeNull()
+  })
+
+  test('normalizeSeed：非法值 → null（避免 NaN 传进 createRng）', () => {
+    // 非数字字符串。
+    expect(normalizeSeed('abc')).toBeNull()
+    // Infinity。
+    expect(normalizeSeed(Infinity)).toBeNull()
+    // NaN。
+    expect(normalizeSeed(NaN)).toBeNull()
+  })
+
+  test('normalizeSeed：数字/数字字符串 → 32 位无符号整数', () => {
+    // 普通数字。
+    expect(normalizeSeed(42)).toBe(42)
+    // 数字字符串（来自输入框）。
+    expect(normalizeSeed('123456')).toBe(123456)
+    // 0 是合法种子（不能被当成"未指定"）。
+    expect(normalizeSeed(0)).toBe(0)
+    // 小数截断。
+    expect(normalizeSeed(7.9)).toBe(7)
+    // 负数规范到无符号域。
+    expect(normalizeSeed(-1)).toBe(4294967295)
   })
 })
