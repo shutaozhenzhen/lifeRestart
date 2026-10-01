@@ -253,8 +253,29 @@ describe('GameView', () => {
     expect(wrapper.find('.jump').exists()).toBe(false)
   })
 
-  test('重开：清空选择并回主页', async () => {
+  test('状态栏显示本局随机种子，点击可复制（用于复现）', async () => {
     // 准备。
+    const store = await readyStore()
+    // 挂载。
+    const { wrapper } = mountView(GameView)
+    await flushPromises()
+    // 显示的种子 = store 记录的种子。
+    expect(wrapper.find('.seed').text()).toContain(String(store.seed))
+    // 打桩剪贴板。
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText }, userAgent: 'test-agent' })
+    // 点击复制。
+    await wrapper.find('.seed').trigger('click')
+    await flushPromises()
+    // 复制内容就是种子。
+    expect(writeText).toHaveBeenCalledWith(String(store.seed))
+    // 有"已复制"反馈。
+    expect(wrapper.find('.seed').text()).toContain('已复制')
+    // 还原全局。
+    vi.unstubAllGlobals()
+  })
+
+  test('重开：清空选择并回主页', async () => {    // 准备。
     const store = await readyStore()
     // 挂载。
     const { wrapper, router } = mountView(GameView)

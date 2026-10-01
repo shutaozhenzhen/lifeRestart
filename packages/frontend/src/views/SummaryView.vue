@@ -13,6 +13,8 @@ import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
 // i18n：评价键（J_Normal/J_Good/J_Great）→ 可见文案。
 import { loadLocale, t } from 'game-engine/src/i18n/index.js'
+// 复制文本（剪贴板 API + 回退）。
+import { copyText } from '../utils/log-export.js'
 
 // 路由。
 const router = useRouter()
@@ -112,12 +114,49 @@ function remake() {
   // 回主页。
   router.push('/')
 }
+
+// 本局随机种子（mulberry32；显示出来供复现）。
+const seed = computed(() => store.seed)
+// 复现反馈。
+const replayMessage = ref('')
+
+// #replay
+// 用同一颗种子重开一局（随机序列相同 → 同样的抽卡与事件；再做出同样的选择即可复现整局）。
+async function replay() {
+  // 重新初始化（种子不变）。
+  const ok = await store.restartWithSeed(seed.value)
+  // 失败（无数据引用，例如直接刷新本页）。
+  if (!ok) {
+    // 提示并回主页手动填种子。
+    replayMessage.value = `无法直接复现，请回主页在「随机种子」填入 ${seed.value}`
+    // 结束。
+    return
+  }
+  // 进天赋页（同种子下抽卡结果与上一局一致）。
+  router.push('/talent')
+}
+
+// #copySeed
+// 复制种子到剪贴板。
+async function copySeed() {
+  // 复制。
+  const ok = await copyText(String(seed.value ?? ''))
+  // 反馈。
+  replayMessage.value = ok ? `已复制种子 ${seed.value}` : '复制失败（可手动选中复制）'
+}
 </script>
 
 <template>
   <div class="summary">
     <h2 class="title">人生总结</h2>
     <p class="subtitle">重开次数：{{ times }}</p>
+    <!-- 本局随机种子：复现的关键信息（同种子 + 同样选择 = 同一局） -->
+    <p class="seed-line">
+      随机种子：<b class="seed-value">{{ seed }}</b>
+      <button class="btn tiny" @click="copySeed">复制</button>
+      <button class="btn tiny" @click="replay">用此种子再来一局</button>
+    </p>
+    <p v-if="replayMessage" class="seed-msg">{{ replayMessage }}</p>
 
     <!-- 属性评价 -->
     <div class="section">
@@ -170,6 +209,29 @@ function remake() {
   padding: 30px;
   max-width: 520px;
   margin: 0 auto;
+}
+/* 随机种子行（复现用） */
+.seed-line {
+  text-align: center;
+  font-size: 12px;
+  color: #9aa7bd;
+  margin-top: 6px;
+}
+.seed-value {
+  color: #ffd700;
+  font-family: ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.seed-msg {
+  text-align: center;
+  font-size: 12px;
+  color: #4d9de0;
+  margin-top: 4px;
+}
+.btn.tiny {
+  padding: 3px 8px;
+  font-size: 11px;
+  margin-left: 6px;
 }
 .title {
   text-align: center;

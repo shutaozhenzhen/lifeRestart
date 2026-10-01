@@ -133,6 +133,54 @@ describe('HomeView', () => {
     expect(router.currentRoute.value.path).toBe('/simulate')
   })
 
+  test('随机种子：填入指定值 → 本局按该种子初始化（可复现）', async () => {
+    // 准备。
+    stubFetchOk()
+    // 挂载。
+    const { wrapper } = mountView(HomeView)
+    // store。
+    const store = useGameStore()
+    // 填入种子（字符串来自输入框，会被规范化）。
+    await wrapper.find('#seed-input').setValue('20261001')
+    // 开始。
+    await findButton(wrapper, '立即重开').trigger('click')
+    await flushPromises()
+    // 使用了指定种子。
+    expect(store.seed).toBe(20261001)
+  })
+
+  test('随机种子：留空 → 自动生成 32 位整数种子', async () => {
+    // 准备。
+    stubFetchOk()
+    // 挂载。
+    const { wrapper } = mountView(HomeView)
+    // store。
+    const store = useGameStore()
+    // 输入框为空（默认）。
+    expect(wrapper.find('#seed-input').element.value).toBe('')
+    // 开始。
+    await findButton(wrapper, '立即重开').trigger('click')
+    await flushPromises()
+    // 自动生成了合法种子。
+    expect(Number.isInteger(store.seed)).toBe(true)
+    expect(store.seed).toBeGreaterThanOrEqual(0)
+    expect(store.seed).toBeLessThan(4294967296)
+  })
+
+  test('随机种子：清空按钮可用，且页面上有复现提示', async () => {
+    // 准备。
+    stubFetchOk()
+    // 挂载。
+    const { wrapper } = mountView(HomeView)
+    // 提示文案。
+    expect(wrapper.find('.seed-hint').text()).toContain('同一种子')
+    // 填入后清空。
+    await wrapper.find('#seed-input').setValue('42')
+    await findButton(wrapper, '清空').trigger('click')
+    // 已清空。
+    expect(wrapper.find('#seed-input').element.value).toBe('')
+  })
+
   test('加载中：按钮禁用并显示"加载中..."（防重复开局）', async () => {
     // 永不返回的 fetch：让 startGame 停在 await 上。
     globalThis.fetch = () => new Promise(() => {})

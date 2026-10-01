@@ -179,6 +179,8 @@ describe('全流程集成', () => {
     await flushPromises()
     // 到总结页。
     expect(router.currentRoute.value.path).toBe('/summary')
+    // 本局随机种子可见（复现入口：同种子 + 同样选择 = 同一局）。
+    expect(wrapper.find('.seed-value').text()).toBe(String(store.seed))
     // 属性评价：七行且不是空值（历史 bug：整列 —）。
     const rows = wrapper.findAll('.summary .section .row')
     expect(rows.length).toBeGreaterThanOrEqual(7)

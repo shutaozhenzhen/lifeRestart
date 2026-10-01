@@ -10,11 +10,27 @@ import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
 // 自动播放器（定时器逻辑独立模块，有单测）。
 import { createAutoPlayer, PLAY_SPEEDS, DEFAULT_SPEED, speedDelay } from '../utils/auto-play.js'
+// 复制文本（剪贴板 API + 回退，与日志导出共用）。
+import { copyText } from '../utils/log-export.js'
 
 // 路由。
 const router = useRouter()
 // 游戏 store。
 const store = useGameStore()
+
+// 种子复制反馈（短暂显示"已复制"）。
+const seedCopied = ref(false)
+
+// #copySeed
+// 复制本局随机种子（用于复现：填到主页种子框里）。
+async function copySeed() {
+  // 复制（失败时也给出提示，避免看起来没反应）。
+  const ok = await copyText(String(store.seed ?? ''))
+  // 反馈。
+  seedCopied.value = ok
+  // 1.5 秒后恢复原文案。
+  setTimeout(() => { seedCopied.value = false }, 1500)
+}
 
 // 属性面板条目（名称 + 键）。
 const propsList = [
@@ -258,6 +274,11 @@ function summary() {
           >{{ s.label }}</button>
         </span>
         <span class="spacer"></span>
+        <!-- 本局随机种子：点一下复制，用于复现这一局（mulberry32，见主页种子输入框） -->
+        <button class="seed" :title="`本局随机种子 ${store.seed}（点击复制）`" @click="copySeed">
+          <template v-if="seedCopied">已复制种子 {{ store.seed }}</template>
+          <template v-else>种子 {{ store.seed }}</template>
+        </button>
         <button class="btn" :disabled="!isEnd" @click="summary">总结</button>
         <button class="btn" @click="restart">重开</button>
       </div>
@@ -380,6 +401,22 @@ function summary() {
 }
 .spacer {
   flex: 1;
+}
+/* 本局随机种子（点一下复制，供复现） */
+.seed {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  border: 1px dashed #3a4a6e;
+  border-radius: 10px;
+  background: transparent;
+  color: #8f9bb3;
+  cursor: pointer;
+}
+.seed:hover {
+  color: #ffd700;
+  border-color: #ffd700;
 }
 .speed {
   display: inline-flex;

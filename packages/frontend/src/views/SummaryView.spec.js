@@ -167,4 +167,49 @@ describe('SummaryView', () => {
     // 页头显示次数。
     expect(wrapper.find('.subtitle').text()).toContain('重开次数：3')
   })
+
+  test('显示本局随机种子，可复制（复现入口）', async () => {
+    // 造一局。
+    const store = await playedStore()
+    // 记录种子。
+    const seed = store.seed
+    // 挂载。
+    const { wrapper } = mountView(SummaryView)
+    await flushPromises()
+    // 页面显示种子。
+    expect(wrapper.find('.seed-value').text()).toBe(String(seed))
+    // 打桩剪贴板。
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText }, userAgent: 'test-agent' })
+    // 点复制。
+    await findButton(wrapper, '复制').trigger('click')
+    await flushPromises()
+    // 复制内容 = 种子。
+    expect(writeText).toHaveBeenCalledWith(String(seed))
+    // 反馈。
+    expect(wrapper.find('.seed-msg').text()).toContain('已复制')
+    // 还原。
+    vi.unstubAllGlobals()
+  })
+
+  test('用此种子再来一局：种子不变、状态重置、跳天赋页', async () => {
+    // 造一局。
+    const store = await playedStore()
+    // 记录种子与旧局痕迹。
+    const seed = store.seed
+    expect(store.started).toBe(true)
+    // 挂载。
+    const { wrapper, router } = mountView(SummaryView)
+    await flushPromises()
+    // 点「用此种子再来一局」。
+    await findButton(wrapper, '用此种子再来一局').trigger('click')
+    await flushPromises()
+    // 同一颗种子。
+    expect(store.seed).toBe(seed)
+    // 已重置为新一局（未开局、轨迹清空）。
+    expect(store.started).toBe(false)
+    expect(store.history).toEqual([])
+    // 回到天赋页（同种子下抽卡顺序与上一局一致）。
+    expect(router.currentRoute.value.path).toBe('/talent')
+  })
 })
