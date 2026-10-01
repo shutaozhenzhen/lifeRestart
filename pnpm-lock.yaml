@@ -40,6 +40,10 @@ importers:
         version: 3.2.7(@types/debug@4.1.13)(@types/node@26.2.0)(happy-dom@20.14.5)(lightningcss@1.33.0)(supports-color@7.2.0)
 
   packages/game-engine:
+    dependencies:
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.3
     devDependencies:
       vitest:
         specifier: ^4.1.10
@@ -1237,6 +1241,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   filelist@1.0.6:
     resolution: {integrity: sha512-5giy2PkLYY1cP39p17Ech+2xlpTRL9HLspOfEgm0L6CwBXBTgsK5ou0JtzYuepxkaQ/tvhCFIJ5uXo0OrM2DxA==}
@@ -3503,6 +3510,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
+
+  fflate@0.8.3: {}
 
   filelist@1.0.6:
     dependencies:
