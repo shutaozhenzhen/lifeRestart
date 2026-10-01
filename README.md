@@ -138,7 +138,10 @@ AI 连接测试经 vite 代理 `/ai-proxy` 转发到本地代理服务。
 游戏与 Mod 状态以及全部日志（缓冲上限 1000 条）。快捷键 `Ctrl+Shift+L` 随时收放。
 
 **总结页**（`/summary`）：属性评价（总评 / 最高年龄 / 五项最高值，带「普通·优秀·极佳」分档）、
-收集统计（成就达成数 / 天赋选择率 / 事件收集率）与成就列表（165 条，固定高度滚动区）。
+收集统计（成就达成数 `n / 总数`、成就达成率、天赋选择率、事件收集率——比率统一显示为百分比）、
+成就列表（165 条，固定高度滚动区），以及本局**随机种子**（复制 / 「用此种子再来一局」）。
+统计项的标签与格式化集中在 `src/utils/statistics-view.js`：**引擎新增统计项而这里没登记会被测试直接拦住**
+（`RACHV` 就曾因两份手写清单漏配而在页面上裸显示成 `RACHV 0.006060606060606061`）。
 重开次数、达成成就、已见事件带 `lifeRestart:` 前缀写入 localStorage，**跨局累积**
 （重开次数在点「↻ 重开」时 +1）。引擎 `storage` 未注入时会退回内存实现，这些数据会恒为空。
 
@@ -254,10 +257,10 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
 | `packages/game-engine` | 620 | condition（含**编译缓存**）/ compat / params / 各模块 / mod / ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 166 | 纯逻辑（日志/自动播放/storage/mods-state/**数据加载**/**模拟驱动器**）+ **8 个页面组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
+| `packages/frontend` | 175 | 纯逻辑（日志/自动播放/storage/mods-state/**数据加载**/**模拟驱动器**/**统计展示**）+ **8 个页面组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
-| **合计** | **798** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
+| **合计** | **807** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
 
 ### 前端测试分层（2026-10 补齐）
 
