@@ -67,6 +67,39 @@ describe('mods-state 持久化（刷新保留回归）', () => {
     expect(mods.find(m => m.name === 'lifeRestart-data').enabled).toBe(true)
   })
 
+  test('loadModsState 每次返回全新结构：调用方就地修改不污染模块状态（回归）', () => {
+    // storage（空）。
+    const s = memStorage()
+    // 第一次读取（Mod 管理页会拿它初始化 removedMods / enabled）。
+    const first = loadModsState(s)
+    // 调用方就地修改（删除 Mod 时页面正是这样 push 的）。
+    first.removed.push('base-mod')
+    first.enabled['fun-mod'] = true
+    // 第二次读取：必须干净。
+    // 旧实现 `{ ...DEFAULT_STATE }` 是浅拷贝，把模块级 removed 数组的引用交了出去，
+    // 于是这里会读到 ['base-mod']，导致"删掉的 Mod 永远消失"（即使 storage 是空的）。
+    const second = loadModsState(s)
+    expect(second.removed).toEqual([])
+    expect(second.enabled).toEqual({})
+    // 引用必须彼此独立。
+    expect(second).not.toBe(first)
+    expect(second.removed).not.toBe(first.removed)
+    expect(second.enabled).not.toBe(first.enabled)
+  })
+
+  test('保存的删除记录不会串到后续读取里', () => {
+    // storage。
+    const s = memStorage()
+    // 删除 base-mod 并落盘。
+    saveModsState({ mods: MOD_LIST.filter(m => m.name !== 'base-mod'), removed: ['base-mod'] }, s)
+    // 第一次加载：过滤掉 base-mod。
+    expect(applyModsState(MOD_LIST, loadModsState(s)).some(m => m.name === 'base-mod')).toBe(false)
+    // 清空 storage（等价于用户清缓存/换设备）。
+    s.removeItem('modsState')
+    // 再加载：base-mod 必须回来（旧实现会被模块级残留数组继续过滤掉）。
+    expect(applyModsState(MOD_LIST, loadModsState(s)).some(m => m.name === 'base-mod')).toBe(true)
+  })
+
   test('保存启用后加载 → 刷新后保持启用', () => {
     // storage。
     const s = memStorage()
