@@ -61,8 +61,11 @@ pnpm test                   # 等价于 node scripts/test-all.mjs
 node scripts/test-all.mjs   # 没有 pnpm 的环境用这条（npm test 亦可）
 
 # 只跑单个包（参数按目录名/包名子串匹配）
-node scripts/test-all.mjs game-engine   # 引擎 531 用例
-node scripts/test-all.mjs frontend      # 前端 13 用例（异常回归）
+node scripts/test-all.mjs game-engine   # 引擎 534 用例
+node scripts/test-all.mjs frontend      # 前端 57 用例（异常回归 + 日志/轨迹）
+
+# 带参数透传给 vitest：`--` 之后的参数原样传给 vitest（不改包过滤）
+node scripts/test-all.mjs game-engine -- -t 属性页先读数
 ```
 
 ## CLI 原型
@@ -182,11 +185,11 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 531 | condition / compat / params / 各模块 / mod / ai / cli / data-loader |
-| `packages/frontend` | 13 | 前端异常回归：markRaw 私有字段、引擎页守卫、Mod 状态持久化、日志链路 |
+| `packages/game-engine` | 534 | condition / compat / params / 各模块 / mod / ai / cli / data-loader |
+| `packages/frontend` | 57 | 前端异常回归：markRaw 私有字段、引擎页守卫、Mod 状态持久化、日志链路；日志报告/导出/异常捕获/自动播放器（纯函数 + 注入式依赖） |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
-| **合计** | **556** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
+| **合计** | **603** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
 
 源码为**逐行中文注释**。测试在 CI 中自动执行：`.github/workflows/test.yml`（push/PR 触发，
 `pnpm install --frozen-lockfile` + `pnpm test`），与 Pages 部署 workflow 相互独立。
@@ -198,6 +201,11 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 - **GitHub Pages 在线版**：已上线 <https://shutaozhenzhen.github.io/lifeRestart/>（阶段五延伸，纯静态托管；AI 不可用）
 - **工程化基线（2026-09-30）**：lockfile 重算 + 全流程 `--frozen-lockfile`；根目录 `pnpm test`
   不再依赖全局 pnpm；新增测试 CI；上游 `remake` 已重构为 TS monorepo（数据路径未变，Data Mod 无需重转）
+- **可观测性与轨迹页（2026-10-01）**：全局日志悬浮窗（任意页面一键导出报告，含 `window` 未捕获
+  异常与 Vue 渲染异常；缓冲上限 1000、`Ctrl+Shift+L` 收放）；轨迹页改为逐年完整轨迹 + 自动播放
+  （三档速度、结束自动停）。同时修复：属性分配页白屏（`#initialData` 未初始化）、死亡后仍继续推进
+  （`markRaw` 实例 + `computed` 非响应式依赖 → 缓存 `false`）、`doEvent(null)` 记 warn 刷屏；
+  根测试入口支持 `--` 透传带值参数（如 `-t <pattern>`）
 
 ## 数据来源与许可
 
