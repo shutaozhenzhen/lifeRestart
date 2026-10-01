@@ -245,6 +245,30 @@ describe('life - doTalent/doEvent', () => {
     // 空流水。
     expect(content).toEqual([])
   })
+
+  test('doEvent(null) returns empty content and logs trace (not warn)', async () => {
+    // 捕获全部级别日志。
+    const lines = []
+    // sink：逐级别收集。
+    const sink = {
+      trace: (m) => lines.push(['trace', m]),
+      debug: (m) => lines.push(['debug', m]),
+      info: (m) => lines.push(['info', m]),
+      warn: (m) => lines.push(['warn', m]),
+      error: (m) => lines.push(['error', m]),
+    }
+    // 独立实例（注入日志器）。
+    const life2 = new Life({ data: buildData(), random: createRng(42), logger: createLogger({ level: 'trace', sink }) })
+    // 初始化 + 配置。
+    await life2.initial()
+    life2.config({})
+    // 无候选事件：空流水且不抛。
+    expect(life2.doEvent(null)).toEqual([])
+    // 回归：曾经走 event.do(null) 抛错 → 记 warn，老年阶段刷屏。
+    expect(lines.some(([level]) => level === 'warn')).toBe(false)
+    // 但留下了 trace 记录（可观测性不丢）。
+    expect(lines.some(([level, m]) => level === 'trace' && m.includes('无候选事件'))).toBe(true)
+  })
 })
 
 // ========== 测试组 5：random/talentRandom ==========

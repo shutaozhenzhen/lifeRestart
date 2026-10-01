@@ -408,6 +408,15 @@ class Life {
   doEvent(eventId) {
     // trace 入口。
     this.#log.trace(`→ doEvent(${eventId})`)
+    // 无候选事件（该年龄没有可触发事件）：属正常情况，直接返回空流水。
+    // 早期实现会走下面的 try → event.do(null) 抛错 → 记 warn，导致老年阶段刷屏；
+    // 这里提前返回并降为 trace，保持日志干净（真实异常仍由 catch 记 warn）。
+    if (eventId === null || eventId === undefined) {
+      // trace：无候选事件。
+      this.#log.trace('doEvent: 无候选事件，跳过')
+      // 空流水。
+      return []
+    }
     // 事件不存在则跳过。
     try {
       // 记录执行（debug）。
