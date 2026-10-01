@@ -139,4 +139,46 @@ describe('simulation-runner', () => {
     // 最佳一局存在。
     expect(stats.best).not.toBeNull()
   })
+
+  test('策略透传：固定特性 → 每局特性一致；固定属性 → 分配严格等于给定值', async () => {
+    // 数据（取两个真实存在的天赋 ID）。
+    const data = buildFixtureData()
+    const fixed = Object.keys(data.talents).slice(0, 2)
+    // 跑 3 局：特性固定、属性固定。
+    const { results, stats } = await runSimulation({
+      // 数据。
+      data,
+      // 局数。
+      runs: 3,
+      // 种子。
+      seed: 11,
+      // 策略。
+      strategy: {
+        talents: { mode: 'fixed', fixed },
+        allocation: { mode: 'fixed', fixed: { CHR: 5, INT: 5, STR: 5, MNY: 5 } },
+      },
+      // 让出。
+      yieldTo: async () => {},
+    })
+    // 每局特性与分配都一致。
+    for (const r of results) {
+      expect(r.talents).toEqual(fixed)
+      expect(r.allocation).toEqual({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+      // 名称来自全量天赋表。
+      expect(r.talentDetails[0].name).toBe(data.talents[fixed[0]].name)
+    }
+    // 聚合里记录了策略（导出报告要用）。
+    expect(stats.strategy.talents.fixed).toEqual(fixed)
+    expect(stats.strategy.allocation.mode).toBe('fixed')
+  })
+
+  test('策略缺省 → 两条轴随机（与旧行为一致）', async () => {
+    // 不传策略。
+    const { results, stats } = await runSimulation({ data: buildFixtureData(), runs: 2, seed: 12, yieldTo: async () => {} })
+    // 随机模式。
+    expect(stats.strategy.talents.mode).toBe('random')
+    expect(stats.strategy.allocation.mode).toBe('random')
+    // 每局都有特性。
+    for (const r of results) expect(r.talents.length).toBeGreaterThan(0)
+  })
 })

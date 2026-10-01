@@ -9,7 +9,7 @@
  *   4. 可复现：填种子后结果标注 seed
  *   5. 返回主页
  */
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import SimulateView from './SimulateView.vue'
 import { resetApp, mountView, stubFetchOk, stubFetchFail, waitFor } from '../test-utils/setup.js'
@@ -40,10 +40,10 @@ describe('SimulateView', () => {
     // 等数据加载完成。
     await flushPromises()
     // 局数档位（10/30/50/100）。
-    const chips = wrapper.findAll('.chip')
+    const chips = wrapper.findAll('.chip.run')
     expect(chips.length).toBe(4)
     // 默认 30 高亮。
-    expect(wrapper.find('.chip.active').text()).toBe('30')
+    expect(wrapper.find('.chip.run.active').text()).toBe('30')
     // 种子输入与快速模式开关。
     expect(wrapper.find('input.num.wide').exists()).toBe(true)
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(true)
@@ -63,7 +63,7 @@ describe('SimulateView', () => {
     // 用快速模式（演示数据，保证毫秒级）。
     await wrapper.find('input[type="checkbox"]').setValue(true)
     // 局数改为 10（更快）。
-    await wrapper.findAll('.chip')[0].trigger('click')
+    await wrapper.findAll('.chip.run')[0].trigger('click')
     await flushPromises()
     // 开始。
     await findButton(wrapper, '开始模拟').trigger('click')
@@ -94,9 +94,9 @@ describe('SimulateView', () => {
     await flushPromises()
     // 快速模式 + 100 局（足够长以便中途停止）。
     await wrapper.find('input[type="checkbox"]').setValue(true)
-    await wrapper.findAll('.chip')[3].trigger('click')
+    await wrapper.findAll('.chip.run')[3].trigger('click')
     await flushPromises()
-    expect(wrapper.findAll('.chip')[3].text()).toBe('100')
+    expect(wrapper.findAll('.chip.run')[3].text()).toBe('100')
     // 开始。
     await findButton(wrapper, '开始模拟').trigger('click')
     // 等进度动起来（至少完成一局）。
@@ -119,7 +119,7 @@ describe('SimulateView', () => {
     await flushPromises()
     await wrapper.find('input[type="checkbox"]').setValue(true)
     // 只跑 10 局。
-    await wrapper.findAll('.chip')[0].trigger('click')
+    await wrapper.findAll('.chip.run')[0].trigger('click')
     // 填种子。
     await wrapper.find('input.num.wide').setValue('42')
     await flushPromises()
@@ -154,5 +154,102 @@ describe('SimulateView', () => {
     await flushPromises()
     // 跳转。
     expect(router.currentRoute.value.path).toBe('/')
+  })
+
+  test('固定特性：可搜索挑选，跑局后结果使用所选特性', async () => {
+    // 挂载 + 快速模式。
+    const { wrapper } = mountView(SimulateView)
+    await flushPromises()
+    await wrapper.find('input[type="checkbox"]').setValue(true)
+    // 只跑 10 局。
+    await wrapper.findAll('.chip.run')[0].trigger('click')
+    // 切到固定特性（页面上有两个「固定」按钮：特性/属性，用专属 class 区分）。
+    await wrapper.findAll('.talent-mode')[1].trigger('click')
+    await flushPromises()
+    // 天赋列表出现。
+    const items = wrapper.findAll('.talent-item')
+    expect(items.length).toBeGreaterThan(0)
+    // 挑第一个（用 checkbox 的 change 事件，等价用户勾选）。
+    const firstName = items[0].find('.t-name').text()
+    await items[0].find('input[type="checkbox"]').setValue(true)
+    await flushPromises()
+    // 已选计数与提示。
+    expect(wrapper.text()).toContain('已选 1/3')
+    // 搜索过滤：输入一个不存在的关键字 → 无匹配（搜索框是 .num.wide.search，随机种子是 .num.wide）。
+    await wrapper.find('input.num.wide.search').setValue('绝不可能匹配的天赋名')
+    await flushPromises()
+    expect(wrapper.findAll('.talent-item').length).toBe(0)
+    // 清空关键字恢复。
+    await wrapper.find('input.num.wide.search').setValue('')
+    await flushPromises()
+    // 开始模拟。
+    await findButton(wrapper, '开始模拟').trigger('click')
+    await waitFor(() => wrapper.find('.overview').exists())
+    await flushPromises()
+    // 结果里策略标注为固定，并渲染所选天赋名。
+    expect(wrapper.text()).toContain('特性：固定（')
+    expect(wrapper.find('.overview').text()).toContain('局')
+    expect(wrapper.text()).toContain(firstName)
+  })
+
+  test('固定属性：手填四项并在结果中生效；超预算给出警告', async () => {
+    // 挂载 + 快速模式。
+    const { wrapper } = mountView(SimulateView)
+    await flushPromises()
+    await wrapper.find('input[type="checkbox"]').setValue(true)
+    // 只跑 10 局。
+    await wrapper.findAll('.chip.run')[0].trigger('click')
+    // 切到固定属性（专属 class）。
+    await wrapper.findAll('.alloc-mode')[1].trigger('click')
+    await flushPromises()
+    // 四个属性数字输入（.alloc 专属 class：页面上还有一个"局数"数字输入）。
+    const nums = wrapper.findAll('input.num.alloc')
+    expect(nums.length).toBe(4)
+    // 填 10/10/10/10（合计 40 > 20 → 超预算）。
+    for (const input of nums) await input.setValue(10)
+    await flushPromises()
+    // 合计提示。
+    expect(wrapper.text()).toContain('合计 40 点')
+    // 跑。
+    await findButton(wrapper, '开始模拟').trigger('click')
+    await waitFor(() => wrapper.find('.overview').exists())
+    await flushPromises()
+    // 超预算 → 引擎警告被展示出来（不静默）。
+    expect(wrapper.find('.warn-block').text()).toContain('超过可用 20')
+    // 缩减后的分配合计应正好用完可用点数（最佳一局里能看到）。
+    expect(wrapper.text()).toContain('属性分配')
+  })
+
+  test('导出：CSV / JSON / Markdown 三个按钮都会触发下载并给出反馈', async () => {
+    // 挂载 + 快速模式 + 10 局。
+    const { wrapper } = mountView(SimulateView)
+    await flushPromises()
+    await wrapper.find('input[type="checkbox"]').setValue(true)
+    await wrapper.findAll('.chip.run')[0].trigger('click')
+    await findButton(wrapper, '开始模拟').trigger('click')
+    await waitFor(() => wrapper.find('.overview').exists())
+    await flushPromises()
+    // 打桩下载链路。
+    const createObjectURL = vi.fn(() => 'blob:sim')
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(createObjectURL)
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const clickSpy = vi.spyOn(window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    // 导出按钮存在（三种格式：MD 是 Markdown 的缩写）。
+    expect(findButton(wrapper, 'CSV').exists()).toBe(true)
+    expect(findButton(wrapper, 'JSON').exists()).toBe(true)
+    expect(findButton(wrapper, 'MD').exists()).toBe(true)
+    // 逐个导出。
+    for (const [label, ext] of [['CSV', 'csv'], ['JSON', 'json'], ['MD', 'md']]) {
+      await findButton(wrapper, label).trigger('click')
+      await flushPromises()
+      // 反馈里带文件名与扩展名。
+      expect(wrapper.find('.ok').text()).toContain(`已导出 ${label}`)
+      expect(wrapper.find('.ok').text()).toContain(`.${ext}`)
+    }
+    // 每次都真的建了 Blob URL 并点击了锚点。
+    expect(createObjectURL).toHaveBeenCalledTimes(3)
+    expect(clickSpy).toHaveBeenCalledTimes(3)
+    // 还原。
+    vi.restoreAllMocks()
   })
 })

@@ -34,6 +34,7 @@ function defaultYield() {
 // @param {number} [params.runs] - 局数
 // @param {number|null} [params.seed] - 随机种子（null → 不可复现）
 // @param {number} [params.chunk] - 每批局数（越小越"跟手"，但批间开销略增）
+// @param {object} [params.strategy] - 策略（随机/固定特性与属性；缺省都随机）
 // @param {Function} [params.onProgress] - (done, total, lastResult) => void
 // @param {Function} [params.shouldStop] - 返回 true 则中止（取消）
 // @param {Function} [params.yieldTo] - 让出主线程的实现（测试注入）
@@ -44,6 +45,7 @@ export async function runSimulation({
   runs = 30,
   seed = null,
   chunk = 1,
+  strategy,
   onProgress,
   shouldStop,
   yieldTo,
@@ -56,8 +58,8 @@ export async function runSimulation({
   // 初始化 + 配置（空参走引擎内置 judge，summary/statistics 才有值）。
   await life.initial()
   life.config()
-  // 模拟器。
-  const simulator = createSimulator({ life, random: rng })
+  // 模拟器（策略：随机/固定特性与属性；天赋表用于固定特性校验与取名）。
+  const simulator = createSimulator({ life, random: rng, strategy, talentTable: data?.talents })
   // 计时。
   const startedAt = Date.now()
   // 取消标记。
