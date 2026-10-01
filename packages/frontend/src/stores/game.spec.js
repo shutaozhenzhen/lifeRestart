@@ -28,6 +28,8 @@ import { computed } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 // store。
 import { useGameStore } from './game.js'
+// 测试装置（真实数据：独立模块，node 环境也能用）。
+import { loadRealData } from '../test-utils/real-data.js'
 // 演示数据（fixture，与 HomeView buildData 同源）。
 import { AGE_DATA, TOTAL } from 'game-engine/src/fixtures/property.fixture.js'
 import { TALENTS, EVENTS } from 'game-engine/src/fixtures/talent-event.fixture.js'
@@ -392,19 +394,22 @@ describe('gameStore 人生轨迹累积', () => {
 })
 
 // #playLife
-// 用指定种子完整走一局（抽卡 → 选前 N 个 → 分配 → 逐年到死），返回可比较的"人生签名"。
+// 用指定种子完整走一局（抽卡 → 选前 N 个 → 分配 → 逐年推进），返回可比较的"人生签名"。
 // 关键：**操作顺序固定**，这样才能验证"同种子 → 同一局"。
 //
 // @param {number|null} seed - 种子
-// @param {number} [picks] - 选几个天赋
-// @returns {Promise<object>} { seed, signature, history, propertys }
-async function playLife(seed, picks = 3) {
+// @param {object} [options]
+// @param {number} [options.picks] - 选几个天赋
+// @param {object} [options.data] - 游戏数据（缺省 fixture）
+// @param {number} [options.maxYears] - 推进年数上限
+// @returns {Promise<object>} { seed, signature, history, propertys, poolOrder }
+async function playLife(seed, { picks = 3, data = buildData(), maxYears = 15 } = {}) {
   // 全新 pinia（= 重开一局）。
   setActivePinia(createPinia())
   // store。
   const store = useGameStore()
-  // 初始化（注入种子）。
-  await store.init(buildData(), { seed })
+  // 初始化（注入种子 + 数据）。
+  await store.init(data, { seed })
   // 抽卡 + 固定选前 picks 张。
   store.drawTalents()
   // 池顺序（种子的可观测效果之一）。
@@ -414,13 +419,13 @@ async function playLife(seed, picks = 3) {
   store.confirmTalents()
   // 开局（固定分配，排除分配差异）。
   store.begin({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
-  // 拉满生命：fixture 数据里 0 岁就有致死事件，不拉满的话两局都"0 岁即死"，
-  // 那样的可复现性断言是假通过（两边都空）。
+  // 拉满生命：fixture 数据里 0 岁就有致死事件；真实数据下也不需要额外保命，
+  // 但统一拉满可以让"逐年流水"覆盖更多年份，使签名更具区分度。
   store.life.request('PROPERTY').set('LIF', 100)
   // 同步镜像（isEnd/lif）。
   store.sync()
-  // 逐年推进（封顶 15 年：fixture 的年龄表很短，够产生多年随机流水）。
-  for (let i = 0; i < 15 && !store.isEnd; i++) store.next()
+  // 逐年推进（到死或到上限）。
+  for (let i = 0; i < maxYears && !store.isEnd; i++) store.next()
   // 人生签名：每年流水 + 终局属性（完全可比）。
   // 条目结构：字符串（格式化文案）或对象 { type, description, postEvent? }。
   const signature = store.history
@@ -428,6 +433,19 @@ async function playLife(seed, picks = 3) {
     .join('\n')
   // 返回。
   return { seed: store.seed, signature, history: store.history, propertys: { ...store.propertys }, poolOrder }
+}
+
+// #playRealLife
+// 用**真实数据**跑一局（501 年龄 / 184 天赋 / 1720 事件）。
+// 「种子是否真的生效」「复现是否真的成立」这类结论必须基于真实数据：
+// fixture 只有 4 个候选天赋、每个年龄单一事件，随机性几乎不可观测（只看得到顺序）。
+//
+// @param {number|null} seed - 种子
+// @param {object} [options] - 透传（picks/maxYears）
+// @returns {Promise<object>} 人生签名
+async function playRealLife(seed, options = {}) {
+  // 真实数据（loadRealData 返回新副本，用例间不串味）。
+  return playLife(seed, { maxYears: 120, data: loadRealData(), ...options })
 }
 
 describe('gameStore 随机种子与复现', () => {
@@ -472,10 +490,10 @@ describe('gameStore 随机种子与复现', () => {
     expect(Number.isInteger(bad.seed)).toBe(true)
   })
 
-  test('R：同种子 + 同操作 = 完全同一局（复现闭环）', async () => {
-    // 同一颗种子跑两次。
-    const first = await playLife(20261001)
-    const second = await playLife(20261001)
+  test('R：真实数据下同种子 + 同操作 = 完全同一局（复现闭环）', async () => {
+    // 同一颗种子跑两次（真实数据）。
+    const first = await playRealLife(20261001)
+    const second = await playRealLife(20261001)
     // 种子一致。
     expect(second.seed).toBe(first.seed)
     // 抽卡池顺序也一致（随机序列从头就相同）。
@@ -486,26 +504,37 @@ describe('gameStore 随机种子与复现', () => {
     expect(second.propertys).toEqual(first.propertys)
     // 签名里必须有真实内容（中文文案），否则"两边都是空"会假通过。
     expect(first.signature).toMatch(/[\u4e00-\u9fa5]/)
-    // 而且确实推进了多年。
-    expect(first.history.length).toBeGreaterThan(1)
-  })
+    // 而且确实过了很多年（真实数据下寿命通常几十年）。
+    expect(first.history.length).toBeGreaterThan(10)
+  }, 120000)
 
-  test('S：不同种子 → 随机序列不同（抽卡池顺序变化，种子确实生效）', async () => {
-    // 两颗不同种子。
-    const a = await playLife(11111)
-    const b = await playLife(22222)
+  test('S：真实数据下不同种子 → 完全不同的人生（种子确实驱动事件抽取）', async () => {
+    // 两颗不同种子（真实数据：1720 事件 / 184 天赋，随机性可观测）。
+    const a = await playRealLife(11111)
+    const b = await playRealLife(22222)
     // 种子不同。
     expect(a.seed).not.toBe(b.seed)
-    // 抽卡池顺序随种子变化（种子真的驱动了引擎随机）。
+    // 抽卡池顺序不同。
     expect(a.poolOrder).not.toEqual(b.poolOrder)
-    // 说明：fixture 数据只有 4 个候选天赋、每个年龄单一事件，随机性只体现在**顺序**上，
-    // 所以这里不断言"人生不同"。真实数据（185 天赋 / 1720 事件）下不同种子会跑出不同流水，
-    // 这一点由 CLI/模拟页与引擎级测试（util.spec：不同种子 → 不同序列）覆盖。
-  })
+    // 人生流水的**签名不同**（真实数据下这是有意义的断言：
+    // 事件抽取走种子 RNG，不同种子会选出不同事件 → 内容不同）。
+    expect(a.signature).not.toBe(b.signature)
+  }, 120000)
+
+  test('S2：真实数据下同种子跨进程式重跑仍一致（连续两轮不漂移）', async () => {
+    // 先跑一轮记录（40 年足够验证"种子是唯一输入"，不必等整局，控制用例耗时）。
+    const first = await playRealLife(777, { maxYears: 40 })
+    // 再跑另外两颗种子（打乱 RNG 使用历史），最后回到 777。
+    await playRealLife(888, { maxYears: 40 })
+    await playRealLife(999, { maxYears: 40 })
+    const again = await playRealLife(777, { maxYears: 40 })
+    // 中间跑过别的种子也不影响：种子是唯一输入，没有全局残留状态。
+    expect(again.signature).toBe(first.signature)
+  }, 120000)
 
   test('T：restartWithSeed 用同一颗种子重开（总结页「复现此局」）', async () => {
-    // 先跑一局并记录签名。
-    const first = await playLife(777)
+    // 先跑一局并记录签名（真实数据）。
+    const first = await playRealLife(777)
     // 取当前 store（playLife 最后留下的那个）做"复现"。
     const store = useGameStore()
     // 记录当前种子。
@@ -519,7 +548,7 @@ describe('gameStore 随机种子与复现', () => {
     expect(store.started).toBe(false)
     expect(store.history).toEqual([])
     expect(store.selectedTalents).toEqual([])
-  })
+  }, 120000)
 
   test('U：无数据引用时 restartWithSeed 返回 false（不崩）', async () => {
     // 未初始化的 store。

@@ -24,8 +24,8 @@ import { router } from '../router/index.js'
 import App from '../App.vue'
 // store。
 import { useGameStore } from '../stores/game.js'
-// 测试装置。
-import { installLocalStorage, stubFetchOk, stubFetchFail } from '../test-utils/setup.js'
+// 测试装置（真实数据 / fixture 降级 / 安装内存 localStorage）。
+import { installLocalStorage, stubFetchOk, stubFetchFail, stubFetchReal } from '../test-utils/setup.js'
 
 // #findButton
 // 按可见文本找一个按钮（中文标签稳定，避免给页面加测试专用属性）。
@@ -47,16 +47,18 @@ function findButton(wrapper, text) {
 //
 // @param {object} [options]
 // @param {boolean} [options.dataFail] - 数据请求失败（验证降级路径）
+// @param {boolean} [options.realData] - 用**真实数据**跑（501 年龄 / 184 天赋 / 1720 事件）
 // @returns {Promise<{wrapper: object, store: object}>} 挂载结果
-async function mountApp({ dataFail = false } = {}) {
+async function mountApp({ dataFail = false, realData = false } = {}) {
   // 全新 pinia。
   const pinia = createPinia()
   // 激活（组件外 useGameStore 也一致）。
   setActivePinia(pinia)
   // 干净 localStorage（引擎 storage 适配器会用）。
   installLocalStorage()
-  // 数据请求：正常返回 fixture / 或故意失败。
+  // 数据请求：真实数据 / fixture / 故意失败。
   if (dataFail) stubFetchFail()
+  else if (realData) stubFetchReal()
   else stubFetchOk()
   // 起始路由。
   await router.push('/')
@@ -83,9 +85,9 @@ afterEach(() => {
 })
 
 describe('全流程集成', () => {
-  test('主页 → 天赋 → 属性 → 轨迹 → 总结：主流程贯通且数据非空', async () => {
-    // 挂载应用。
-    const { wrapper, store } = await mountApp()
+  test('主页 → 天赋 → 属性 → 轨迹 → 总结：主流程贯通且数据非空（**真实数据**）', async () => {
+    // 挂载应用（真实数据：501 年龄 / 184 天赋 / 1720 事件 —— 与线上一致）。
+    const { wrapper, store } = await mountApp({ realData: true })
 
     // ── 阶段 1：主页开始新人生 ──
     expect(router.currentRoute.value.path).toBe('/')
@@ -95,8 +97,10 @@ describe('全流程集成', () => {
     await flushPromises()
     // 引擎就绪。
     expect(store.isReady).toBe(true)
-    // 数据源是原版数据（fixture 被打桩成"原版"路径）。
+    // 数据源是原版数据（真实数据文件）。
     expect(store.dataSource).toContain('lifeRestart-data')
+    // 种子已分配（真实数据下同样每局一颗）。
+    expect(Number.isInteger(store.seed)).toBe(true)
     // 已跳天赋页。
     expect(router.currentRoute.value.path).toBe('/talent')
 
@@ -156,13 +160,16 @@ describe('全流程集成', () => {
     // 轨迹页逐年渲染出「N 岁」。
     expect(wrapper.findAll('.year').length).toBe(store.history.length)
 
-    // 推进到人生结束（fixture 数据下死亡事件较早；给足上限）。
-    for (let i = 0; i < 40 && !store.isEnd; i++) {
+    // 推进到人生结束（真实数据下单局可达上百岁；给足上限，假定时器不耗真实时间）。
+    for (let i = 0; i < 200 && !store.isEnd; i++) {
       await vi.advanceTimersByTimeAsync(900)
     }
     await flushPromises()
-    // 人生已结束（fixture 的 0 岁/早期死亡事件）。
+    // 人生已结束（LIF 归零）。
     expect(store.isEnd).toBe(true)
+    // 真实数据下随机分配也可能活得很短（属性差 → 早期事件致死），
+    // 因此只要求"跑过若干年"而不是"长寿"。
+    expect(store.history.length).toBeGreaterThan(2)
     // 结束那一刻的轨迹条数。
     const frozen = store.history.length
     // 再推进多个间隔：自动播放必须已停止 → 轨迹不再增长（历史 bug：死亡后还在继续）。
@@ -200,13 +207,16 @@ describe('全流程集成', () => {
 
     // 卸载（避免残留的定时器/watch 影响其它用例）。
     wrapper.unmount()
-  })
+  }, 180000)
 
   test('路由守卫：未初始化直进引擎页 → 重定向回主页', async () => {
     // 全新 pinia（未初始化任何一局）。
     const pinia = createPinia()
     setActivePinia(pinia)
     installLocalStorage()
+    // 先回到主页（避免"已经在该路由"导致 push 变成 no-op 而跳过守卫 → 用例间相互影响）。
+    await router.push('/')
+    await flushPromises()
     // 直接跳到需要引擎的页面。
     await router.push('/game')
     await flushPromises()

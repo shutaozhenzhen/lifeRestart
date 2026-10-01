@@ -1,11 +1,15 @@
 /**
  * test-utils/setup — 前端测试公共装置（**仅测试使用**，不被应用代码引用，不会进构建产物）
  *
- * 提供四件事：
- *   1. buildFixtureData()：与 HomeView 同源的演示数据（fixture）。
- *   2. installLocalStorage()：内存 localStorage（Node 环境无该全局）。
- *   3. stubFetchOk/Fail()：拦截 HomeView 的 5 个数据请求。
- *   4. resetApp()/createTestRouter()/mountView()：每个用例的干净 pinia + 路由 + 挂载。
+ * 提供五件事：
+ *   1. buildFixtureData()：与 HomeView 同源的演示数据（fixture，**只用于快速用例**）。
+ *   2. loadRealData()/stubFetchReal()：**真实数据**（501 年龄 / 184 天赋 / 1720 事件）。
+ *      涉及"随机种子是否真的生效""复现是否真的成立"这类结论，必须用真实数据 ——
+ *      fixture 只有 4 个候选天赋且每个年龄单一事件，随机性几乎不可观测。
+ *      （实现放在 test-utils/real-data.js：那个模块不依赖 DOM/路由，node 环境的单测也能直接引用。）
+ *   3. installLocalStorage()：内存 localStorage（Node 环境无该全局）。
+ *   4. stubFetchOk/Fail()：拦截 HomeView 的 5 个数据请求。
+ *   5. resetApp()/createTestRouter()/mountView()：每个用例的干净 pinia + 路由 + 挂载。
  */
 
 // 挂载组件。
@@ -22,6 +26,8 @@ import { TALENTS, EVENTS } from 'game-engine/src/fixtures/talent-event.fixture.j
 import { ACHIEVEMENTS } from 'game-engine/src/fixtures/achievement-character.fixture.js'
 // 线上路由表（测试复用同一份，避免分叉）。
 import { routes } from '../router/index.js'
+// 真实数据加载（独立模块，见其文件头说明）。
+export { loadRealData, stubFetchReal } from './real-data.js'
 
 // #buildFixtureData
 // 组装演示数据（结构 = HomeView.fetchOriginalData / buildData 的返回值）。

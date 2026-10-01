@@ -285,6 +285,33 @@ describe('simulate.cli - 真实数据路径', () => {
     expect(stats.age.max).toBeGreaterThanOrEqual(stats.age.min)
   }, 60000)
 
+  test('真实数据：同种子两次导出逐局完全一致（复现，不依赖前端）', async () => {
+    // 同参数跑两次（真实数据 + 同一颗种子）。
+    const first = await runCli({ argv: ['--runs', '1', '--seed', '42', '--mods', MODS_DIR, '--format', 'json'], stdout: () => {} })
+    const second = await runCli({ argv: ['--runs', '1', '--seed', '42', '--mods', MODS_DIR, '--format', 'json'], stdout: () => {} })
+    // 解析（meta.generatedAt 是导出时间戳，不参与比较）。
+    const a = JSON.parse(first.text)
+    const b = JSON.parse(second.text)
+    // 逐局结果完全一致：寿命、天赋、分配、总评、流水条数。
+    expect(a.results).toEqual(b.results)
+    // 聚合也一致。
+    expect(a.stats.age).toEqual(b.stats.age)
+    expect(a.stats.best).toEqual(b.stats.best)
+    // 种子如实记录。
+    expect(a.meta.seed).toBe(42)
+    // 这一局确实是有内容的真实人生（不是 0 岁空局）。
+    expect(a.results[0].age).toBeGreaterThan(1)
+  }, 120000)
+
+  test('真实数据：不同种子 → 不同人生（种子驱动天赋抽取与事件选择）', async () => {
+    // 两颗种子各跑一局。
+    const a = JSON.parse((await runCli({ argv: ['--runs', '1', '--seed', '1', '--mods', MODS_DIR, '--format', 'json'], stdout: () => {} })).text)
+    const b = JSON.parse((await runCli({ argv: ['--runs', '1', '--seed', '2', '--mods', MODS_DIR, '--format', 'json'], stdout: () => {} })).text)
+    // 人生指纹：寿命 + 天赋 + 事件数 + 总评（真实数据下必然不同）。
+    const fingerprint = (p) => p.results.map((r) => `${r.age}:${r.talents.join('-')}:${r.events}:${r.sum}`)
+    expect(fingerprint(a)).not.toEqual(fingerprint(b))
+  }, 120000)
+
   test('fixture 数据规模较小（用于快速冒烟）', () => {
     // 构造。
     const data = buildFixtureData()
