@@ -53,3 +53,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# 生成的 Mod 静态资源（scripts/sync-mods.mjs 同步，不入库）
+packages/frontend/public/mods/
+

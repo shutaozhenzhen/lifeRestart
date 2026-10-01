@@ -26,6 +26,8 @@ import { createLogger } from 'game-engine/src/functions/logger.js'
 import { formatLogLine, countByLevel, collectLogMeta, buildLogReport } from '../utils/log-report.js'
 // Mod 启停状态（报告里带上，便于复现）。
 import { loadModsState } from '../utils/mods-state.js'
+// Mod 代码执行（网页版运行时；与 CLI 共用引擎内核）。
+import { executeModCodes } from '../utils/mod-runtime.js'
 
 // 日志缓冲上限：1000 条在 trace 级下也够覆盖一次完整复现（每条约 100 字节）。
 const LOG_BUFFER_LIMIT = 1000
@@ -84,6 +86,8 @@ export const useGameStore = defineStore('game', {
     errorSeq: 0,
     // 当前数据源描述（主页选原版数据 / fixture 降级时写入，报告里带上）。
     dataSource: '',
+    // Mod 运行时信息（这局执行了哪些 Mod 代码、有没有失败；报告里带上）。
+    modsRuntime: null,
     // 本局随机种子（mulberry32；页面显示 + 报告带上，同种子可复现同一局）。
     seed: null,
     // 本局使用的原始数据（markRaw，供「同种子复现」重开一局；不参与渲染）。
@@ -114,7 +118,9 @@ export const useGameStore = defineStore('game', {
     // @param {object} data - 游戏数据
     // @param {object} [options]
     // @param {number|string|null} [options.seed] - 本局随机种子（缺省自动生成；给值则复现）
-    async init(data, { seed } = {}) {
+    // @param {object} [options.hooks] - Mod 钩子总线（网页版由 mod-runtime 创建）
+    // @param {Array<{name: string, code: string}>} [options.modCodes] - Mod 代码（Life 建好后执行）
+    async init(data, { seed, hooks, modCodes } = {}) {
       // 重置单局状态：从主页重新开始时，不能残留上一局的进度标记与选择。
       this.started = false
       this.talentsConfirmed = false
@@ -154,6 +160,8 @@ export const useGameStore = defineStore('game', {
         random: createRng(this.seed),
         // 事件总线。
         emit: (tag, payload) => this.handleEngineEvent(tag, payload),
+        // Mod 钩子总线（Mod 里 gameAPI.on 注册的钩子由它触发）。
+        hooks,
       }))
       // 保留原始数据引用（markRaw 保护，避免 Vue 深度代理 3.5MB 数据），供"同种子复现"重开一局。
       this.rawData = markRaw(data)
@@ -161,6 +169,18 @@ export const useGameStore = defineStore('game', {
       await this.life.initial()
       // 配置。
       this.life.config()
+      // 执行 Mod 代码：**必须在 Life 建好之后**——Mod 可注册新属性/读写参数/注册钩子，
+      // 而 gameAPI.param 需要 Life 的参数注册表（浏览器侧就是靠这一步把 Mod 支持接上的）。
+      if (Array.isArray(modCodes) && modCodes.length > 0) {
+        // 执行（异常隔离：单个 Mod 失败不影响游戏）。
+        const { executed, errors } = executeModCodes({ codes: modCodes, hooks, life: this.life, data, log: logger })
+        // 记运行信息（日志报告里能看到"这局跑了哪些 Mod"）。
+        this.modsRuntime = { loaded: executed, errors }
+        // 日志。
+        this.pushLog('info', `[UI][mods] 已执行 Mod 代码：${executed.join(', ') || '（无）'}${errors.length ? `（失败 ${errors.length} 个）` : ''}`)
+        // 失败逐条记（便于按报告排障）。
+        errors.forEach((e) => this.pushLog('warn', `[UI][mods] ${e}`))
+      }
       // 标记完成。
       this.initialized = true
       // 同步属性。

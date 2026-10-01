@@ -69,6 +69,8 @@ async function mountApp({ dataFail = false, realData = false } = {}) {
   const wrapper = mount(App, { global: { plugins: [pinia, router] } })
   // 等首屏渲染。
   await flushPromises()
+  // 记录挂载实例（afterEach 里统一卸载，失败路径也不残留）。
+  mountedWrapper = wrapper
   // 返回（data 供用例注入测试专用数据）。
   return { wrapper, store: useGameStore(), data }
 }
@@ -79,10 +81,21 @@ beforeEach(() => {
   vi.useRealTimers()
 })
 
-// 每个用例后：清理假定时器，避免污染其它用例。
+// 记录最近挂载的应用实例：用例失败时也要卸载，否则残留的组件/定时器会串味到下一个用例
+// （曾导致"守卫用例"看到上一个用例留下的路由，push 变成 no-op → 假失败）。
+let mountedWrapper = null
+
+// 每个用例后：清理假定时器 + 卸载应用。
 afterEach(() => {
   // 假定时器可能仍在运行。
   vi.useRealTimers()
+  // 卸载（失败路径也执行）。
+  if (mountedWrapper) {
+    // 卸载。
+    mountedWrapper.unmount()
+    // 置空。
+    mountedWrapper = null
+  }
 })
 
 describe('全流程集成', () => {
@@ -131,7 +144,9 @@ describe('全流程集成', () => {
     // 修复前：这里读 store.propertyPoints 会抛 TypeError（#initialData 未建立）。
     expect(() => store.propertyPoints).not.toThrow()
     // 可用点数 = 默认 20 + 天赋加成。
-    expect(store.propertyPoints).toBeGreaterThanOrEqual(20)
+    // 注意：真实数据里存在**负加成**天赋，所以这里只断言"可读且为正"；
+    // 真正的恒等式是下一行"页面文本 === store 值"。
+    expect(store.propertyPoints).toBeGreaterThan(0)
     // 页面把点数渲染成了文本（不是 —）。
     expect(wrapper.find('.points').text()).toBe(String(store.propertyPoints))
 

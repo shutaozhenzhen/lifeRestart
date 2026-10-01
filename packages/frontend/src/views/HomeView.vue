@@ -21,16 +21,23 @@ const activeMode = ref('custom')
 const seedInput = ref('')
 
 // 组装游戏数据：数据源由 lifeRestart-data Mod 的启停状态决定。
-// 加载逻辑（含降级与 dataSource 标注）统一在 utils/game-data.js —— 模拟页共用同一份实现。
+// 加载逻辑（含降级、Mod 运行时与 dataSource 标注）统一在 utils/game-data.js —— 模拟页共用同一份实现。
 async function buildData() {
-  // 按优先级加载（原版数据 → fixture 降级），并拿到来源描述。
-  const { data, dataSource, degraded } = await loadGameData()
+  // 按优先级加载（原版数据 → fixture 降级）+ 前端 Mod 运行时（合并数据、返回待执行代码）。
+  const bundle = await loadGameData()
   // 页面日志：数据源（降级用 warn，便于在日志面板一眼看到）。
-  store.pushLog(degraded ? 'warn' : 'info', `[UI][home] 数据源：${dataSource}`)
+  store.pushLog(bundle.degraded ? 'warn' : 'info', `[UI][home] 数据源：${bundle.dataSource}`)
   // 记录数据源摘要（日志报告头部会带上，便于判断问题是否与数据相关）。
-  store.dataSource = dataSource
-  // 返回数据。
-  return data
+  store.dataSource = bundle.dataSource
+  // Mod 运行信息：加载了哪些、有没有错误（都要让人看得见）。
+  if (bundle.mods) {
+    // 错误逐条。
+    for (const e of bundle.mods.errors) store.pushLog('warn', `[UI][mods] ${e}`)
+    // 已加载清单。
+    if (bundle.mods.loaded.length > 0) store.pushLog('info', `[UI][mods] 已加载 Mod：${bundle.mods.loaded.join(', ')}（代码 ${bundle.mods.codes} 个）`)
+  }
+  // 返回整包（data/hooks/modCodes 都要给 store.init）。
+  return bundle
 }
 
 // 选择模式。
@@ -48,7 +55,9 @@ async function startGame() {
   // 标记加载。
   loading.value = true
   // 初始化引擎：种子留空 → 自动生成（随后显示在轨迹页/总结页），填了就用它复现。
-  await store.init(await buildData(), { seed: seedInput.value })
+  // hooks/modCodes 来自前端 Mod 运行时（Mod 代码在 Life 建好后执行 → 可注册属性与钩子）。
+  const bundle = await buildData()
+  await store.init(bundle.data, { seed: seedInput.value, hooks: bundle.hooks, modCodes: bundle.modCodes })
   // 日志：本局种子（复现的关键信息）。
   store.pushLog('info', `[UI][home] 本局随机种子：${store.seed}`)
   // 跳转到天赋选择页（名人模式暂同路径，Step 后续分离）。

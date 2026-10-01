@@ -7,6 +7,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 // 权限说明。
 import { PERMISSION_LABELS } from 'game-engine/src/mod/permissions.js'
+// Mod 目录（原型清单 ↔ 服务器上发现的真实 Mod 合并）与发现接口。
+import { loadModCatalog } from '../utils/mod-catalog.js'
+import { discoverMods } from '../utils/mod-runtime.js'
 // 游戏 store（页面操作行为日志：进入页面/按钮操作都记入日志面板）。
 import { useGameStore } from '../stores/game.js'
 // Mod 启停/删除状态持久化（纯函数，可测试）。
@@ -17,10 +20,19 @@ const router = useRouter()
 // 游戏 store。
 const gameStore = useGameStore()
 
-// 页面挂载：记录进入 Mod 管理页。
-onMounted(() => {
+// 页面挂载：记录进入 + **发现服务器上的真实 Mod**（有 code.js/数据的才算能跑）。
+// 发现失败（离线/没跑 sync-mods）时目录仍由原型清单兜底，界面不会空。
+onMounted(async () => {
   // 记录（UI 日志常显，不随引擎级别过滤）。
   gameStore.pushLog('info', '[UI][mods] 进入 Mod 管理页')
+  // 发现（超时/404 都会降级为空列表）。
+  const { mods: found, errors } = await discoverMods()
+  // 错误记为 warn（报告里可见为什么不生效）。
+  for (const e of errors) gameStore.pushLog('warn', `[UI][mods] ${e}`)
+  // 合并出真实目录。
+  mods.value = loadModCatalog(found)
+  // 日志：实际可用的 Mod。
+  gameStore.pushLog('info', `[UI][mods] 服务器上发现 ${found.length} 个 Mod：${found.map((m) => m.name).join(', ') || '（无）'}`)
 })
 
 // （loadModsState/saveModsState/applyModsState 已抽到 utils/mods-state.js，可单元测试）
@@ -66,8 +78,9 @@ const MOD_LIST = [
 const savedState = loadModsState()
 // 已删除（非 system）Mod 名（持久化）。
 const removedMods = ref(savedState.removed || [])
-// Mod 列表：默认集合过滤已删除 + 应用保存的启停状态（applyModsState 纯函数，刷新后保留用户选择）。
-const mods = ref(applyModsState(MOD_LIST, savedState))
+// Mod 列表：原型清单兜底（发现结果在 onMounted 里合并进来，真实 manifest 覆盖展示字段）。
+// 启停/删除状态经 localStorage 持久化（applyModsState 纯函数，刷新后保留用户选择）。
+const mods = ref(loadModCatalog([]))
 
 // AI 配置（localStorage 持久化，与 ai-mod 开关解耦：配置仅保存，启用才生效）。
 const aiConfig = ref(loadAIConfig())
