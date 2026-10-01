@@ -253,11 +253,11 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 618 | condition（含**编译缓存**）/ compat / params / 各模块 / mod / ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 165 | 纯逻辑（日志/自动播放/storage/mods-state/**数据加载**/**模拟驱动器**）+ **8 个页面组件测试** + 全流程集成 + **种子复现闭环** |
+| `packages/game-engine` | 620 | condition（含**编译缓存**）/ compat / params / 各模块 / mod / ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
+| `packages/frontend` | 166 | 纯逻辑（日志/自动播放/storage/mods-state/**数据加载**/**模拟驱动器**）+ **8 个页面组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
-| **合计** | **795** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
+| **合计** | **798** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
 
 ### 前端测试分层（2026-10 补齐）
 
@@ -271,7 +271,11 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 
 - 组件测试用 **happy-dom** + `@vue/test-utils`：在文件首行加 `// @vitest-environment happy-dom` 即可
   （默认仍是 node 环境，纯逻辑用例不受影响）。
-- 公共装置见 `src/test-utils/setup.js`（fixture 数据、内存 localStorage、fetch 打桩、`mountView` 复用当前 pinia）。
+- 公共装置见 `src/test-utils/setup.js`（fixture 数据、内存 localStorage、fetch 打桩、`mountView` 复用当前 pinia）；
+  **真实数据**加载见 `src/test-utils/real-data.js`（直读 `public/data/*.json`，node 环境也能用）。
+- **数据选择原则**：涉及「种子是否生效 / 能否复现 / 寿命分布」这类结论的用例**一律用真实数据**
+  （501 年龄 / 184 天赋 / 1720 事件），fixture 只用于接线类快速用例——fixture 只有 4 个候选天赋、
+  每个年龄单一事件，随机性几乎不可观测（只看得到顺序）。全流程集成测试的主流程也跑真实数据。
 - 断言原则：页面测试断言**值/文案/状态**，而不是"没抛异常"。
 
 源码为**逐行中文注释**。测试在 CI 中自动执行：`.github/workflows/test.yml`（push/PR 触发，
