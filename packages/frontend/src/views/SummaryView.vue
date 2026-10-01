@@ -51,10 +51,10 @@ const times = computed(() => (store.life ? store.life.times : 0))
 function remake() {
   // 次数 +1。
   store.life.times = store.life.times + 1
-  // 清空状态。
+  // 清空状态（含完整轨迹，见 store.clearTrace）。
   store.selectedTalents = []
   store.allocation = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
-  store.content = []
+  store.clearTrace()
   // 回主页。
   router.push('/')
 }

@@ -80,15 +80,21 @@ async function buildData() {
       const data = await fetchOriginalData()
       // 页面日志：数据源。
       store.pushLog('info', `[UI][home] 数据源：lifeRestart-data 原版数据（${Object.keys(data.talents).length} 天赋 / ${Object.keys(data.events).length} 事件）`)
+      // 记录数据源摘要（日志报告头部会带上，便于判断问题是否与数据相关）。
+      store.dataSource = `lifeRestart-data（${Object.keys(data.talents).length} 天赋 / ${Object.keys(data.events).length} 事件）`
       // 返回。
       return data
     } catch (e) {
       // 页面日志：降级。
       store.pushLog('warn', `[UI][home] 原版数据加载失败（${e.message}），回退 fixture 演示数据`)
+      // 记录降级原因。
+      store.dataSource = `fixture 演示数据（原版数据加载失败：${e.message}）`
     }
   } else {
     // 页面日志：被禁用。
     store.pushLog('info', '[UI][home] lifeRestart-data 已禁用，使用 fixture 演示数据')
+    // 记录禁用状态。
+    store.dataSource = 'fixture 演示数据（lifeRestart-data 已禁用）'
   }
   // 返回 fixture 演示数据（降级）。
   return {

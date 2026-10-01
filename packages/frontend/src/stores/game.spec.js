@@ -9,10 +9,15 @@
  *   E. 再次初始化（重开）后引擎仍可调用 → markRaw 持续生效
  *   F. 属性分配页读取点数崩溃（TypeError: ... reading 'TLT'）→ 天赋确认时先 remake
  *   G. begin 重复调用不重复执行 remake（替换链只跑一次）
+ *   H. 日志带时间戳 + 错误计数/自动展开信号（悬浮窗用）
+ *   I. logReport() 报告构建（Node 无 window 也不抛）
+ *   J. 日志缓冲上限（超出丢弃最旧，保留最新）
+ *   K. 人生轨迹累积（history 逐年追加；原实现每年覆盖 content，页面只剩一条）
+ *   L. clearTrace：开局/重开清空轨迹
  */
 
 // 导入 vitest 测试 DSL。
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 // Pinia（Node 环境）。
 import { createPinia, setActivePinia } from 'pinia'
 // store。
@@ -192,5 +197,116 @@ describe('gameStore 异常回归测试', () => {
     expect(startCount).toBe(2)
     // 已标记开局。
     expect(store.started).toBe(true)
+  })
+})
+
+describe('gameStore 日志与问题报告', () => {
+  test('H：日志带时间戳，error 递增 errorSeq，计数可读', () => {
+    // store。
+    const store = useGameStore()
+    // 三类日志。
+    store.pushLog('info', '普通信息')
+    store.pushLog('warn', '一个警告')
+    store.pushLog('error', '一个错误')
+    // 时间戳前缀：`[HH:MM:SS.mmm] [LEVEL] msg`。
+    expect(store.logBuffer[0]).toMatch(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] \[INFO\] 普通信息$/)
+    // 级别大写。
+    expect(store.logBuffer[1]).toContain('[WARN] 一个警告')
+    // 计数（悬浮窗角标）。
+    expect(store.errorCount).toBe(1)
+    expect(store.warnCount).toBe(1)
+    // errorSeq 只在 error 级递增（悬浮窗据此自动展开）。
+    expect(store.errorSeq).toBe(1)
+    // 再写一条 info 不改变序号。
+    store.pushLog('info', '再一条')
+    expect(store.errorSeq).toBe(1)
+  })
+
+  test('I：logReport 生成可导出的报告（无 window 环境也不抛）', () => {
+    // store。
+    const store = useGameStore()
+    // 数据源（主页会写入）。
+    store.dataSource = 'lifeRestart-data（184 天赋 / 1720 事件）'
+    // 写日志。
+    store.pushLog('info', '[UI][home] 开始新人生')
+    store.pushLog('error', '[UI][game] 出问题了')
+    // 构建报告。
+    const report = store.logReport()
+    // 头部与正文。
+    expect(report).toContain('===== 人生重开模拟器 日志报告 =====')
+    expect(report).toContain('数据源   : lifeRestart-data（184 天赋 / 1720 事件）')
+    expect(report).toContain('日志条数 : 2（error 1')
+    expect(report).toContain('[UI][home] 开始新人生')
+    expect(report).toContain('[UI][game] 出问题了')
+    // 游戏状态摘要。
+    expect(report).toContain('initialized=false')
+    // Node 无 location/navigator：降级为「（未知）」而不是崩溃。
+    expect(report).toContain('页面地址 : （未知）')
+  })
+
+  test('J：日志缓冲超限丢弃最旧、保留最新', () => {
+    // store。
+    const store = useGameStore()
+    // 静音 console（1005 条日志会刷屏）。
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    // 写满上限再多 5 条。
+    for (let i = 0; i < 1005; i++) store.pushLog('info', `第 ${i} 条`)
+    // 长度封顶。
+    expect(store.logBuffer.length).toBe(1000)
+    // 最旧的已丢弃。
+    expect(store.logBuffer[0]).toContain('第 5 条')
+    // 最新保留。
+    expect(store.logBuffer[999]).toContain('第 1004 条')
+    // 恢复 console。
+    spy.mockRestore()
+  })
+})
+
+describe('gameStore 人生轨迹累积', () => {
+  test('K：next 逐年累积 history（原实现每年覆盖 content，页面只剩一条）', async () => {
+    // store + 初始化 + 开局。
+    const store = useGameStore()
+    await store.init(buildData())
+    store.begin({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+    // 拉满生命，避免 fixture 里 0 岁事件致死干扰后续推进。
+    store.life.request('PROPERTY').set('LIF', 100)
+    // 开局时轨迹为空。
+    expect(store.history).toEqual([])
+    // 推进两年。
+    const r1 = store.next()
+    const r2 = store.next()
+    // 两年各一条（关键回归：不再只剩最新一岁）。
+    expect(store.history.length).toBe(2)
+    // 年龄与引擎返回一致且递增。
+    expect(store.history[0].age).toBe(r1.age)
+    expect(store.history[1].age).toBe(r2.age)
+    expect(store.history[1].age).toBeGreaterThan(store.history[0].age)
+    // 条目为该年流水的**快照**（不是同一个数组引用，避免被引擎就地改写）。
+    expect(store.history[1].items.length).toBe(r2.content.length)
+    expect(store.history[1].items).not.toBe(r2.content)
+    // 当前一岁流水仍可读（兼容既有调用方）。
+    expect(store.content.length).toBe(r2.content.length)
+  })
+
+  test('L：clearTrace 清空轨迹，begin 会重置', async () => {
+    // store + 开局。
+    const store = useGameStore()
+    await store.init(buildData())
+    store.begin({ CHR: 5 })
+    // 拉满生命。
+    store.life.request('PROPERTY').set('LIF', 100)
+    // 推进一年。
+    store.next()
+    expect(store.history.length).toBe(1)
+    // 手动清空（总结页「重开」会调用）。
+    store.clearTrace()
+    expect(store.history).toEqual([])
+    expect(store.content).toEqual([])
+    // 再推进重新累积。
+    store.next()
+    expect(store.history.length).toBe(1)
+    // 新的一局（begin）重置轨迹。
+    store.begin({ CHR: 5 })
+    expect(store.history).toEqual([])
   })
 })

@@ -20,6 +20,13 @@ import { markRaw } from 'vue'
 import Life from 'game-engine/src/modules/life.js'
 // 日志器工厂（前端配置界面创建，注入引擎全链路）。
 import { createLogger } from 'game-engine/src/functions/logger.js'
+// 日志格式化/报告构建（纯函数，供悬浮窗导出与单测）。
+import { formatLogLine, countByLevel, collectLogMeta, buildLogReport } from '../utils/log-report.js'
+// Mod 启停状态（报告里带上，便于复现）。
+import { loadModsState } from '../utils/mods-state.js'
+
+// 日志缓冲上限：1000 条在 trace 级下也够覆盖一次完整复现（每条约 100 字节）。
+const LOG_BUFFER_LIMIT = 1000
 
 // #loadLogLevel
 // 读取日志级别配置（localStorage 键 logLevel，缺省 info）。
@@ -52,16 +59,23 @@ export const useGameStore = defineStore('game', {
     talentPool: [],
     // 已选天赋（ID 数组）。
     selectedTalents: [],
-    // 每岁事件/天赋流水（响应式）。
+    // 每岁事件/天赋流水（响应式，仅当前这一岁）。
     content: [],
+    // 完整人生轨迹：每年一条 { age, isEnd, items }，供轨迹页逐条渲染全部历史。
+    // （原实现每年覆盖 content，导致页面上只剩最新一岁。）
+    history: [],
     // 属性分配（CHR/INT/STR/MNY）。
     allocation: { CHR: 0, INT: 0, STR: 0, MNY: 0 },
     // 分配边界 [min, max]。
     allocLimit: [0, 10],
     // 日志级别（配置界面切换，localStorage 持久化）。
     logLevel: loadLogLevel(),
-    // 日志缓冲（界面日志面板显示，最多保留 500 条）。
+    // 日志缓冲（界面日志面板显示，最多保留 LOG_BUFFER_LIMIT 条）。
     logBuffer: [],
+    // 错误发生序号（每写一条 error 级日志 +1；悬浮窗据此自动展开提醒）。
+    errorSeq: 0,
+    // 当前数据源描述（主页选原版数据 / fixture 降级时写入，报告里带上）。
+    dataSource: '',
   }),
 
   // 计算属性。
@@ -74,6 +88,10 @@ export const useGameStore = defineStore('game', {
     allocatedTotal: (state) => state.allocation.CHR + state.allocation.INT + state.allocation.STR + state.allocation.MNY,
     // 剩余点数。
     leftPoints: (state) => (state.life ? state.life.getPropertyPoints() : 0) - state.allocatedTotal,
+    // 错误条数（悬浮窗角标；按缓冲内容实时统计）。
+    errorCount: (state) => countByLevel(state.logBuffer).error,
+    // 警告条数（同上）。
+    warnCount: (state) => countByLevel(state.logBuffer).warn,
   },
 
   // 动作。
@@ -85,7 +103,7 @@ export const useGameStore = defineStore('game', {
       this.talentsConfirmed = false
       this.talentPool = []
       this.selectedTalents = []
-      this.content = []
+      this.clearTrace()
       this.allocation = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
       // 创建日志器：级别从配置读取，输出到浏览器 console + 界面缓冲。
       // 引擎内核（Life/属性/天赋/事件/成就/角色/数据加载/Mod 钩子）全部日志经此汇入。
@@ -135,8 +153,17 @@ export const useGameStore = defineStore('game', {
       const result = this.life.next()
       // 同步属性。
       this.sync()
-      // 记录流水。
+      // 记录当前这岁流水（供需要"最新一岁"的调用方）。
       this.content = result.content
+      // 累积到完整轨迹：条目做浅拷贝，避免后续被引擎就地修改（钩子可能回写 content）。
+      this.history.push({
+        // 年龄。
+        age: result.age,
+        // 该岁是否结束。
+        isEnd: result.isEnd,
+        // 条目快照。
+        items: (result.content || []).map((c) => ({ ...c })),
+      })
       // 返回结果（供组件渲染事件卡片）。
       return result
     },
@@ -238,10 +265,19 @@ export const useGameStore = defineStore('game', {
       this.life.start(allocation)
       // 标记已开局（GameView 挂载时据此避免重复开局）。
       this.started = true
-      // 清空流水。
-      this.content = []
+      // 清空轨迹（新的一局）。
+      this.clearTrace()
       // 同步。
       this.sync()
+    },
+
+    // 清空人生轨迹（开局/重开/回主页时调用）。
+    // @returns {void}
+    clearTrace() {
+      // 当前一岁流水。
+      this.content = []
+      // 完整轨迹。
+      this.history = []
     },
 
     // 调整单个属性分配。
@@ -320,14 +356,54 @@ export const useGameStore = defineStore('game', {
     // @param {string} level - 级别
     // @param {string} msg - 格式化消息
     pushLog(level, msg) {
-      // 行文本。
-      const line = `[${level.toUpperCase()}] ${msg}`
+      // 行文本（带时间戳：导出的报告要能看出问题发生顺序）。
+      const line = formatLogLine(level, msg)
       // 缓冲。
       this.logBuffer.push(line)
       // 超限截断（保留最新）。
-      if (this.logBuffer.length > 500) this.logBuffer.splice(0, this.logBuffer.length - 500)
+      if (this.logBuffer.length > LOG_BUFFER_LIMIT) this.logBuffer.splice(0, this.logBuffer.length - LOG_BUFFER_LIMIT)
+      // error 级：递增序号（悬浮窗监听它以自动展开，让用户第一时间能导出）。
+      if (level === 'error') this.errorSeq++
       // 同步到浏览器 console。
       console.log(line)
+    },
+
+    // 构建可导出的日志报告（悬浮窗「复制 / 下载」用）。
+    // 除日志外还带上路由、UA、视口、游戏与 Mod 状态——报告可直接贴进 issue。
+    // @returns {string} 报告文本
+    logReport() {
+      // 环境信息（Node 环境无 window，自动降级为 null）。
+      const env = collectLogMeta({
+        location: globalThis.location,
+        navigatorLike: globalThis.navigator,
+        screenLike: globalThis.screen,
+        devicePixelRatio: globalThis.devicePixelRatio,
+      })
+      // Mod 启停状态（读 localStorage，失败不影响报告生成）。
+      let mods = null
+      try {
+        // 持久化状态。
+        const state = loadModsState()
+        // 摘要文本。
+        const pairs = Object.entries(state.enabled || {}).map(([name, on]) => `${name}=${on ? 'on' : 'off'}`)
+        // 有内容才用。
+        mods = pairs.length > 0 ? pairs.join(', ') : '（无记录）'
+      } catch {
+        // 读不到就留空（报告头部显示「未知」）。
+        mods = null
+      }
+      // 游戏状态摘要。
+      const game =
+        `initialized=${this.initialized} started=${this.started} mode=${this.mode} ` +
+        `life=${this.life ? '已创建' : '未创建'} propertys=${JSON.stringify(this.propertys)} ` +
+        `allocation=${JSON.stringify(this.allocation)}`
+      // 组装报告。
+      return buildLogReport({
+        // 当前缓冲（已是「最旧 → 最新」顺序）。
+        logs: this.logBuffer,
+        // 头部信息。
+        meta: { level: this.logLevel, ...env, game, mods, dataSource: this.dataSource || null },
+      })
     },
 
     // 清空日志缓冲。

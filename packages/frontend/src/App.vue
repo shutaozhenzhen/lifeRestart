@@ -1,11 +1,14 @@
 <script setup>
-// 根组件：路由出口。
-// 所有页面都渲染在 <router-view> 中。
+// 根组件：路由出口 + 全局日志悬浮窗。
+// 悬浮窗放在 <router-view> 之外——任何页面（包括渲染中崩溃的页面）都能用它导出日志。
+import LogDock from './components/LogDock.vue'
 </script>
 
 <template>
   <!-- 路由出口 -->
   <router-view />
+  <!-- 全局日志悬浮窗（常驻，不随路由切换卸载） -->
+  <LogDock />
 </template>
 
 <style>
