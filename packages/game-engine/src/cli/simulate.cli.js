@@ -17,6 +17,10 @@
 import { makeRng, makeCliLogger } from './cli-util.js'
 // 日志器（未显式指定级别时用静默级别，避免引擎 INFO 日志污染报告输出）。
 import { createLogger } from '../functions/logger.js'
+// 导出器（CSV/JSON/Markdown 与策略文案，与前端页共用同一实现）。
+import { exportSimulation, formatStrategy } from '../sim/exporters.js'
+// 文件写入（--out 时）。
+import { writeFileSync } from 'node:fs'
 // 模拟内核（推荐入口）。
 import { createSimulation } from '../sim/simulator.js'
 // Mod 加载（可选：真实数据 + 钩子）。
@@ -83,9 +87,9 @@ export function loadModData({ modsDir, log }) {
 // 把聚合结果渲染成终端报告（可测试的纯函数）。
 //
 // @param {object} stats - summarize() 的结果
-// @param {object} [meta] - { elapsedMs }
+// @param {object} [meta] - { elapsedMs, talentName }
 // @returns {string} 报告文本
-export function formatReport(stats, { elapsedMs } = {}) {
+export function formatReport(stats, { elapsedMs, talentName } = {}) {
   // 行缓冲。
   const lines = []
   // 百分比展示（0~1 → 一位小数）。
@@ -98,6 +102,8 @@ export function formatReport(stats, { elapsedMs } = {}) {
   // 标题与概览。
   lines.push('===== 批量模拟结果 =====')
   lines.push(`局数      : ${stats.runs}${stats.seed === null || stats.seed === undefined ? '（随机种子，不可复现）' : `（seed=${stats.seed}）`}`)
+  // 策略（特性/属性各是随机还是固定，固定时列出名称）。
+  lines.push(`策略      : ${formatStrategy(stats.strategy, { talentName })}`)
   // 耗时与吞吐。
   if (elapsedMs) {
     // 每秒局数。
@@ -134,10 +140,15 @@ export function formatReport(stats, { elapsedMs } = {}) {
   // 最佳一局。
   if (stats.best) {
     // 天赋与分配摘要。
-    const talents = (stats.best.talents || []).join(', ') || '（无）'
+    const talents = (stats.best.talentDetails || []).map((d) => d.name).join(', ') || '（无）'
     const alloc = Object.entries(stats.best.allocation || {}).map(([k, v]) => `${k} ${v}`).join(' ')
     // 行。
     lines.push(`最佳一局  : 寿命 ${stats.best.age} / 总评 ${stats.best.sum}（${stats.best.grade}）/ 天赋 ${talents} / 分配 ${alloc}`)
+  }
+  // 警告（固定特性无效、固定属性超预算等，必须让用户看到）。
+  for (const warning of stats.warnings || []) {
+    // 逐条。
+    lines.push(`⚠ ${warning}`)
   }
   // 收尾。
   lines.push('')
@@ -156,17 +167,18 @@ export function formatReport(stats, { elapsedMs } = {}) {
 // @param {number} [params.runs] - 局数
 // @param {number|null} [params.seed] - 种子
 // @param {string|null} [params.modsDir] - mods 目录（取真实数据）
+// @param {object} [params.strategy] - 策略（随机/固定特性与属性）
 // @param {number} [params.chunk] - 每批局数（用于进度回调）
 // @param {Function} [params.onProgress] - 进度回调 (done, total, lastResult) => void
 // @param {object} [params.log] - 日志器
-// @returns {Promise<{stats: object, results: Array, elapsedMs: number}>} 结果
-export async function simulateCli({ runs = 50, seed = null, modsDir = null, chunk = 10, onProgress, log } = {}) {
+// @returns {Promise<{stats: object, results: Array, elapsedMs: number, data: object}>} 结果
+export async function simulateCli({ runs = 50, seed = null, modsDir = null, strategy, chunk = 10, onProgress, log } = {}) {
   // 数据源：Mod（真实数据）或 fixture。
   const data = modsDir ? loadModData({ modsDir, log }) : buildFixtureData()
   // 开始计时。
   const startedAt = Date.now()
   // 创建模拟环境（同一个 RNG 注入 Life 与策略层 → 可复现）。
-  const { simulator } = await createSimulation({ data, seed, storage: memoryStorage(), logger: log })
+  const { simulator } = await createSimulation({ data, seed, storage: memoryStorage(), logger: log, strategy })
   // 分批跑：每批结束后回调进度（前端靠它渲染进度条 / 判断取消）。
   for (let done = 0; done < runs; done += chunk) {
     // 本批局数（最后一批可能不足）。
@@ -178,8 +190,155 @@ export async function simulateCli({ runs = 50, seed = null, modsDir = null, chun
   }
   // 聚合。
   const stats = simulator.summarize({ seed })
+  // 返回（带上 data：报告里要把固定特性 ID 渲染成名称）。
+  return { stats, results: simulator.results, elapsedMs: Date.now() - startedAt, data }
+}
+
+// #parseStrategy
+// 解析命令行策略参数：
+//   --talents <id,id,...|random>   固定特性
+//   --alloc <CHR=3,INT=4,...|random>  固定属性
+//
+// @param {string[]} argv - 参数
+// @returns {{strategy: object, warnings: string[]}} 策略与解析警告
+export function parseStrategy(argv = []) {
+  // 缺省两条轴随机。
+  const strategy = { talents: { mode: 'random', fixed: [] }, allocation: { mode: 'random', fixed: {} } }
+  // 警告。
+  const warnings = []
+  // 固定特性。
+  const talentsIndex = argv.indexOf('--talents')
+  // 有该参数。
+  if (talentsIndex !== -1) {
+    // 取值。
+    const raw = argv[talentsIndex + 1]
+    // 非随机且非空。
+    if (raw && raw !== 'random') {
+      // 拆分。
+      const ids = String(raw).split(',').map((s) => s.trim()).filter(Boolean)
+      // 有效则固定。
+      if (ids.length > 0) strategy.talents = { mode: 'fixed', fixed: ids }
+      // 否则警告。
+      else warnings.push('--talents 为空，按随机处理')
+    }
+  }
+  // 固定属性。
+  const allocIndex = argv.indexOf('--alloc')
+  // 有该参数。
+  if (allocIndex !== -1) {
+    // 取值。
+    const raw = argv[allocIndex + 1]
+    // 非随机且非空。
+    if (raw && raw !== 'random') {
+      // 解析 k=v 片段。
+      const fixed = {}
+      // 逐段。
+      for (const part of String(raw).split(',')) {
+        // 拆键值。
+        const [key, value] = part.split('=')
+        // 非法片段。
+        if (!key || value === undefined) {
+          // 警告。
+          warnings.push(`--alloc 片段无法解析：${part}`)
+          // 跳过。
+          continue
+        }
+        // 记录。
+        fixed[key.trim()] = Number(value)
+      }
+      // 有效则固定。
+      if (Object.keys(fixed).length > 0) strategy.allocation = { mode: 'fixed', fixed }
+      // 否则警告。
+      else warnings.push('--alloc 无有效项，按随机处理')
+    }
+  }
   // 返回。
-  return { stats, results: simulator.results, elapsedMs: Date.now() - startedAt }
+  return { strategy, warnings }
+}
+
+// #runCli
+// CLI 主流程（参数解析 → 模拟 → 输出/导出），依赖可注入以便测试。
+//
+// @param {object} params
+// @param {string[]} [params.argv] - 参数
+// @param {Function} [params.stdout] - 输出函数（整段文本）
+// @param {Function} [params.progress] - 进度文本函数（原地刷新）
+// @param {Function} [params.writeFile] - 写文件函数（--out）
+// @returns {Promise<{stats: object, text: string, fileName: string, outFile: string|null}>} 产物
+export async function runCli({
+  argv = [],
+  stdout = (text) => console.log(text),
+  progress,
+  writeFile = (file, text) => writeFileSync(file, text),
+} = {}) {
+  // 局数（非法值回退 50；真实数据下单局可达 1s，默认不宜过大）。
+  const runsIndex = argv.indexOf('--runs')
+  const runs = runsIndex !== -1 ? Math.max(1, Number(argv[runsIndex + 1]) || 50) : 50
+  // 导出格式：--format 优先，--json 等价于 format=json。
+  const formatIndex = argv.indexOf('--format')
+  const format = formatIndex !== -1 ? argv[formatIndex + 1] : argv.includes('--json') ? 'json' : null
+  // 输出文件。
+  const outIndex = argv.indexOf('--out')
+  const outFile = outIndex !== -1 ? argv[outIndex + 1] : null
+  // mods 目录。
+  const modsIndex = argv.indexOf('--mods')
+  const modsDir = modsIndex !== -1 ? argv[modsIndex + 1] : null
+  // 种子。
+  const { seed } = makeRng(argv)
+  // 策略。
+  const { strategy, warnings: strategyWarnings } = parseStrategy(argv)
+  // 日志器：显式给了 --log-level 才按它输出，否则只报错——
+  // 这个 CLI 的 stdout 是"报告"，引擎 INFO 日志混进去会破坏可读性。
+  const log = argv.includes('--log-level') ? makeCliLogger(argv, 'sim') : createLogger({ level: 'error', prefix: 'sim' })
+  // 人类可读模式：没有导出格式、也没有写文件（此时才打印进度，避免污染 CSV/JSON）。
+  const humanMode = !format && !outFile
+  // 计时起点（进度行用）。
+  const startedAt = Date.now()
+  // 跑。
+  const { stats, results, elapsedMs, data } = await simulateCli({
+    // 局数。
+    runs,
+    // 种子。
+    seed,
+    // 数据源。
+    modsDir,
+    // 策略。
+    strategy,
+    // 日志。
+    log,
+    // 进度回调。
+    onProgress: humanMode && typeof progress === 'function'
+      ? (done, total, last) => {
+          // 每 10 局或最后一局刷新（避免刷屏）。
+          if (done % 10 === 0 || done === total) {
+            // 已用时间（秒）。
+            const used = ((Date.now() - startedAt) / 1000).toFixed(1)
+            // 进度行。
+            progress(`已模拟 ${done}/${total} 局（${used}s，最近一局 ${last?.age ?? '?'} 岁）`)
+          }
+        }
+      : undefined,
+  })
+  // 天赋 ID → 名称（报告与 md 导出都要用）。
+  const talents = data?.talents || {}
+  // 取名函数。
+  const talentName = (id) => talents[id]?.name || id
+  // 策略解析警告与模拟警告合并展示。
+  const mergedWarnings = [...strategyWarnings, ...(stats.warnings || [])]
+  // 带警告的统计（导出报告里也要能看到）。
+  const statsWithWarnings = { ...stats, warnings: mergedWarnings }
+  // 生成文本与文件名。
+  const output = format
+    ? exportSimulation({ format, stats: statsWithWarnings, results, meta: { strategy: stats.strategy, talentName } })
+    : {
+        text: formatReport(statsWithWarnings, { elapsedMs, talentName }),
+        fileName: '',
+      }
+  // 输出：写文件或打印。
+  if (outFile) writeFile(outFile, output.text)
+  else stdout(output.text)
+  // 返回。
+  return { stats: statsWithWarnings, text: output.text, fileName: output.fileName, outFile }
 }
 
 // #main
@@ -193,61 +352,36 @@ async function main() {
     console.log(
       [
         '用法: node src/cli/simulate.cli.js [选项]',
-        '  --runs <n>     模拟局数（默认 100）',
-        '  --seed <n>     随机种子（给定时结果可复现）',
-        '  --mods <dir>   用 Mod 数据（通常指向 mods/，Data Mod 提供原版数据）',
-        '  --json         以 JSON 输出聚合结果',
+        '  --runs <n>      模拟局数（默认 50）',
+        '  --seed <n>      随机种子（给定时结果可复现）',
+        '  --talents <ids> 固定特性（逗号分隔天赋 ID；random=随机，默认）',
+        '  --alloc <spec>  固定属性（如 CHR=3,INT=4,STR=5,MNY=8；random=随机，默认）',
+        '  --mods <dir>    用 Mod 数据（通常指向 mods/，Data Mod 提供原版数据）',
+        '  --format <fmt>  导出 csv | json | md',
+        '  --out <file>    导出到文件（缺省打印到 stdout）',
+        '  --json          等价于 --format json',
         '  --log-level <trace|debug|info|warn|error>',
       ].join('\n')
     )
     // 结束。
     return
   }
-  // 解析局数。
-  const runsIndex = argv.indexOf('--runs')
-  // 局数（非法值回退 50；真实数据下单局可达 1s，默认不宜过大）。
-  const runs = runsIndex !== -1 ? Math.max(1, Number(argv[runsIndex + 1]) || 50) : 50
-  // 是否 JSON 输出（进度行只在人类可读模式下打印）。
-  const asJson = argv.includes('--json')
-  // 解析 mods 目录。
-  const modsIndex = argv.indexOf('--mods')
-  // 目录。
-  const modsDir = modsIndex !== -1 ? argv[modsIndex + 1] : null
-  // 随机源与种子（--seed 由 makeRng 解析；这里只用 seed 值，RNG 交给 createSimulation 统一注入）。
-  const { seed } = makeRng(argv)
-  // 日志器：显式给了 --log-level 才按它输出，否则只报错——
-  // 这个 CLI 的 stdout 是"报告"，引擎 INFO 日志混进去会破坏可读性（也不利于 --json 之外的工具消费）。
-  const log = argv.includes('--log-level') ? makeCliLogger(argv, 'sim') : createLogger({ level: 'error', prefix: 'sim' })
-  // 计时起点（进度行用）。
-  const startedAt = Date.now()
-  // 跑（人类可读模式打印进度，每 10 局一行）。
-  const { stats, elapsedMs } = await simulateCli({
-    // 局数。
-    runs,
-    // 种子。
-    seed,
-    // 数据源。
-    modsDir,
-    // 日志。
-    log,
-    // 进度回调。
-    onProgress: asJson
-      ? undefined
-      : (done, total, last) => {
-          // 每 10 局或最后一局打印一次（避免刷屏）。
-          if (done % 10 === 0 || done === total) {
-            // 已用时间（秒）。
-            const used = ((Date.now() - startedAt) / 1000).toFixed(1)
-            // 进度行（原地刷新）。
-            process.stdout.write(`\r已模拟 ${done}/${total} 局（${used}s，最近一局 ${last?.age ?? '?'} 岁）   `)
-          }
-        },
+  // 执行（进度原地刷新到 stdout）。
+  await runCli({
+    // 参数。
+    argv,
+    // 整段输出（换行由 formatReport/导出文本自带）。
+    stdout: (text) => process.stdout.write(text),
+    // 进度：原地刷新并清行。
+    progress: (text) => process.stdout.write(`\r${text}   `),
+    // 写文件。
+    writeFile: (file, text) => {
+      // 写。
+      writeFileSync(file, text)
+      // 提示。
+      process.stdout.write(`已写入 ${file}\n`)
+    },
   })
-  // 清掉进度行。
-  if (!asJson) process.stdout.write('\r' + ' '.repeat(60) + '\r')
-  // 输出：JSON 或报告。
-  if (asJson) console.log(JSON.stringify(stats, null, 2))
-  else console.log(formatReport(stats, { elapsedMs }))
 }
 
 // 仅直接运行时执行。

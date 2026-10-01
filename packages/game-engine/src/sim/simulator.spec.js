@@ -243,6 +243,87 @@ describe('simulator - histogram', () => {
   })
 })
 
+describe('simulator - 固定特性 / 固定属性（策略）', () => {
+  test('固定特性 + 随机属性：每局特性完全一致、属性逐局变化', async () => {
+    // 数据。
+    const data = buildData()
+    // 固定前两个真实存在的天赋。
+    const fixed = Object.keys(data.talents).slice(0, 2)
+    // 模拟环境。
+    const { simulator } = await createSimulation({
+      // 数据。
+      data,
+      // 种子。
+      seed: 5,
+      // 内存存储。
+      storage: memoryStorage(),
+      // 策略：特性固定、属性随机。
+      strategy: { talents: { mode: 'fixed', fixed }, allocation: { mode: 'random', fixed: {} } },
+    })
+    // 跑三局。
+    simulator.run(3)
+    // 每局特性一致（顺序也一致 → 可复现）。
+    for (const r of simulator.results) {
+      expect(r.talents).toEqual(fixed)
+      expect(r.talentsMode).toBe('fixed')
+    }
+    // 属性逐局变化（随机）。
+    const allocs = simulator.results.map((r) => JSON.stringify(r.allocation))
+    expect(new Set(allocs).size).toBeGreaterThan(1)
+    // 天赋名取自全量天赋表（固定特性不在抽卡池里，仍要能取名）。
+    expect(simulator.results[0].talentDetails[0].name).toBe(data.talents[fixed[0]].name)
+    // 聚合结果里记录了策略（导出报告要用）。
+    expect(simulator.summarize({ seed: 5 }).strategy.talents.fixed).toEqual(fixed)
+  })
+
+  test('固定特性 + 固定属性：特性与分配与种子无关', async () => {
+    // 数据。
+    const data = buildData()
+    // 固定一个天赋。
+    const fixed = Object.keys(data.talents).slice(0, 1)
+    // 策略：两条轴都固定。
+    const strategy = {
+      talents: { mode: 'fixed', fixed },
+      allocation: { mode: 'fixed', fixed: { CHR: 5, INT: 5, STR: 5, MNY: 5 } },
+    }
+    // 两个不同种子。
+    const a = await createSimulation({ data, seed: 1, storage: memoryStorage(), strategy })
+    const b = await createSimulation({ data, seed: 999, storage: memoryStorage(), strategy })
+    // 各跑两局。
+    a.simulator.run(2)
+    b.simulator.run(2)
+    // 分配严格等于给定值。
+    for (const r of a.simulator.results) expect(r.allocation).toEqual({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+    // 特性与分配不受种子影响（寿命仍受游戏内随机影响，故只比这两项）。
+    expect(a.simulator.results.map((r) => [r.talents, r.allocation])).toEqual(
+      b.simulator.results.map((r) => [r.talents, r.allocation])
+    )
+    // 无警告（刚好用满 20 点）。
+    expect(a.simulator.summarize().warnings).toEqual([])
+  })
+
+  test('固定特性 ID 全部不存在：剔除、回退随机，并把警告带到聚合', async () => {
+    // 环境。
+    const { simulator } = await createSimulation({
+      // 数据。
+      data: buildData(),
+      // 种子。
+      seed: 3,
+      // 内存存储。
+      storage: memoryStorage(),
+      // 全部无效的固定特性。
+      strategy: { talents: { mode: 'fixed', fixed: ['not-exist-1', 'not-exist-2'] } },
+    })
+    // 跑一局。
+    simulator.run(1)
+    // 实际回退为随机（如实记录，不假装固定成功）。
+    expect(simulator.results[0].talentsMode).toBe('random')
+    expect(simulator.results[0].talents.length).toBeGreaterThan(0)
+    // 警告进聚合。
+    expect(simulator.summarize().warnings.some((w) => w.includes('回退随机'))).toBe(true)
+  })
+})
+
 describe('simulator - summarize', () => {
   // 手工构造的结果集（便于精确断言数学）。
   const RESULTS = [

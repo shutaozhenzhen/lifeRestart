@@ -14,7 +14,9 @@
  */
 
 // 随机策略（纯函数）。
-import { ALLOC_KEYS, randomAllocation, randomTalents } from './random-strategy.js'
+import { ALLOC_KEYS } from './random-strategy.js'
+// 策略解析（随机 / 固定，两条轴独立）。
+import { DEFAULT_STRATEGY, normalizeStrategy, resolveAllocation, resolveTalents } from './strategy.js'
 // 引擎实例与种子随机源（createSimulation 用）。
 import Life from '../modules/life.js'
 import { createRng } from '../functions/util.js'
@@ -97,18 +99,32 @@ export function collectionOf(life) {
 }
 
 // #runOneLife
-// 跑一局：随机抽天赋 → 随机分配属性 → 推进到结束 → 采集快照。
+// 跑一局：按策略准备天赋与属性 → 推进到结束 → 采集快照。
 //
 // @param {object} params
 // @param {object} params.life - Life 实例（会被就地重开，可复用）
 // @param {Function} [params.random] - 随机源
+// @param {object} [params.strategy] - 策略（缺省两条轴都随机）
+// @param {object} [params.talentTable] - 全量天赋表（id → 对象），固定特性校验与取名用
 // @returns {object} 单局结果
-export function runOneLife({ life, random = Math.random } = {}) {
-  // 1) 抽卡 + 随机选天赋（带互斥校验，与页面同一套规则）。
-  const pool = life.talentRandom()
-  // 选中的天赋。
-  const talents = randomTalents({
-    // 池。
+export function runOneLife({ life, random = Math.random, strategy, talentTable } = {}) {
+  // 规范化策略。
+  const plan = normalizeStrategy(strategy)
+  // 1) 天赋：随机模式抽卡；固定模式用给定 ID（带存在性校验）。
+  // 惰性抽卡：固定模式下如果 ID 都有效就不抽（省一次随机数消耗，也让固定实验更稳定）；
+  // 但若固定列表为空/全部无效（会回退随机），必须先备好抽卡池——否则会跑出"没有天赋的一局"。
+  const fixedValid = plan.talents.mode === 'fixed'
+    ? plan.talents.fixed.filter((id) => !talentTable || id in talentTable)
+    : []
+  // 是否需要抽卡池。
+  const needPool = plan.talents.mode !== 'fixed' || fixedValid.length === 0
+  // 抽卡池。
+  const pool = needPool ? life.talentRandom() : []
+  // 解析结果。
+  const talentResolved = resolveTalents({
+    // 策略。
+    strategy: plan,
+    // 抽卡池。
     pool,
     // 上限（引擎配置）。
     limit: life.talentSelectLimit,
@@ -116,10 +132,16 @@ export function runOneLife({ life, random = Math.random } = {}) {
     isConflict: (chosen, id) => life.exclude(chosen, id) !== null,
     // 随机源。
     random,
+    // 全量天赋表。
+    talentTable,
   })
-  // 2) 随机分配属性（点数含天赋加成，单项上限来自引擎配置）。
-  const allocation = randomAllocation({
-    // 可分配点数。
+  // 选中的天赋。
+  const talents = talentResolved.talents
+  // 2) 属性：随机模式随机分配；固定模式按给定值（超预算按比例缩减）。
+  const allocationResolved = resolveAllocation({
+    // 策略。
+    strategy: plan,
+    // 可分配点数（含天赋加成）。
     points: life.getPropertyPoints(),
     // 四项可分配属性。
     keys: ALLOC_KEYS,
@@ -128,6 +150,8 @@ export function runOneLife({ life, random = Math.random } = {}) {
     // 随机源。
     random,
   })
+  // 分配结果。
+  const allocation = allocationResolved.allocation
   // 3) 开局（remake 会重置本局属性并跑天赋替换链）。
   const replaces = life.remake(talents)
   // 应用分配。
@@ -159,17 +183,21 @@ export function runOneLife({ life, random = Math.random } = {}) {
   const propertys = { ...life.propertys }
   // 累计达成数（本局增量由 createSimulator 计算）。
   const achievedTotal = life.achievements.filter((a) => a.isAchieved).length
-  // 抽卡池按 ID 索引（用于把选中的 ID 还原成可读天赋信息）。
+  // 抽卡池按 ID 索引（随机模式下用于把选中的 ID 还原成可读天赋信息）。
   const poolById = new Map((pool || []).filter((t) => t && t.id !== undefined).map((t) => [t.id, t]))
+  // 取名：优先全量天赋表（固定特性不在抽卡池里，必须查表），其次抽卡池。
+  const lookup = (id) => talentTable?.[id] || poolById.get(id)
   // 选中天赋的明细（ID + 名称 + 星级；名称缺失时回退 ID）。
   const talentDetails = talents.map((id) => ({
     // ID。
     id,
     // 名称。
-    name: poolById.get(id)?.name || String(id),
+    name: lookup(id)?.name || String(id),
     // 星级。
-    grade: poolById.get(id)?.grade ?? null,
+    grade: lookup(id)?.grade ?? null,
   }))
+  // 本局警告（固定特性无效 / 固定属性超预算等）。
+  const warnings = [...talentResolved.warnings, ...allocationResolved.warnings]
   // 返回快照。
   return {
     // 寿命。
@@ -178,6 +206,13 @@ export function runOneLife({ life, random = Math.random } = {}) {
     talents,
     // 天赋明细（供 UI 展示名称）。
     talentDetails,
+    // 本局实际使用的特性来源（random/fixed：固定列表全无效时会回退成 random，需如实记录）。
+    talentsMode: talentResolved.mode,
+    // 本局实际使用的属性来源。
+    allocationMode: allocationResolved.mode,
+    // 本局策略与本局警告（导出与聚合都会带上）。
+    strategy: plan,
+    warnings,
     // 天赋替换条数。
     replaces: Array.isArray(replaces) ? replaces.length : 0,
     // 属性分配。
@@ -242,6 +277,10 @@ export function summarize(results = [], meta = {}) {
       collection: meta.collection || {},
       // 平均本局成就数。
       achievementsPerRun: 0,
+      // 策略（固定/随机）。
+      strategy: meta.strategy || null,
+      // 警告。
+      warnings: [],
       // 最佳/最长寿样本。
       best: null,
       longest: null,
@@ -294,6 +333,10 @@ export function summarize(results = [], meta = {}) {
     collection: meta.collection || {},
     // 平均每局达成成就数。
     achievementsPerRun: avg(results.map((r) => r.achievements || 0)),
+    // 策略（优先用调用方给的，其次取第一局记录的）。
+    strategy: meta.strategy || results[0]?.strategy || null,
+    // 去重后的警告（固定特性无效、固定属性超预算等，导出与 UI 都会展示）。
+    warnings: [...new Set(results.flatMap((r) => r.warnings || []))],
     // 最佳一局。
     best,
     // 最长寿一局。
@@ -319,7 +362,7 @@ export function summarize(results = [], meta = {}) {
 // @param {object} [params.logger] - 日志器
 // @param {object} [params.propertyConfig] - 属性 judge 配置（缺省用引擎内置）
 // @returns {Promise<{life: object, simulator: object, seed: number|null, random: Function}>} 模拟环境
-export async function createSimulation({ data, seed = null, random, storage, logger, propertyConfig } = {}) {
+export async function createSimulation({ data, seed = null, random, storage, logger, propertyConfig, strategy } = {}) {
   // 随机源：显式注入优先；给了种子用种子 RNG；否则 Math.random（不可复现）。
   const rng = typeof random === 'function' ? random : seed === null || seed === undefined ? Math.random : createRng(seed)
   // 建实例（同一个 RNG 注入 Life）。
@@ -328,8 +371,8 @@ export async function createSimulation({ data, seed = null, random, storage, log
   await life.initial()
   // 配置（空参走内置 judge 分档；显式传入则以传入为准）。
   life.config(propertyConfig ? { propertyConfig } : undefined)
-  // 模拟器（策略层复用同一个 RNG）。
-  const simulator = createSimulator({ life, random: rng })
+  // 模拟器（策略层复用同一个 RNG；天赋表用于固定特性校验与取名）。
+  const simulator = createSimulator({ life, random: rng, strategy, talentTable: data?.talents })
   // 返回。
   return { life, simulator, seed: typeof random === 'function' ? null : seed ?? null, random: rng }
 }
@@ -343,17 +386,21 @@ export async function createSimulation({ data, seed = null, random, storage, log
 // @param {object} params
 // @param {object} params.life - Life 实例（调用方负责构造，通常是内存 storage 的实例）
 // @param {Function} [params.random] - 随机源（固定种子可复现）
+// @param {object} [params.strategy] - 策略（随机/固定特性与属性；缺省都随机）
+// @param {object} [params.talentTable] - 全量天赋表（固定特性校验与取名）
 // @param {Function} [params.onRun] - 每局结束回调（(result, index) => void）
 // @returns {{run: Function, runOne: Function, results: Array, summarize: Function, collection: Function, progress: Function}} 模拟器
-export function createSimulator({ life, random = Math.random, onRun } = {}) {
+export function createSimulator({ life, random = Math.random, strategy = DEFAULT_STRATEGY, talentTable, onRun } = {}) {
   // 已完成的局结果。
   const results = []
+  // 规范化策略（一次即可，逐局复用）。
+  const plan = normalizeStrategy(strategy)
   // 上一局的累计成就数（用于算本局增量）。
   let prevAchieved = 0
   // #runOne：跑一局并入队。
   function runOne() {
     // 跑一局。
-    const result = runOneLife({ life, random })
+    const result = runOneLife({ life, random, strategy: plan, talentTable })
     // 本局成就增量（引擎的 ACHV 是累计值）。
     result.achievements = Math.max(0, (result.achievedTotal || 0) - prevAchieved)
     // 更新基准。
@@ -391,10 +438,17 @@ export function createSimulator({ life, random = Math.random, onRun } = {}) {
       // 读取。
       return collectionOf(life)
     },
-    // 聚合（含种子与收集统计）。
+    // 聚合（含种子、策略与收集统计）。
     summarize(meta = {}) {
       // 聚合。
-      return summarize(results, { seed: meta.seed ?? null, collection: collectionOf(life) })
+      return summarize(results, {
+        // 种子。
+        seed: meta.seed ?? null,
+        // 策略：调用方覆盖优先，否则用本模拟器的策略。
+        strategy: meta.strategy || plan,
+        // 收集统计。
+        collection: collectionOf(life),
+      })
     },
   }
 }

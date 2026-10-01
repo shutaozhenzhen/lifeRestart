@@ -13,7 +13,7 @@ import { describe, test, expect } from 'vitest'
 // node 路径工具（定位 mods 目录）。
 import { fileURLToPath } from 'node:url'
 // 被测模块。
-import { buildFixtureData, formatReport, loadModData, memoryStorage, simulateCli } from './simulate.cli.js'
+import { buildFixtureData, formatReport, loadModData, memoryStorage, parseStrategy, runCli, simulateCli } from './simulate.cli.js'
 
 // mods 目录（lifeRestart/mods，相对本文件向上 4 层）。
 const MODS_DIR = fileURLToPath(new URL('../../../../mods/', import.meta.url))
@@ -115,6 +115,147 @@ describe('simulate.cli - formatReport', () => {
     expect(() => formatReport(empty)).not.toThrow()
     // 仍有标题。
     expect(formatReport(empty)).toContain('批量模拟结果')
+  })
+})
+
+describe('simulate.cli - 策略参数（固定特性 / 固定属性）', () => {
+  test('parseStrategy：缺省两条轴随机', () => {
+    // 空参数。
+    const { strategy, warnings } = parseStrategy([])
+    // 缺省。
+    expect(strategy.talents).toEqual({ mode: 'random', fixed: [] })
+    expect(strategy.allocation).toEqual({ mode: 'random', fixed: {} })
+    expect(warnings).toEqual([])
+    // 显式 random 也视为随机。
+    expect(parseStrategy(['--talents', 'random', '--alloc', 'random']).strategy.talents.mode).toBe('random')
+  })
+
+  test('parseStrategy：--talents 与 --alloc 解析', () => {
+    // 固定特性 + 固定属性。
+    const { strategy, warnings } = parseStrategy(['--talents', 't1, t2', '--alloc', 'CHR=3,INT=4,STR=5,MNY=8'])
+    // 特性。
+    expect(strategy.talents).toEqual({ mode: 'fixed', fixed: ['t1', 't2'] })
+    // 属性。
+    expect(strategy.allocation.mode).toBe('fixed')
+    expect(strategy.allocation.fixed).toEqual({ CHR: 3, INT: 4, STR: 5, MNY: 8 })
+    // 无警告。
+    expect(warnings).toEqual([])
+  })
+
+  test('parseStrategy：非法片段给出警告并回退随机', () => {
+    // --alloc 全是非法片段。
+    const bad = parseStrategy(['--alloc', 'CHR'])
+    expect(bad.warnings[0]).toContain('无法解析')
+    expect(bad.strategy.allocation.mode).toBe('random')
+    // --talents 只有逗号 → 空 → 警告。
+    const empty = parseStrategy(['--talents', ',,'])
+    expect(empty.warnings[0]).toContain('按随机处理')
+    expect(empty.strategy.talents.mode).toBe('random')
+  })
+})
+
+describe('simulate.cli - runCli（输出与导出）', () => {
+  test('人类可读模式：输出报告文本，含策略行与进度回调', async () => {
+    // 收集输出。
+    const printed = []
+    const progress = []
+    // 固定特性 + 随机属性。
+    const { text, stats } = await runCli({
+      // 参数（fixture 数据，快）。
+      argv: ['--runs', '4', '--seed', '8', '--talents', 'random'],
+      // 输出。
+      stdout: (t) => printed.push(t),
+      // 进度。
+      progress: (t) => progress.push(t),
+    })
+    // 报告里有策略行。
+    expect(text).toContain('策略      : 特性：随机；属性：随机')
+    // 打印了一次完整报告。
+    expect(printed.length).toBe(1)
+    // 进度回调被调用（4 局：第 4 局是最后一局）。
+    expect(progress.length).toBeGreaterThanOrEqual(1)
+    // 返回的统计可用。
+    expect(stats.runs).toBe(4)
+  })
+
+  test('--format csv：stdout 只有 CSV（进度不再打印）', async () => {
+    // 收集输出。
+    const printed = []
+    const progress = []
+    // 跑。
+    const { text, fileName } = await runCli({
+      // 参数。
+      argv: ['--runs', '3', '--seed', '1', '--format', 'csv'],
+      // 输出。
+      stdout: (t) => printed.push(t),
+      // 进度。
+      progress: (t) => progress.push(t),
+    })
+    // CSV 表头。
+    expect(text.startsWith('序号,寿命,总评,评价')).toBe(true)
+    // 文件名带扩展名。
+    expect(fileName.endsWith('.csv')).toBe(true)
+    // 导出模式下不打印进度（否则会污染 CSV）。
+    expect(progress).toEqual([])
+    // stdout 收到的是纯 CSV。
+    expect(printed[0]).toBe(text)
+  })
+
+  test('--format md --out <file>：写入文件而不是 stdout', async () => {
+    // 记录写入。
+    const written = []
+    // 跑。
+    const { outFile, text } = await runCli({
+      // 参数。
+      argv: ['--runs', '2', '--seed', '2', '--format', 'md', '--out', 'out.md'],
+      // 输出函数：不应该被调用。
+      stdout: () => {
+        throw new Error('不应写 stdout')
+      },
+      // 写文件替身。
+      writeFile: (file, content) => written.push([file, content]),
+    })
+    // 文件名透传。
+    expect(outFile).toBe('out.md')
+    // 写了一次。
+    expect(written.length).toBe(1)
+    expect(written[0][0]).toBe('out.md')
+    // 内容 = 返回文本。
+    expect(written[0][1]).toBe(text)
+    // Markdown 报告。
+    expect(text).toContain('# 人生重开模拟器 · 批量模拟报告')
+  })
+
+  test('--json 等价于 --format json', async () => {
+    // 收集。
+    const printed = []
+    // 跑。
+    const { text } = await runCli({ argv: ['--runs', '2', '--seed', '3', '--json'], stdout: (t) => printed.push(t) })
+    // 可解析。
+    const payload = JSON.parse(text)
+    expect(payload.meta.runs).toBe(2)
+    expect(payload.meta.seed).toBe(3)
+    // 逐局结果在内。
+    expect(payload.results.length).toBe(2)
+  })
+
+  test('固定特性导出：md 报告里出现天赋名称与策略', async () => {
+    // 取 fixture 里的两个天赋 ID 与名称。
+    const data = buildFixtureData()
+    const ids = Object.keys(data.talents).slice(0, 2)
+    // 跑（固定特性）。
+    const { text, stats } = await runCli({
+      // 参数。
+      argv: ['--runs', '2', '--seed', '4', '--format', 'md', '--talents', ids.join(',')],
+      // 输出。
+      stdout: () => {},
+    })
+    // 策略里记录固定特性。
+    expect(stats.strategy.talents).toEqual({ mode: 'fixed', fixed: ids })
+    // 报告里渲染出天赋名（不是裸 ID）。
+    expect(text).toContain(data.talents[ids[0]].name)
+    // 固定特性 → 策略行。
+    expect(text).toContain('特性：固定（')
   })
 })
 
