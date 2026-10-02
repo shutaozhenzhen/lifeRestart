@@ -139,12 +139,12 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # Capacitor 7 的 Android 工程需要 JDK 17。
-      - name: Setup Java 17
+      # Capacitor 7 / AGP 8.11+ 要求 JDK 21（用 17 会在 Gradle 阶段报 class file/AGP 版本错误）。
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -182,11 +182,24 @@ jobs:
         working-directory: platforms/mobile/android
         run: echo "sdk.dir=${ANDROID_HOME}" > local.properties
 
+      # Gradle 失败的真正原因在日志里，而 Actions 日志接口需要 admin 权限（本地读不到），
+      # 所以这里把输出落盘，失败时用 `::error::` 注解把末尾原因带到 check-run 注解上（公开可读）。
       - name: Build debug APK
         working-directory: platforms/mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          set +e
+          ./gradlew assembleDebug --no-daemon --stacktrace > /tmp/gradle.log 2>&1
+          code=$?
+          echo "gradle exit=$code"
+          if [ $code -ne 0 ]; then
+            tail -40 /tmp/gradle.log
+            # 注解正文：换行转 %0A（GitHub 注解要求），并转义 %
+            MSG=$(tail -c 1500 /tmp/gradle.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Gradle assembleDebug 失败::${MSG}"
+            exit $code
+          fi
+          echo "APK 构建成功"
 
       - name: Verify APK
         working-directory: platforms/mobile
