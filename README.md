@@ -37,7 +37,7 @@ lifeRestart/
 ├── platforms/
 │   ├── electron/               # 桌面版：主进程起代理 + 窗口 + electron-builder 打包
 │   ├── web/                    # 单进程静态站 + 内嵌代理（产出解压即运行的 zip）
-│   └── mobile/                 # Capacitor 壳（脚手架，需 Android SDK）
+│   └── mobile/                 # Capacitor 壳（CI 现场生成 Android 工程并打 debug APK）
 ├── pnpm-workspace.yaml
 └── package.json
 ```
@@ -61,8 +61,9 @@ pnpm test                   # 等价于 node scripts/test-all.mjs
 node scripts/test-all.mjs   # 没有 pnpm 的环境用这条（npm test 亦可）
 
 # 只跑单个包（参数按目录名/包名子串匹配）
-node scripts/test-all.mjs game-engine   # 引擎 534 用例
-node scripts/test-all.mjs frontend      # 前端 57 用例（异常回归 + 日志/轨迹）
+node scripts/test-all.mjs game-engine   # 引擎 643 用例（35 spec）
+node scripts/test-all.mjs frontend      # 前端 208 用例（25 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
+node scripts/test-all.mjs mobile        # 移动端 37 用例（脚本 + CI 不变量）
 
 # 带参数透传给 vitest：`--` 之后的参数原样传给 vitest（不改包过滤）
 node scripts/test-all.mjs game-engine -- -t 属性页先读数
@@ -203,8 +204,12 @@ cd platforms/electron && npx electron . --smoke    # 冒烟
 # Web 版（单进程：静态资源 + 内嵌代理，产出解压即运行的 zip）
 cd platforms/web && node scripts/build.js          # → release/liferestart-web.zip
 
-# 移动版（Capacitor 脚手架，需 Android SDK）
-cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
+# 移动版（Capacitor：把前端产物同步到 www/，再生成 Android 工程打 debug APK）
+cd platforms/mobile
+pnpm build                       # 前端产物 → www/（已构建过则直接复用，--rebuild 可强制重建）
+node scripts/collect-apk.js      # 可选：把 APK 收集到 out/liferestart-mobile-debug.apk（CI 用）
+pnpm android:add && pnpm android:sync && pnpm android:open
+# 需要 JDK 21（Capacitor 7 / AGP 8.11+）；CI 里由 .github/workflows/release-test.yml 的 mobile job 全程执行
 ```
 
 ## 架构要点
@@ -263,11 +268,12 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 620 | condition（含**编译缓存**）/ compat / params / 各模块 / mod / ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 189 | 纯逻辑（日志/自动播放/storage/mods-state/**数据加载**/**模拟驱动器**/**统计展示**）+ **11 个组件/页面测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
+| `packages/game-engine` | 643 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**与**HTTP 文件源**）/ ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
+| `packages/frontend` | 208 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载**/**模拟驱动器**/**统计展示**）+ **7 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
-| **合计** | **821** | 由 `node scripts/test-all.mjs` 逐包编排（`platforms/mobile` 无测试脚本，自动跳过） |
+| `platforms/mobile` | 37 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
+| **合计** | **900** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
 
 ### 前端测试分层（2026-10 补齐）
 
@@ -290,11 +296,18 @@ cd platforms/mobile && pnpm build && pnpm android:add && pnpm android:open
 
 源码为**逐行中文注释**。测试在 CI 中自动执行：`.github/workflows/test.yml`（push/PR 触发，
 `pnpm install --frozen-lockfile` + `pnpm test`），与 Pages 部署 workflow 相互独立。
+另有 `.github/workflows/release-test.yml`：每次 push 重建唯一的滚动 `test` release
+（网页版 zip / Web 单进程 zip / 桌面 exe / **移动 apk**）。
+
+> `platforms/mobile/release-workflow.spec.js` 会**对 release workflow 本身做结构断言**——打包链路的问题
+> 不会在单元测试里暴露（它们只在 CI 里、且在"绿灯"的状态下发生）。已经踩过的三个坑都固化成了断言：
+> `--prerelease` 导致 release 在侧栏与 `/releases/latest` 都看不到、`continue-on-error` 让产物缺失被绿灯掩盖、
+> 以及 upload-artifact v4 的压缩根规则让 APK 落到子目录后被平铺通配符静默漏掉。
 
 ## 进度
 
 - **阶段一 ~ 四（Step 1–22）**：全部完成 —— 引擎内核、Vue 前端 UI、Mod 系统、AI 集成（含代理服务）
-- **阶段五（平台打包 Step 23–26）**：Step 23（Electron）/ 24（Web）/ 26（跨平台一致性）完成；Step 25（Capacitor 移动端）为脚手架，待 Android SDK 环境验证
+- **阶段五（平台打包 Step 23–26）**：Step 23（Electron）/ 24（Web）/ 26（跨平台一致性）完成；Step 25（Capacitor 移动端）**CI 已能真实产出 debug APK**（ubuntu runner + JDK 21 现场 `cap add android` + `gradlew assembleDebug`，产物随滚动 test release 发布）；**App 内嵌 AI 代理（nodejs-mobile）尚未实现**，当前 APK 只含 WebView 前端
 - **GitHub Pages 在线版**：已上线 <https://shutaozhenzhen.github.io/lifeRestart/>（阶段五延伸，纯静态托管；AI 不可用）
 - **工程化基线（2026-09-30）**：lockfile 重算 + 全流程 `--frozen-lockfile`；根目录 `pnpm test`
   不再依赖全局 pnpm；新增测试 CI；上游 `remake` 已重构为 TS monorepo（数据路径未变，Data Mod 无需重转）

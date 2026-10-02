@@ -1,18 +1,26 @@
-# Test Release（滚动预发布）
+# Test Release（滚动发布）
 #
 # 目的：每次 push 到 main 都重新打包各平台产物，并生成**唯一的 test release**：
 #   1. 构建前端产物（zip）+ Web 单进程版（platforms/web 自带打包脚本 → liferestart-web.zip）
 #   2. 构建桌面版（platforms/electron 的 electron-builder 产物，Windows runner 出 exe）
-#   3. **先删掉上一个 test release（连同 tag）**，再用本次产物创建新的 test release（prerelease）
+#   3. 构建移动版（platforms/mobile：现场 cap add android + Gradle assembleDebug → apk）
+#   4. **先删掉上一个 test release（连同 tag）**，再用本次产物创建新的 test release
 # 这样 release 页面始终只有一个 "test"，代表最新一次提交的可下载产物。
 #
+# 为什么必须是**正式**（非 prerelease）release：
+#   用 `gh release create --prerelease` 时，侧栏 "Releases" 与 /releases/latest 都不显示它，
+#   看起来就像"根本没发布过"（曾经被这样反馈过）。所以这里用 `--latest`。
+#
 # 与其它工作流的分工：
-#   · test.yml         → 跑全量测试（4 个包）
+#   · test.yml         → 跑全量测试（含 platforms/mobile 的脚本与 CI 不变量测试）
 #   · deploy-pages.yml → 只发布网页版到 Pages
-#   · release-test.yml → 本文件：产出**可下载的打包产物**（含桌面版），不碰 Pages
+#   · release-test.yml → 本文件：产出**可下载的打包产物**（含桌面版/移动版），不碰 Pages
 #
 # 说明：本文件与 deploy-pages.yml 用同一套 node/pnpm 设置（版本来自根 packageManager 字段），
 # 冻结安装保证依赖可复现。
+#
+# 另：`platforms/mobile/release-workflow.spec.js` 会对本文件做结构断言
+# （JDK 版本、APK 平铺上传、递归收集、--latest、先校验后删除）——改本文件请一并跑该测试。
 
 name: Test Release
 
@@ -85,7 +93,7 @@ jobs:
   # ---------- 桌面版产物（electron-builder） ----------
   # 用 windows runner 直接出 exe（在 Linux 上打 Windows 目标需要 wine，容易在 CI 里翻车）。
   # 注意：这一步依赖 platforms/electron 自己的 electron-builder 配置；若配置改动导致失败，
-  # 本 job 不阻塞 release（continue-on-error），失败原因在 job 日志里可见。
+  # 本 job 会**直接让 release 失败**（不再用 continue-on-error 掩盖——那会让"产物缺失"看起来像绿灯）。
   electron:
     runs-on: windows-latest
     steps:
@@ -122,10 +130,10 @@ jobs:
 
   # ---------- 移动版产物（Capacitor + Gradle debug APK） ----------
   # android/ 原生工程不入库（Gradle 工程含大量生成物与二进制）：每次 CI 现场 cap add 重建。
-  # 注意：本 job 目前仍 continue-on-error（见下方注释），跑通后应去掉。
+  # JDK 必须是 21（Capacitor 7 / AGP 8.11+）：用 17 会在 `Build debug APK` 阶段直接失败
+  # （已在 run 36992811506 上复现，换 21 后 run 36993418144 起稳定通过）。
   mobile:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -207,13 +215,25 @@ jobs:
           find android/app/build/outputs/apk -name '*.apk' -exec ls -lh {} \;
           test -n "$(find android/app/build/outputs/apk -name '*.apk')"
 
+      # 收集成「平铺目录 + 固定文件名」再上传：
+      # upload-artifact v4 以通配符之前的前缀作为压缩根，直接上传 apk/**/*.apk 解包后是
+      # debug/app-debug.apk（多一层），下游 release job 用平铺通配符就收集不到 → APK 静默丢失。
+      # 详见 scripts/collect-apk.js 与它的单测。
+      - name: Collect APK (flat, fixed name)
+        working-directory: platforms/mobile
+        run: |
+          node scripts/collect-apk.js
+          ls -lh out
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mobile-artifacts
-          path: platforms/mobile/android/app/build/outputs/apk/**/*.apk
+          # out/ 即压缩根 → 解包后 APK 必定在顶层，文件名也稳定。
+          path: platforms/mobile/out/*.apk
           # 没打出 APK 必须显式失败（此前 warn 让"没产出"被绿灯掩盖）。
           if-no-files-found: error
+
   # ---------- 滚动 test release ----------
   release:
     needs: [web, electron, mobile]
@@ -231,6 +251,34 @@ jobs:
       - name: List downloaded artifacts
         run: find artifacts -type f | sort
 
+      # 收集 + 校验 + 平铺。为什么必须递归查：
+      #   upload-artifact v4 以「通配符之前的前缀」作为压缩根，产物可能落在 artifacts 的子目录里
+      #   （APK 曾经就是 artifacts/debug/app-debug.apk），用平铺的 artifacts/*.apk 会**静默漏掉**。
+      # 为什么校验必须排在「删除旧 release」之前：否则会先删掉上一版发布、再失败，留下空窗。
+      - name: Collect and verify release files
+        run: |
+          mkdir -p publish
+          # 递归收集（zip/exe/apk），并把清单写盘，供创建步骤复用（两处各自拼通配符必然漂移）。
+          : > release-files.txt
+          while IFS= read -r f; do
+            cp "$f" publish/
+            echo "publish/$(basename "$f")" >> release-files.txt
+          done < <(find artifacts -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.apk' \) | sort)
+          echo "本次将发布 $(wc -l < release-files.txt) 个产物："
+          cat release-files.txt
+          # mobile job 成功却没有 APK：一定是上传/下载路径的问题，直接失败（曾经静默漏掉过）。
+          if [ "${{ needs.mobile.result }}" = "success" ] && ! find publish -type f -name '*.apk' | grep -q .; then
+            echo "::error title=APK 产物丢失::mobile job 成功，但收集到的产物里没有 .apk（检查 upload-artifact 的 path 是否为平铺目录）"
+            find artifacts -type f | sort
+            exit 1
+          fi
+          # 三类产物都不在：说明 artifact 传递整条链路都断了，同样必须失败。
+          if [ ! -s release-files.txt ]; then
+            echo "::error title=没有任何产物::artifacts/ 下没有收集到 zip/exe/apk"
+            find artifacts -type f | sort
+            exit 1
+          fi
+
       # 先删旧 release（--cleanup-tag 连 tag 一起删；不存在时忽略失败）。
       - name: Delete previous test release
         env:
@@ -238,14 +286,14 @@ jobs:
         run: |
           gh release delete test --yes --cleanup-tag || echo "没有旧 test release，跳过"
 
-      # 再创建新的 test release（prerelease），把本次产物全部附上。
+      # 再创建新的 test release，把本次产物全部附上。
+      # 用 --latest（正式发布）而不是 --prerelease：后者不会出现在侧栏与 /releases/latest 上。
       - name: Create rolling test release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 收集产物（zip/exe/apk；缺某一类时也要能发出去）。
-          shopt -s nullglob
-          FILES=(artifacts/*.zip artifacts/*.exe artifacts/*.apk)
+          # 读取上一步收集好的清单（空文件 → 空数组，不报错）。
+          mapfile -t FILES < release-files.txt
           echo "将发布：${FILES[*]}"
           # 生成说明（含提交信息，便于对照"这一版打包的是哪次提交"）。
           cat > notes.md <<EOF
@@ -262,7 +310,7 @@ jobs:
           - \`liferestart-frontend-dist.zip\` — 网页版构建产物（Vite dist，含 data/ 与 mods/）
           - \`liferestart-web.zip\` — Web 单进程版（静态 + 内嵌 AI 代理，解压即运行）
           - \`*.exe\` — 桌面版安装包（存在时才有；由 electron-builder 产出）
-          - \`*.apk\` — 移动版 debug 包（存在时才有；Capacitor + Gradle 现场构建）
+          - \`liferestart-mobile-debug.apk\` — 移动版 debug 包（Capacitor + Gradle 现场构建）
 
           > 这是**滚动测试发布**（每次 push 重建，始终只有最新一份），仅用于验证构建与分发流程。
           EOF
