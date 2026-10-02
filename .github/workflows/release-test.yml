@@ -264,11 +264,11 @@ jobs:
           - \`*.exe\` — 桌面版安装包（存在时才有；由 electron-builder 产出）
           - \`*.apk\` — 移动版 debug 包（存在时才有；Capacitor + Gradle 现场构建）
 
-          > 这是预发布（prerelease），仅用于验证构建与分发流程。
+          > 这是**滚动测试发布**（每次 push 重建，始终只有最新一份），仅用于验证构建与分发流程。
           EOF
           # 创建（无产物时仅创建 release，不报错）。
           if [ ${#FILES[@]} -eq 0 ]; then
-            gh release create test --prerelease --title "Test Release (${GITHUB_SHA:0:7})" --notes-file notes.md
+            gh release create test --latest --title "Test Release (${GITHUB_SHA:0:7})" --notes-file notes.md
           else
-            gh release create test "${FILES[@]}" --prerelease --title "Test Release (${GITHUB_SHA:0:7})" --notes-file notes.md
+            gh release create test "${FILES[@]}" --latest --title "Test Release (${GITHUB_SHA:0:7})" --notes-file notes.md
           fi
