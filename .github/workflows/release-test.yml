@@ -88,7 +88,6 @@ jobs:
   # 本 job 不阻塞 release（continue-on-error），失败原因在 job 日志里可见。
   electron:
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -122,11 +121,8 @@ jobs:
           if-no-files-found: warn
 
   # ---------- 移动版产物（Capacitor + Gradle debug APK） ----------
-  # 做法：**不把 android/ 原生工程入库**（Gradle 工程含大量生成物与二进制），
-  # 而是每次在 CI 里 `cap add android` 重新生成 → sync → assembleDebug。
-  # 这样仓库只保留 capacitor.config.json + deps，构建完全可复现。
-  # 首次纳入 CI：脚手架/签名等问题先不阻塞其它平台（continue-on-error），
-  # 跑通后建议去掉这个开关，让"移动版打包失败"变成硬失败。
+  # android/ 原生工程不入库（Gradle 工程含大量生成物与二进制）：每次 CI 现场 cap add 重建。
+  # 注意：本 job 目前仍 continue-on-error（见下方注释），跑通后应去掉。
   mobile:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -153,27 +149,44 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Capacitor 的 webDir 是 www：先构建前端，再把它拷进 www。
       - name: Build frontend
         run: pnpm --filter frontend build
 
-      - name: Prepare web assets (dist → www)
+      - name: Prepare web assets (dist to www)
         working-directory: platforms/mobile
         run: npm run build
 
-      # 生成原生工程并同步（android/ 不入库，每次重建）。
+      # 诊断快照：失败时不用再猜（Java/SDK 平台/构建工具/www 内容）。
+      - name: Diagnostics
+        run: |
+          java -version
+          echo "ANDROID_HOME=${ANDROID_HOME:-未设置} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-未设置}"
+          ls "${ANDROID_HOME}/platforms" || true
+          ls "${ANDROID_HOME}/build-tools" || true
+          ls -la platforms/mobile/www | head -20
+
+      # AGP 构建前必须已接受 SDK 许可，否则 assembleDebug 直接失败。
+      - name: Accept Android SDK licenses
+        run: |
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKMANAGER" ]; then yes | "$SDKMANAGER" --licenses > /dev/null || true; fi
+
       - name: Add Android platform and sync
         working-directory: platforms/mobile
         run: |
           npx cap add android
           npx cap sync android
 
-      # 打 debug APK（ubuntu runner 自带 Android SDK 与 build-tools）。
+      # 显式写 sdk.dir（AGP 有时读不到 ANDROID_HOME）。
+      - name: Point Gradle at the Android SDK
+        working-directory: platforms/mobile/android
+        run: echo "sdk.dir=${ANDROID_HOME}" > local.properties
+
       - name: Build debug APK
         working-directory: platforms/mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Verify APK
         working-directory: platforms/mobile
@@ -186,8 +199,8 @@ jobs:
         with:
           name: mobile-artifacts
           path: platforms/mobile/android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: warn
-
+          # 没打出 APK 必须显式失败（此前 warn 让"没产出"被绿灯掩盖）。
+          if-no-files-found: error
   # ---------- 滚动 test release ----------
   release:
     needs: [web, electron, mobile]
