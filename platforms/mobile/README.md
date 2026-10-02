@@ -77,7 +77,7 @@ cd .. && node scripts/collect-apk.js     # → out/liferestart-mobile-debug.apk
 ## 测试
 
 ```bash
-node scripts/test-all.mjs mobile      # 37 用例：copy-dist（12）/ collect-apk（12）/ release workflow（13）
+node scripts/test-all.mjs mobile      # 39 用例：copy-dist（12）/ collect-apk（12）/ release workflow（15）
 ```
 
 `copy-dist.spec.js` 与 `collect-apk.spec.js` 用临时目录跑真实文件操作（不 mock fs）；

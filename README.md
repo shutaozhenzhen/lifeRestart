@@ -63,7 +63,7 @@ node scripts/test-all.mjs   # 没有 pnpm 的环境用这条（npm test 亦可�
 # 只跑单个包（参数按目录名/包名子串匹配）
 node scripts/test-all.mjs game-engine   # 引擎 643 用例（35 spec）
 node scripts/test-all.mjs frontend      # 前端 208 用例（25 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
-node scripts/test-all.mjs mobile        # 移动端 37 用例（脚本 + CI 不变量）
+node scripts/test-all.mjs mobile        # 移动端 39 用例（脚本 + CI 不变量）
 
 # 带参数透传给 vitest：`--` 之后的参数原样传给 vitest（不改包过滤）
 node scripts/test-all.mjs game-engine -- -t 属性页先读数
@@ -272,8 +272,8 @@ pnpm android:add && pnpm android:sync && pnpm android:open
 | `packages/frontend` | 208 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载**/**模拟驱动器**/**统计展示**）+ **7 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
-| `platforms/mobile` | 37 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
-| **合计** | **900** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
+| `platforms/mobile` | 39 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
+| **合计** | **902** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
 
 ### 前端测试分层（2026-10 补齐）
 

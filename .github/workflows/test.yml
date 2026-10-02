@@ -4,9 +4,10 @@
 # 说明：
 #   - 与 deploy-pages.yml 分工：本 workflow 只回答「测试是否全绿」，失败即红；
 #     部署 workflow 只负责构建 + 发布，两者互不阻塞。
-#   - 覆盖 4 个有测试的包：packages/game-engine（531）/ packages/frontend（13）
-#     / platforms/electron（5）/ platforms/web（7），共 556 用例。
-#     platforms/mobile 是脚手架（package.json 无 test 脚本），由 scripts/test-all.mjs 自动跳过。
+#   - 覆盖 5 个有测试的包：packages/game-engine（643）/ packages/frontend（208）
+#     / platforms/electron（5）/ platforms/web（7）/ platforms/mobile（39），共 902 用例。
+#     scripts/test-all.mjs 按各包 package.json 的 scripts.test 自动发现，没有 test 脚本的包会被跳过
+#     （并打印跳过原因，避免"零测试也算通过"）。
 #   - 依赖安装使用 --frozen-lockfile：lockfile 与 package.json 不一致时**直接失败**，
 #     避免再出现「本机能跑、干净环境装不上」的漂移。
 name: Test

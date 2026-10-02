@@ -76,6 +76,26 @@ const mobileJob = stripComments(extractJob('mobile'))
 const releaseJob = stripComments(extractJob('release'))
 const electronJob = stripComments(extractJob('electron'))
 
+describe('本包参与全量测试（否则新加的脚本测试永远不会在 CI 跑）', () => {
+  it('package.json 声明了 test 脚本（scripts/test-all.mjs 按它发现包）', () => {
+    // 读本包 package.json。
+    const pkg = JSON.parse(readFileSync(path.join(HERE, 'package.json'), 'utf8'))
+    // 必须有 test 脚本：没有的话 test-all 会把整个包跳过，37 个用例形同不存在。
+    expect(pkg.scripts?.test).toBe('vitest run')
+    // APK 收集脚本要有对应命令（CI 直接调 node，但本地要能一键跑）。
+    expect(pkg.scripts?.['apk:collect']).toBe('node scripts/collect-apk.js')
+  })
+
+  it('全量测试 workflow 用根 `pnpm test`（= test-all.mjs，覆盖所有包）', () => {
+    // 读 test.yml。
+    const testWorkflow = readFileSync(path.join(HERE, '..', '..', '.github', 'workflows', 'test.yml'), 'utf8')
+    // 断言用的是根测试入口，而不是"只跑某几个包"的写法。
+    expect(testWorkflow).toMatch(/run: pnpm test/)
+    // 安装必须冻结 lockfile（否则干净环境装不上时不会失败）。
+    expect(testWorkflow).toMatch(/pnpm install --frozen-lockfile/)
+  })
+})
+
 describe('release-test.yml 结构', () => {
   it('文件存在且声明了滚动 test release 应有的 4 个 job', () => {
     expect(text.length).toBeGreaterThan(0)
