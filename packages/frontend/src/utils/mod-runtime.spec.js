@@ -12,7 +12,7 @@
 // vitest DSL。
 import { describe, test, expect } from 'vitest'
 // 被测模块。
-import { createBrowserAIConfig, discoverMods, executeModCodes, loadModBundle, readAIConfig } from './mod-runtime.js'
+import { createBrowserAIConfig, discoverMods, executeModCodes, loadModBundle, readAIConfig, resolveAIProxyBase, NATIVE_AI_PROXY_PORT } from './mod-runtime.js'
 import { DEFAULT_MOD_LIST, buildModCatalog, enabledModNames } from './mod-catalog.js'
 import { buildSyncPlan, syncMods, writeSync } from '../../scripts/sync-mods.mjs'
 // 引擎（造真实 Life 验证参数注册）。
@@ -211,6 +211,41 @@ describe('mod-runtime - 执行 Mod 代码（注册新属性 / 钩子 / 异常隔
     expect(seen[0].url).toBe('/ai-proxy/v1/chat/completions')
     expect(seen[0].body.provider).toBe('deepseek')
     expect(seen[0].body.apiKey).toBe('sk-t')
+  })
+})
+
+describe('AI 代理地址解析（三种运行环境）', () => {
+  test('Electron 桌面版：用主进程注入的 baseUrl（优先级最高）', () => {
+    // 即使同时有 Capacitor 与构建期注入，也先用 Electron 的。
+    expect(
+      resolveAIProxyBase({
+        window: {
+          electronAIProxy: { baseUrl: 'http://127.0.0.1:9123' },
+          Capacitor: { isNativePlatform: () => true },
+        },
+        viteProxy: '/other',
+      }),
+    ).toBe('http://127.0.0.1:9123')
+  })
+
+  test('Capacitor 移动端：指向 App 内嵌的 Node 代理（绝对地址，因为移动端没有 vite 代理）', () => {
+    const base = resolveAIProxyBase({ window: { Capacitor: { isNativePlatform: () => true } } })
+    expect(base).toBe(`http://127.0.0.1:${NATIVE_AI_PROXY_PORT}`)
+    // 必须是绝对地址：WebView 页面是 https://localhost，相对路径会打到 Capacitor 自己的服务器上。
+    expect(base.startsWith('http://127.0.0.1:')).toBe(true)
+  })
+
+  test('浏览器 / Web 单进程版：构建期注入 > 默认 /ai-proxy', () => {
+    // 有构建期注入用注入值（Capacitor 存在但不是原生平台，例如浏览器里加载了 Capacitor web 包）。
+    expect(resolveAIProxyBase({ window: { Capacitor: { isNativePlatform: () => false } }, viteProxy: '/custom-proxy' })).toBe('/custom-proxy')
+    // 都没有 → 默认前缀（vite 开发代理与 Web 版内嵌代理都挂在这个前缀下）。
+    expect(resolveAIProxyBase({ window: undefined, viteProxy: undefined })).toBe('/ai-proxy')
+  })
+
+  test('代理地址会拼出 /v1（与代理服务的路由一致）', () => {
+    // 内嵌 Node 代理的路由是 /v1/chat/completions，createBrowserAIConfig 负责拼前缀。
+    const nativeBase = resolveAIProxyBase({ window: { Capacitor: { isNativePlatform: () => true } } })
+    expect(`${nativeBase.replace(/\/$/, '')}/v1`).toBe(`http://127.0.0.1:${NATIVE_AI_PROXY_PORT}/v1`)
   })
 })
 

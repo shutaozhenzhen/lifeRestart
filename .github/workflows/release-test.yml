@@ -128,8 +128,11 @@ jobs:
           path: platforms/electron/release/*.exe
           if-no-files-found: warn
 
-  # ---------- 移动版产物（Capacitor + Gradle debug APK） ----------
-  # android/ 原生工程不入库（Gradle 工程含大量生成物与二进制）：每次 CI 现场 cap add 重建。
+  # ---------- 移动版产物（Capacitor + Gradle debug APK，内置 Node 运行时） ----------
+  # android/ 原生工程不入库（Gradle 工程含大量生成物与二进制）：每次 CI 现场 cap add 重建，
+  # 再由 scripts/prepare-android.js 把「APK 内置 Node 运行时」接进去（官方 nodejs-mobile v18.20.4）：
+  #   assets/nodejs-project/（main.js + 打包好的 game-engine AI 代理）+ libnode.so + JNI 壳（CMake）
+  #   → 设备上 Node 监听 127.0.0.1:8787，WebView 里的前端直连它（三端共用同一份代理实现）。
   # JDK 必须是 21（Capacitor 7 / AGP 8.11+）：用 17 会在 `Build debug APK` 阶段直接失败
   # （已在 run 36992811506 上复现，换 21 后 run 36993418144 起稳定通过）。
   mobile:
@@ -164,13 +167,16 @@ jobs:
         working-directory: platforms/mobile
         run: npm run build
 
-      # 诊断快照：失败时不用再猜（Java/SDK 平台/构建工具/www 内容）。
+      # 诊断快照：失败时不用再猜（Java/SDK 平台/构建工具/NDK/CMake/www 内容）。
       - name: Diagnostics
         run: |
           java -version
           echo "ANDROID_HOME=${ANDROID_HOME:-未设置} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-未设置}"
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-未设置}"
           ls "${ANDROID_HOME}/platforms" || true
           ls "${ANDROID_HOME}/build-tools" || true
+          ls "${ANDROID_HOME}/ndk" || true
+          ls "${ANDROID_HOME}/cmake" || true
           ls -la platforms/mobile/www | head -20
 
       # AGP 构建前必须已接受 SDK 许可，否则 assembleDebug 直接失败。
@@ -189,6 +195,48 @@ jobs:
       - name: Point Gradle at the Android SDK
         working-directory: platforms/mobile/android
         run: echo "sdk.dir=${ANDROID_HOME}" > local.properties
+
+      # 显式指定 CMake 版本为 SDK 里最高的 3.x：runner 上同时装了 3.31.5 与 4.1.2，
+      # 不指定的话 AGP 可能挑到 CMake 4，而 NDK 的 toolchain 文件未必兼容
+      # （见 android-patch/gradle/nodejs.gradle 里的说明）。
+      - name: Pin CMake version for Gradle
+        run: |
+          if [ -d "${ANDROID_HOME}/cmake" ]; then
+            CMAKE_VERSION=$(ls "${ANDROID_HOME}/cmake" | grep -E '^3\.' | sort -V | tail -1)
+            if [ -n "$CMAKE_VERSION" ]; then
+              echo "LIFERESTART_CMAKE_VERSION=${CMAKE_VERSION}" >> "$GITHUB_ENV"
+              echo "使用 CMake ${CMAKE_VERSION}"
+            else
+              echo "SDK 里没有 3.x 的 CMake，交给 AGP 自行选择"
+            fi
+          else
+            echo "SDK 里没有 cmake 目录，交给 AGP 自行选择"
+          fi
+
+      # 官方 nodejs-mobile 运行时（预编译 libnode.so + 头文件）。
+      # 这是会随 APK 分发到用户设备的二进制，所以固定版本 + 校验 sha256（供应链）。
+      - name: Fetch nodejs-mobile runtime (pinned + sha256)
+        run: |
+          curl -fsSL -o /tmp/nodejs-mobile-android.zip \
+            https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v18.20.4/nodejs-mobile-v18.20.4-android.zip
+          echo "bd7321eaa1a7602fbe0bb87302df2d79d87835cf4363fbdd17c350dbb485c2af  /tmp/nodejs-mobile-android.zip" | sha256sum -c -
+          mkdir -p platforms/mobile/.libnode
+          unzip -q /tmp/nodejs-mobile-android.zip -d platforms/mobile/.libnode
+          test -f platforms/mobile/.libnode/include/node/node.h
+          ls -la platforms/mobile/.libnode/bin/*/libnode.so
+
+      # 把 APK 内置 Node 侧（AI 代理）打包成 CJS 单文件，并用桌面 Node 冒烟跑一遍。
+      # 设备上跑的是**同一份 JS**，所以这一步能排掉"代码/打包错"这一大类问题。
+      - name: Build embedded Node project (bundle + smoke)
+        working-directory: platforms/mobile
+        run: |
+          node scripts/build-node-project.js
+          node scripts/smoke-node-project.js
+
+      # 把运行时/JNI/Java/Gradle/清单/Node 工程接进现场生成的 Android 工程。
+      - name: Patch Android project (nodejs-mobile integration)
+        working-directory: platforms/mobile
+        run: node scripts/prepare-android.js --libnode .libnode
 
       # Gradle 失败的真正原因在日志里，而 Actions 日志接口需要 admin 权限（本地读不到），
       # 所以这里把输出落盘，失败时用 `::error::` 注解把末尾原因带到 check-run 注解上（公开可读）。
@@ -214,6 +262,39 @@ jobs:
         run: |
           find android/app/build/outputs/apk -name '*.apk' -exec ls -lh {} \;
           test -n "$(find android/app/build/outputs/apk -name '*.apk')"
+
+      # 校验 APK 里**真的**带了内置 Node 运行时。为什么必须查：
+      # "没打进去"在 job 绿着的情况下完全可能发生（此前 APK 就被 upload-artifact 的子目录规则吞过一次），
+      # 而设备上的表现是"AI 用不了"，排查成本极高。
+      - name: Verify embedded Node runtime inside APK
+        working-directory: platforms/mobile
+        run: |
+          APK=$(find android/app/build/outputs/apk -name '*.apk' | head -1)
+          echo "APK: ${APK}（$(du -h "$APK" | cut -f1)）"
+          unzip -l "$APK" > /tmp/apk-list.txt
+          fail() { echo "::error title=APK 内容校验失败::$1"; exit 1; }
+          check() { grep -q "$1" /tmp/apk-list.txt || fail "$2（APK 里找不到 $1）"; }
+          # Node 侧脚本（设备上真正执行的 JS）。
+          check 'assets/nodejs-project/main.js' 'Node 入口脚本没打进 APK'
+          check 'assets/nodejs-project/proxy.js' '打包好的 AI 代理没打进 APK'
+          # 原生侧：libnode + 我们的 JNI 壳 + libC++ 共享库（libnode 依赖它）。
+          check 'lib/arm64-v8a/libnode.so' 'libnode.so（arm64）没打进 APK'
+          check 'lib/arm64-v8a/libnodejs_jni.so' 'JNI 壳没打进 APK'
+          check 'lib/arm64-v8a/libc++_shared.so' 'libc++_shared.so 没打进 APK（libnode 依赖它）'
+          # 清单：INTERNET 权限 + 只对回环放开明文 HTTP 的网络策略。
+          MANIFEST=/tmp/manifest.txt
+          AAPT2=$(ls "${ANDROID_HOME}"/build-tools/*/aapt2 2>/dev/null | tail -1)
+          if [ -n "$AAPT2" ]; then
+            "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > "$MANIFEST" 2>/dev/null || true
+          fi
+          if [ ! -s "$MANIFEST" ]; then
+            AAPT=$(ls "${ANDROID_HOME}"/build-tools/*/aapt 2>/dev/null | tail -1)
+            [ -n "$AAPT" ] || fail "找不到 aapt/aapt2，无法校验清单"
+            "$AAPT" dump xmltree "$APK" AndroidManifest.xml > "$MANIFEST"
+          fi
+          grep -qi 'INTERNET' "$MANIFEST" || fail "清单缺少 INTERNET 权限"
+          grep -qi 'networkSecurityConfig' "$MANIFEST" || fail "清单缺少 networkSecurityConfig（127.0.0.1 明文 HTTP 会被挡）"
+          echo "APK 内容校验通过：Node 脚本、libnode、JNI 壳、libC++、清单权限与网络策略都在"
 
       # 收集成「平铺目录 + 固定文件名」再上传：
       # upload-artifact v4 以通配符之前的前缀作为压缩根，直接上传 apk/**/*.apk 解包后是
@@ -310,7 +391,10 @@ jobs:
           - \`liferestart-frontend-dist.zip\` — 网页版构建产物（Vite dist，含 data/ 与 mods/）
           - \`liferestart-web.zip\` — Web 单进程版（静态 + 内嵌 AI 代理，解压即运行）
           - \`*.exe\` — 桌面版安装包（存在时才有；由 electron-builder 产出）
-          - \`liferestart-mobile-debug.apk\` — 移动版 debug 包（Capacitor + Gradle 现场构建）
+          - \`liferestart-mobile-debug.apk\` — 移动版 debug 包（Capacitor + Gradle 现场构建，**内置 Node 运行时**：AI 代理在 App 内跑，监听 127.0.0.1:8787）
+
+          > 移动包的体积主要来自内置的 Node 运行时（\`libnode.so\` 每个 ABI 约 56~62 MB，已开启压缩打包）；
+          > 安装后可在 logcat 用 \`LiferestartNode\` 标签查看 Node 侧日志。
 
           > 这是**滚动测试发布**（每次 push 重建，始终只有最新一份），仅用于验证构建与分发流程。
           EOF

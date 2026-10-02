@@ -146,6 +146,50 @@ describe('mobile job：不许再掩盖失败', () => {
   })
 })
 
+describe('mobile job：APK 内置 Node 运行时（nodejs-mobile）', () => {
+  it('下载官方运行时：固定版本 + 校验 sha256（会随 APK 分发到用户设备的二进制）', () => {
+    // 版本固定（不追 latest，避免上游悄悄换掉二进制）。
+    expect(mobileJob).toMatch(/nodejs-mobile-v18\.20\.4-android\.zip/)
+    expect(mobileJob).toMatch(/releases\/download\/v18\.20\.4\//)
+    // 供应链校验。
+    expect(mobileJob).toMatch(/sha256sum -c -/)
+    expect(mobileJob).toMatch(/bd7321eaa1a7602fbe0bb87302df2d79d87835cf4363fbdd17c350dbb485c2af/)
+  })
+
+  it('先打包 Node 侧并冒烟，再打补丁进 Android 工程', () => {
+    expect(mobileJob).toMatch(/node scripts\/build-node-project\.js/)
+    // 桌面 Node 冒烟（设备上跑同一份 JS）。
+    expect(mobileJob).toMatch(/node scripts\/smoke-node-project\.js/)
+    expect(mobileJob).toMatch(/node scripts\/prepare-android\.js --libnode \.libnode/)
+  })
+
+  it('顺序正确：补丁必须在 cap add / cap sync 之后、Gradle 构建之前', () => {
+    const capAddAt = mobileJob.indexOf('npx cap add android')
+    const patchAt = mobileJob.indexOf('node scripts/prepare-android.js')
+    const gradleAt = mobileJob.indexOf('./gradlew assembleDebug')
+    expect(capAddAt).toBeGreaterThan(-1)
+    expect(patchAt).toBeGreaterThan(capAddAt)
+    expect(gradleAt).toBeGreaterThan(patchAt)
+  })
+
+  it('显式指定 CMake 3.x（runner 上还有 CMake 4，NDK toolchain 未必兼容）', () => {
+    expect(mobileJob).toMatch(/LIFERESTART_CMAKE_VERSION/)
+  })
+
+  it('校验 APK 里真的带了内置 Node 运行时（缺件就失败，不许绿着交付）', () => {
+    expect(mobileJob).toMatch(/Verify embedded Node runtime inside APK/)
+    // Node 脚本。
+    expect(mobileJob).toMatch(/assets\/nodejs-project\/main\.js/)
+    expect(mobileJob).toMatch(/assets\/nodejs-project\/proxy\.js/)
+    // 原生库（含 libnode 依赖的 libC++ 共享库）。
+    expect(mobileJob).toMatch(/lib\/arm64-v8a\/libnode\.so/)
+    expect(mobileJob).toMatch(/libnodejs_jni\.so/)
+    expect(mobileJob).toMatch(/libc\+\+_shared\.so/)
+    // 清单：INTERNET + 只对回环放开明文。
+    expect(mobileJob).toMatch(/networkSecurityConfig/)
+  })
+})
+
 describe('release job：产物收集与发布可见性', () => {
   it('递归收集产物（不再用平铺的 artifacts/*.apk）', () => {
     expect(releaseJob).toMatch(/find artifacts -type f/)

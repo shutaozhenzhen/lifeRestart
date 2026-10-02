@@ -62,8 +62,8 @@ node scripts/test-all.mjs   # 没有 pnpm 的环境用这条（npm test 亦可�
 
 # 只跑单个包（参数按目录名/包名子串匹配）
 node scripts/test-all.mjs game-engine   # 引擎 643 用例（35 spec）
-node scripts/test-all.mjs frontend      # 前端 208 用例（25 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
-node scripts/test-all.mjs mobile        # 移动端 39 用例（脚本 + CI 不变量）
+node scripts/test-all.mjs frontend      # 前端 212 用例（25 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
+node scripts/test-all.mjs mobile        # 移动端 67 用例（脚本 + 契约 + CI 不变量）
 
 # 带参数透传给 vitest：`--` 之后的参数原样传给 vitest（不改包过滤）
 node scripts/test-all.mjs game-engine -- -t 属性页先读数
@@ -204,12 +204,14 @@ cd platforms/electron && npx electron . --smoke    # 冒烟
 # Web 版（单进程：静态资源 + 内嵌代理，产出解压即运行的 zip）
 cd platforms/web && node scripts/build.js          # → release/liferestart-web.zip
 
-# 移动版（Capacitor：把前端产物同步到 www/，再生成 Android 工程打 debug APK）
+# 移动版（Capacitor + **APK 内置 Node 运行时**：AI 代理在 App 内跑，监听 127.0.0.1:8787）
 cd platforms/mobile
-pnpm build                       # 前端产物 → www/（已构建过则直接复用，--rebuild 可强制重建）
-node scripts/collect-apk.js      # 可选：把 APK 收集到 out/liferestart-mobile-debug.apk（CI 用）
-pnpm android:add && pnpm android:sync && pnpm android:open
-# 需要 JDK 21（Capacitor 7 / AGP 8.11+）；CI 里由 .github/workflows/release-test.yml 的 mobile job 全程执行
+pnpm build                        # 前端产物 → www/（已构建过则复用，--rebuild 可强制重建）
+pnpm build:node && pnpm apk:smoke # 打包 APK 内置的 Node 侧（AI 代理）+ 桌面 Node 冒烟（同一份 JS）
+npx cap add android && npx cap sync android
+node scripts/prepare-android.js --libnode .libnode   # 接进运行时/JNI/清单/网络策略（.libnode 见 platforms/mobile/README.md）
+node scripts/collect-apk.js       # 可选：把 APK 收集到 out/liferestart-mobile-debug.apk（CI 用）
+# 需要 JDK 21 + NDK 27.x + CMake 3.x；CI 里由 .github/workflows/release-test.yml 的 mobile job 全程执行并校验 APK 内容
 ```
 
 ## 架构要点
@@ -269,11 +271,11 @@ pnpm android:add && pnpm android:sync && pnpm android:open
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
 | `packages/game-engine` | 643 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**与**HTTP 文件源**）/ ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 208 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载**/**模拟驱动器**/**统计展示**）+ **7 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
+| `packages/frontend` | 212 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载**/**模拟驱动器**/**统计展示**）+ **7 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
-| `platforms/mobile` | 39 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
-| **合计** | **902** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
+| `platforms/mobile` | 67 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
+| **合计** | **934** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
 
 ### 前端测试分层（2026-10 补齐）
 
@@ -307,7 +309,7 @@ pnpm android:add && pnpm android:sync && pnpm android:open
 ## 进度
 
 - **阶段一 ~ 四（Step 1–22）**：全部完成 —— 引擎内核、Vue 前端 UI、Mod 系统、AI 集成（含代理服务）
-- **阶段五（平台打包 Step 23–26）**：Step 23（Electron）/ 24（Web）/ 26（跨平台一致性）完成；Step 25（Capacitor 移动端）**CI 已能真实产出 debug APK**（ubuntu runner + JDK 21 现场 `cap add android` + `gradlew assembleDebug`，产物随滚动 test release 发布）；**App 内嵌 AI 代理（nodejs-mobile）尚未实现**，当前 APK 只含 WebView 前端
+- **阶段五（平台打包 Step 23–26）**：Step 23（Electron）/ 24（Web）/ 26（跨平台一致性）完成；Step 25（Capacitor 移动端）**CI 产出带内置 Node 运行时的 debug APK**（ubuntu runner + JDK 21 + NDK/CMake 现场 `cap add android` → 接进 nodejs-mobile v18.20.4（`libnode.so` + JNI 壳）→ `gradlew assembleDebug` → 校验 APK 内容 → 随滚动 test release 发布）。**AI 代理在 App 内跑**（Node 监听 127.0.0.1:8787，与桌面/Web 共用同一份 `createProxyHandler`）；**真机未验收**，release 包仍是 debug 签名
 - **GitHub Pages 在线版**：已上线 <https://shutaozhenzhen.github.io/lifeRestart/>（阶段五延伸，纯静态托管；AI 不可用）
 - **工程化基线（2026-09-30）**：lockfile 重算 + 全流程 `--frozen-lockfile`；根目录 `pnpm test`
   不再依赖全局 pnpm；新增测试 CI；上游 `remake` 已重构为 TS monorepo（数据路径未变，Data Mod 无需重转）

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  明文 HTTP 白名单（由 prepare-android.js 复制到 res/xml/ 并在 AndroidManifest 里引用）。
+
+  为什么需要：APK 内置的 Node 代理监听 http://127.0.0.1:8787（本地回环，没有 TLS）。
+  Android 9（API 28）起默认禁止明文流量，不放行就会直接连不上。
+
+  为什么不用 android:usesCleartextTraffic="true"：那会对**所有**域名放开明文，
+  而这里只需要回环地址。范围最小化，其它出网请求仍然强制 HTTPS。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

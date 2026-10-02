@@ -1,0 +1,63 @@
+// APK 内置 Node 运行时（nodejs-mobile v18.20.4）—— 由 scripts/prepare-android.js 追加到 app/build.gradle
+//
+// 为什么用「追加一行 apply from」而不是正则改模板：
+//   android/ 不入库（CI 每次 cap add 现场生成），模板内容会随 Capacitor 版本变化；
+//   正则改模板又脆又难测，而 `apply from` 只依赖一个稳定约定：app/build.gradle 末尾追加一行。
+//   Gradle 允许从多个脚本配置同一个 android 扩展，所以这里能覆盖 minSdk、加 CMake、加 jniLibs。
+
+android {
+    defaultConfig {
+        // nodejs-mobile 要求 API >= 24（Capacitor 模板默认 23）。
+        minSdkVersion 24
+
+        ndk {
+            // 官方预编译库只提供这三个 ABI（x86 已停止支持）。
+            abiFilters "arm64-v8a", "armeabi-v7a", "x86_64"
+        }
+
+        externalNativeBuild {
+            cmake {
+                // libnode.so 是以 libC++ **共享库**构建的，必须与它保持一致（否则加载时缺符号）。
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
+
+    // 用环境里已有的 NDK，避免 AGP 去下载它自己默认的版本（GitHub runner 预装 27.x，见 Ubuntu 镜像说明）。
+    // 本地没设 ANDROID_NDK_HOME 时不指定，交给 AGP（可能提示安装 NDK）。
+    if (System.getenv("ANDROID_NDK_HOME")) {
+        ndkVersion new File(System.getenv("ANDROID_NDK_HOME")).getName()
+    }
+
+    externalNativeBuild {
+        cmake {
+            // JNI 壳（node::Start 的入口），见 app/src/main/cpp/。
+            path file('src/main/cpp/CMakeLists.txt')
+
+            // 显式指定 CMake 版本（CI 用 LIFERESTART_CMAKE_VERSION 传入）。
+            // 为什么需要：不指定时 AGP 可能在 SDK 里挑到最高版本的 CMake，
+            // 而 GitHub runner 上同时装了 3.31.5 与 **4.x**，NDK 的 toolchain 文件未必兼容 CMake 4；
+            // 本地不设这个环境变量就交给 AGP 自己决定（不强加版本要求）。
+            if (System.getenv("LIFERESTART_CMAKE_VERSION")) {
+                version System.getenv("LIFERESTART_CMAKE_VERSION")
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            // 预编译的 libnode.so（app/libnode/bin/<abi>/libnode.so）随 APK 打包。
+            // 用 srcDir（追加）而不是 srcDirs（替换），保留默认的 src/main/jniLibs。
+            jniLibs.srcDir 'libnode/bin'
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // libnode.so 每个 ABI 约 56~62 MB（未压缩）。默认从 AGP 8 起 .so 是**不压缩**存的，
+            // 三个 ABI 会让 APK 直接涨到 ~180 MB；打开 legacy packaging 后 .so 会被压缩存储
+            // （安装时解压），APK 体积降到 1/3 左右，代价是安装时多一些解压时间。
+            useLegacyPackaging = true
+        }
+    }
+}

@@ -2,23 +2,28 @@
   "name": "mobile-platform",
   "version": "0.0.1",
   "private": true,
-  "description": "移动端（Capacitor APK，Step 25）— 前端 WebView + nodejs-mobile 内嵌 AI 代理",
+  "description": "移动端（Capacitor APK + 内置 Node 运行时，Step 25）— WebView 前端 + APK 内 nodejs-mobile 跑 AI 代理",
   "type": "module",
   "scripts": {
     "test": "vitest run",
     "build": "node scripts/copy-dist.js",
     "build:rebuild": "node scripts/copy-dist.js --rebuild",
+    "build:node": "node scripts/build-node-project.js",
+    "android:prepare": "node scripts/prepare-android.js",
     "apk:collect": "node scripts/collect-apk.js",
+    "apk:smoke": "node scripts/smoke-node-project.js",
     "android:add": "npx cap add android",
     "android:sync": "npx cap sync android",
     "android:open": "npx cap open android"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
-    "@capacitor/core": "^7.0.0"
+    "@capacitor/core": "^7.0.0",
+    "game-engine": "workspace:*"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
+    "esbuild": "^0.21.5",
     "vitest": "^4.1.10"
   }
 }

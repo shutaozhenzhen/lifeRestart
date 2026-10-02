@@ -18,6 +18,12 @@ platforms/web/public/
 platforms/web/release/
 platforms/web/bundle/
 platforms/mobile/www/
+# APK 内置 Node 侧（main.js + 打包好的 proxy.js）：build-node-project.js 的产物
+platforms/mobile/nodejs-build/
+# 官方 nodejs-mobile 运行时（~54 MB 的 zip / 解压后的 include+bin）：CI 现场下载，勿入库
+platforms/mobile/.libnode/
+# 测试临时产物（esbuild 打包产物等）
+platforms/mobile/.tmp/
 
 # Data Mod（原版数据转换产物）已入库：mods/lifeRestart-data/
 # 内容与 packages/frontend/public/data/ 一致（同一转换产物），保证干净克隆后

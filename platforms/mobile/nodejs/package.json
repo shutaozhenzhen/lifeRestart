@@ -1,0 +1,8 @@
+{
+  "name": "liferestart-node-project",
+  "version": "0.0.1",
+  "private": true,
+  "description": "APK 内置的 Node 侧：AI 代理服务（由 nodejs-mobile 运行时执行）",
+  "main": "main.js",
+  "license": "MIT"
+}

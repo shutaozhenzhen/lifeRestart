@@ -24,8 +24,40 @@ import { createAIMod } from 'game-engine/src/ai/ai-mod.js'
 // Mod 静态资源根路径（由 scripts/sync-mods.mjs 生成）。
 export const MODS_BASE_URL = '/mods/'
 
-// AI 代理地址（与 Mod 管理页的"测试连接"一致：Electron 注入 → 环境变量 → 默认路径）。
-export const AI_PROXY_BASE = globalThis.window?.electronAIProxy?.baseUrl || import.meta.env?.VITE_AI_PROXY || '/ai-proxy'
+// #NATIVE_AI_PROXY_PORT
+// 移动端（Capacitor 壳）里内置 Node 运行时监听的端口。
+//
+// ⚠️ 三处必须一致（有契约测试 platforms/mobile/nodejs-contract.spec.js 逐个解析比对）：
+//   1. 这里（前端请求地址）
+//   2. platforms/mobile/android-patch/java/com/liferestart/mobile/NodeRuntime.java 的 PROXY_PORT
+//   3. platforms/mobile/nodejs/main.js 的默认端口
+export const NATIVE_AI_PROXY_PORT = 8787
+
+// #resolveAIProxyBase
+// 解析 AI 代理地址（纯函数，便于测试；三种运行环境优先级从高到低）：
+//   1. Electron 桌面版：主进程通过 preload 注入 window.electronAIProxy.baseUrl
+//   2. Capacitor 移动端：App 内嵌 Node 运行时（nodejs-mobile）监听 127.0.0.1:NATIVE_AI_PROXY_PORT
+//      —— 移动端没有 vite 代理，必须给**绝对地址**；WebView 里页面是 https://localhost，
+//         访问 http://127.0.0.1 属于混合内容，靠 capacitor.config.json 的
+//         android.allowMixedContent 放行（明文 HTTP 则由 network_security_config 只对回环放行）
+//   3. 浏览器/Web 单进程版：vite 代理或平台内嵌服务的 /ai-proxy 前缀
+//
+// @param {object} [params]
+// @param {object} [params.window] - 注入的 window（测试用）
+// @param {string} [params.viteProxy] - 构建期注入的代理地址
+// @returns {string} 代理根地址（不含 /v1）
+export function resolveAIProxyBase({ window: win = globalThis.window, viteProxy = import.meta.env?.VITE_AI_PROXY } = {}) {
+  // 1) Electron 注入（桌面版）。
+  const electronBase = win?.electronAIProxy?.baseUrl
+  if (electronBase) return electronBase
+  // 2) Capacitor 原生壳（Android/iOS）：App 内嵌 Node 运行时。
+  if (win?.Capacitor?.isNativePlatform?.()) return `http://127.0.0.1:${NATIVE_AI_PROXY_PORT}`
+  // 3) 构建期注入 → 默认前缀。
+  return viteProxy || '/ai-proxy'
+}
+
+// AI 代理地址（运行时解析一次；纯逻辑在 resolveAIProxyBase 里，可单测）。
+export const AI_PROXY_BASE = resolveAIProxyBase()
 
 // #readAIConfig
 // 读取 Mod 管理页保存的 AI 配置（localStorage 键 aiConfig）。
