@@ -121,9 +121,76 @@ jobs:
           path: platforms/electron/release/*.exe
           if-no-files-found: warn
 
+  # ---------- 移动版产物（Capacitor + Gradle debug APK） ----------
+  # 做法：**不把 android/ 原生工程入库**（Gradle 工程含大量生成物与二进制），
+  # 而是每次在 CI 里 `cap add android` 重新生成 → sync → assembleDebug。
+  # 这样仓库只保留 capacitor.config.json + deps，构建完全可复现。
+  # 首次纳入 CI：脚手架/签名等问题先不阻塞其它平台（continue-on-error），
+  # 跑通后建议去掉这个开关，让"移动版打包失败"变成硬失败。
+  mobile:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Capacitor 7 的 Android 工程需要 JDK 17。
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Capacitor 的 webDir 是 www：先构建前端，再把它拷进 www。
+      - name: Build frontend
+        run: pnpm --filter frontend build
+
+      - name: Prepare web assets (dist → www)
+        working-directory: platforms/mobile
+        run: npm run build
+
+      # 生成原生工程并同步（android/ 不入库，每次重建）。
+      - name: Add Android platform and sync
+        working-directory: platforms/mobile
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      # 打 debug APK（ubuntu runner 自带 Android SDK 与 build-tools）。
+      - name: Build debug APK
+        working-directory: platforms/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Verify APK
+        working-directory: platforms/mobile
+        run: |
+          find android/app/build/outputs/apk -name '*.apk' -exec ls -lh {} \;
+          test -n "$(find android/app/build/outputs/apk -name '*.apk')"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-artifacts
+          path: platforms/mobile/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
+
   # ---------- 滚动 test release ----------
   release:
-    needs: [web, electron]
+    needs: [web, electron, mobile]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -150,9 +217,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 收集产物（zip/exe；没有 exe 时也要能发出去）。
+          # 收集产物（zip/exe/apk；缺某一类时也要能发出去）。
           shopt -s nullglob
-          FILES=(artifacts/*.zip artifacts/*.exe)
+          FILES=(artifacts/*.zip artifacts/*.exe artifacts/*.apk)
           echo "将发布：${FILES[*]}"
           # 生成说明（含提交信息，便于对照"这一版打包的是哪次提交"）。
           cat > notes.md <<EOF
@@ -169,6 +236,7 @@ jobs:
           - \`liferestart-frontend-dist.zip\` — 网页版构建产物（Vite dist，含 data/ 与 mods/）
           - \`liferestart-web.zip\` — Web 单进程版（静态 + 内嵌 AI 代理，解压即运行）
           - \`*.exe\` — 桌面版安装包（存在时才有；由 electron-builder 产出）
+          - \`*.apk\` — 移动版 debug 包（存在时才有；Capacitor + Gradle 现场构建）
 
           > 这是预发布（prerelease），仅用于验证构建与分发流程。
           EOF
