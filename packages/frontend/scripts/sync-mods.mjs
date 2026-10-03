@@ -80,6 +80,30 @@ export function buildSyncPlan({ modsDir }) {
         if (existsSync(join(dir, file))) files.push(file)
       }
     }
+    // 运行时模块（manifest.modules 声明的依赖，随包分发的自包含单文件）。
+    // 必须一起同步：浏览器侧由引擎在**运行时**读这些文件并加载（见 src/mod/modules.js）。
+    // 读失败/JSON 坏 → 记错误但继续（与其它容错一致）。
+    try {
+      // manifest。
+      const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'))
+      // 声明的模块路径。
+      for (const rel of Object.values(manifest.modules || {})) {
+        // 路径安全（构建期也挡一次，避免同步出目录穿越）。
+        if (typeof rel !== 'string' || rel.includes('..')) {
+          // 记错误。
+          errors.push(`Mod ${name} 的 modules 路径不安全（已跳过）：${rel}`)
+          // 下一个。
+          continue
+        }
+        // 存在即带上。
+        if (existsSync(join(dir, rel))) files.push(rel)
+        // 声明了却没有文件 → 记错误（否则浏览器侧要到运行时才发现）。
+        else errors.push(`Mod ${name} 声明的模块文件不存在：${rel}`)
+      }
+    } catch (e) {
+      // manifest 读不了（上面已按"缺 manifest"处理过），这里只记模块解析失败。
+      errors.push(`Mod ${name} 的 modules 解析失败：${e.message}`)
+    }
     // 记录。
     index.push(name)
     mods.push({ name, files, skipData })
@@ -115,8 +139,12 @@ export function writeSync({ plan, modsDir, outDir }) {
     mkdirSync(target, { recursive: true })
     // 复制文件。
     for (const file of mod.files) {
+      // 目标路径。
+      const dst = join(target, file)
+      // 运行时模块可能在子目录里（如 vendor/x.mjs）→ 先建父目录。
+      mkdirSync(dirname(dst), { recursive: true })
       // 复制。
-      copyFileSync(join(modsDir, mod.name, file), join(target, file))
+      copyFileSync(join(modsDir, mod.name, file), dst)
       // 计数。
       copied++
     }

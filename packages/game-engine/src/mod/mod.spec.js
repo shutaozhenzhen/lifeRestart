@@ -1,23 +1,28 @@
 /**
  * Mod 系统单元测试 — mod.spec.js
  *
- * 覆盖范围：33 个测试用例，分为 4 组：
+ * 覆盖范围（5 组）：
  *   1. validateManifest（合法/非法/权限/依赖）
  *   2. resolveOrder（拓扑排序/循环依赖/缺失依赖）
  *   3. createModLoader（扫描/加载/合并覆盖）
  *   4. createGameAPI（钩子/CRUD/冲突覆盖）
+ *   5. Mod 架构 v2：manifest 的 targets / entry / deterministic 三字段与取值助手
+ *
+ * 宿主桥（seam #3）的测试在 host.spec.js。
  */
 
 // 导入 vitest 测试 DSL 和被测函数。
 import { describe, test, expect, beforeEach, afterEach } from 'vitest'
 // Node 内置：临时文件。
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, readdirSync, existsSync } from 'node:fs'
 // Node 内置：路径。
 import { join } from 'node:path'
 // Node 内置：临时目录。
 import { tmpdir } from 'node:os'
-// manifest 校验与排序。
-import { validateManifest, resolveOrder } from './manifest.js'
+// Node 内置：URL → 路径（定位仓库真实 mods/）。
+import { fileURLToPath } from 'node:url'
+// manifest 校验与排序 + v2 取值助手。
+import { validateManifest, resolveOrder, manifestTargets, manifestEntry, manifestDeterministic, VALID_TARGETS, DEFAULT_BROWSER_ENTRY } from './manifest.js'
 // Mod 加载器。
 import { createModLoader, scanMods } from './loader.js'
 // Node 文件源（平台无关内核的 fs 实现）。
@@ -471,5 +476,208 @@ describe('mod - createGameAPI', () => {
     // 全部。
     expect(api.param.names).toContain('CHR')
     expect(api.param.names).toContain('DOUBLE')
+  })
+})
+
+// ========== 测试组 5：manifest v2（targets / entry / deterministic）==========
+describe('mod - manifest v2 字段与取值助手', () => {
+  // 仓库真实 mods 目录（用于"内置 Mod 语义不变"的回归）。
+  const MODS_DIR = fileURLToPath(new URL('../../../../mods/', import.meta.url))
+
+  // --- 向后兼容：不写新字段 = 与旧版逐位一致 ---
+
+  test('旧 manifest（无新字段）仍然合法', () => {
+    // 旧版典型 manifest。
+    const old = { name: 'old-mod', version: '1.0.0', permissions: ['hooks'], dependencies: ['base-mod'] }
+    // 校验通过。
+    expect(validateManifest(old)).toEqual({ ok: true, errors: [] })
+  })
+
+  test('旧 manifest 的取值助手给出旧语义默认值', () => {
+    // 旧版 manifest。
+    const old = { name: 'old-mod', version: '1.0.0' }
+    // 目标缺省纯前端。
+    expect(manifestTargets(old)).toEqual(['browser'])
+    // 浏览器入口缺省 code.js（与 loader.js 的 CODE_FILE 一致）。
+    expect(manifestEntry(old, 'browser')).toBe('code.js')
+    expect(manifestEntry(old, 'browser')).toBe(DEFAULT_BROWSER_ENTRY)
+    // 没有后端入口。
+    expect(manifestEntry(old, 'node')).toBeNull()
+    // 缺省确定（纯前端 → 可复现承诺成立）。
+    expect(manifestDeterministic(old)).toBe(true)
+  })
+
+  test('空对象/undefined 也能安全取默认值', () => {
+    // 不炸，且语义与旧版一致。
+    expect(manifestTargets(undefined)).toEqual(['browser'])
+    expect(manifestEntry({}, 'browser')).toBe('code.js')
+    expect(manifestEntry({}, 'node')).toBeNull()
+    expect(manifestDeterministic({})).toBe(true)
+  })
+
+  test('manifestTargets 返回新数组（外部改不到内部）', () => {
+    // 带 targets 的 manifest。
+    const m = { name: 'a', version: '1.0.0', targets: ['browser', 'node'] }
+    // 取出并改。
+    manifestTargets(m).push('hacked')
+    // 原数据不受影响。
+    expect(m.targets).toEqual(['browser', 'node'])
+  })
+
+  // --- 合法值 ---
+
+  test('完整 v2 manifest 通过校验', () => {
+    // 双目标。
+    const m = {
+      name: 'dual-mod',
+      version: '1.0.0',
+      targets: ['browser', 'node'],
+      entry: { browser: 'code.js', node: 'server.js' },
+      deterministic: false,
+    }
+    // 校验。
+    expect(validateManifest(m)).toEqual({ ok: true, errors: [] })
+    // 助手取值。
+    expect(manifestTargets(m)).toEqual(['browser', 'node'])
+    expect(manifestEntry(m, 'node')).toBe('server.js')
+    expect(manifestDeterministic(m)).toBe(false)
+  })
+
+  test('只声明 node 目标也合法（后端 Mod）', () => {
+    // 纯后端。
+    const m = { name: 'back-mod', version: '1.0.0', targets: ['node'], entry: { node: 'server.mjs' } }
+    // 校验。
+    expect(validateManifest(m).ok).toBe(true)
+    // 入口可自定义扩展名（.mjs 在无 type:module 的目录里也按 ESM 解析）。
+    expect(manifestEntry(m, 'node')).toBe('server.mjs')
+  })
+
+  test('VALID_TARGETS 就是 browser / node', () => {
+    // 契约常量（改它会牵动校验与宿主桥语义）。
+    expect(VALID_TARGETS).toEqual(['browser', 'node'])
+  })
+
+  // --- targets 非法 ---
+
+  test('targets 必须是数组且非空', () => {
+    // 非数组。
+    expect(validateManifest({ name: 'a', version: '1', targets: 'browser' }).errors).toContain('targets 必须是数组')
+    // 空数组。
+    expect(validateManifest({ name: 'a', version: '1', targets: [] }).errors).toContain('targets 不能是空数组（缺省为 ["browser"]）')
+  })
+
+  test('targets 含未知值：报错并列出合法值', () => {
+    // 未知目标。
+    const r = validateManifest({ name: 'a', version: '1', targets: ['browser', 'electron'] })
+    // 不合法。
+    expect(r.ok).toBe(false)
+    // 错误可读。
+    expect(r.errors[0]).toMatch(/未知 target: electron/)
+    expect(r.errors[0]).toMatch(/browser \/ node/)
+  })
+
+  test('targets 有重复项：报错', () => {
+    // 重复。
+    const r = validateManifest({ name: 'a', version: '1', targets: ['node', 'node'] })
+    // 不合法。
+    expect(r.errors).toContain('targets 不能有重复项')
+  })
+
+  // --- entry 非法 ---
+
+  test('entry 必须是对象（非数组/非 null）', () => {
+    // 数组。
+    expect(validateManifest({ name: 'a', version: '1', entry: [] }).errors).toContain('entry 必须是对象')
+    // 字符串。
+    expect(validateManifest({ name: 'a', version: '1', entry: 'code.js' }).errors).toContain('entry 必须是对象')
+  })
+
+  test('entry 含未知目标键：报错并列出合法键', () => {
+    // 未知键。
+    const r = validateManifest({ name: 'a', version: '1', entry: { desktop: 'main.js' } })
+    // 错误可读。
+    expect(r.errors[0]).toMatch(/entry 含未知目标键: desktop/)
+    expect(r.errors[0]).toMatch(/browser \/ node/)
+  })
+
+  test('entry 的值必须是非空字符串', () => {
+    // 空串。
+    expect(validateManifest({ name: 'a', version: '1', entry: { node: '' } }).errors).toContain('entry.node 必须是非空字符串')
+    // 数字。
+    expect(validateManifest({ name: 'a', version: '1', entry: { node: 42 } }).errors).toContain('entry.node 必须是非空字符串')
+  })
+
+  test('entry 拒绝路径穿越与绝对路径（同 zip 的防护思路）', () => {
+    // 各种危险写法。
+    for (const bad of ['../evil.js', 'a/../../evil.js', '/etc/passwd', 'C:/win.js', 'C:\\win.js']) {
+      // 校验。
+      const r = validateManifest({ name: 'a', version: '1', entry: { node: bad } })
+      // 必然不合法。
+      expect(r.ok, `应拒绝: ${bad}`).toBe(false)
+      // 错误信息统一。
+      expect(r.errors).toContain('entry.node 必须是不含路径穿越的相对文件名')
+    }
+  })
+
+  test('entry 允许子目录里的相对文件', () => {
+    // 子目录是合理的（Mod 可能把后端代码放 src/ 下）。
+    const r = validateManifest({ name: 'a', version: '1', entry: { node: 'src/server.js' } })
+    // 通过。
+    expect(r.ok).toBe(true)
+  })
+
+  // --- deterministic ---
+
+  test('deterministic 必须是布尔值', () => {
+    // 字符串。
+    expect(validateManifest({ name: 'a', version: '1', deterministic: 'yes' }).errors).toContain('deterministic 必须是布尔值')
+    // 数字。
+    expect(validateManifest({ name: 'a', version: '1', deterministic: 0 }).errors).toContain('deterministic 必须是布尔值')
+  })
+
+  test('deterministic 缺省由 targets 推导（含 node → false）', () => {
+    // 纯前端 → 确定。
+    expect(manifestDeterministic({ name: 'a', version: '1' })).toBe(true)
+    // 含 node → 不确定（宿主动作会改变结果）。
+    expect(manifestDeterministic({ name: 'a', version: '1', targets: ['browser', 'node'] })).toBe(false)
+    expect(manifestDeterministic({ name: 'a', version: '1', targets: ['node'] })).toBe(false)
+  })
+
+  test('deterministic 显式声明的优先级高于推导', () => {
+    // 含 node 但作者声明确定（例如只读固定文件）。
+    expect(manifestDeterministic({ name: 'a', version: '1', targets: ['node'], deterministic: true })).toBe(true)
+    // 纯前端但作者声明不确定。
+    expect(manifestDeterministic({ name: 'a', version: '1', deterministic: false })).toBe(false)
+  })
+
+  // --- 真实数据回归：内置 4 个 Mod 语义不变 ---
+
+  test('仓库真实 mods/ 下所有 manifest 仍然合法，且语义等同旧版', () => {
+    // 逐个真实 Mod 目录。
+    const names = readdirSync(MODS_DIR, { withFileTypes: true })
+      // 只取目录。
+      .filter((e) => e.isDirectory())
+      // 名字。
+      .map((e) => e.name)
+    // 至少要有内置的 4 个（防止路径写错导致空跑）。
+    expect(names.length).toBeGreaterThanOrEqual(4)
+    // 逐个校验。
+    for (const name of names) {
+      // manifest 路径。
+      const file = join(MODS_DIR, name, 'manifest.json')
+      // 必须有（数据 Mod 与系统 Mod 都带）。
+      if (!existsSync(file)) continue
+      // 解析。
+      const manifest = JSON.parse(readFileSync(file, 'utf8'))
+      // 合法。
+      expect(validateManifest(manifest).ok, `${name} 的 manifest 应合法`).toBe(true)
+      // 没有声明新字段 → 语义必须与旧版一致（纯前端 + 确定）。
+      if (manifest.targets === undefined) {
+        // 目标缺省。
+        expect(manifestTargets(manifest)).toEqual(['browser'])
+        // 确定。
+        expect(manifestDeterministic(manifest)).toBe(true)
+      }
+    }
   })
 })

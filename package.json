@@ -2,6 +2,8 @@
   "name": "lifeRestart",
   "private": true,
   "packageManager": "pnpm@11.28.2",
+  "//type": "整个项目是 ESM。必须有这一行：Mod 的 Node 侧入口 mods/<name>/server.js 由 host-node.js 用原生 import() 加载，就近解析到本文件——没有 type:module 时 .js 会被当成 CJS，export default 直接语法错误。实测根目录与 scripts/ 下没有任何 .js（只有 test-all.mjs），故该声明不影响现存文件。",
+  "type": "module",
   "scripts": {
     "test": "node scripts/test-all.mjs",
     "test:engine": "node scripts/test-all.mjs game-engine",

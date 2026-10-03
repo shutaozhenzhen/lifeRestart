@@ -120,7 +120,9 @@ export const useGameStore = defineStore('game', {
     // @param {number|string|null} [options.seed] - 本局随机种子（缺省自动生成；给值则复现）
     // @param {object} [options.hooks] - Mod 钩子总线（网页版由 mod-runtime 创建）
     // @param {Array<{name: string, code: string}>} [options.modCodes] - Mod 代码（Life 建好后执行）
-    async init(data, { seed, hooks, modCodes } = {}) {
+    // @param {Record<string, Function>} [options.modRequires] - 每个 Mod 的 require
+    //   （运行时模块：依赖随包分发，阶段一已由 mod-runtime 异步加载好）
+    async init(data, { seed, hooks, modCodes, modRequires } = {}) {
       // 重置单局状态：从主页重新开始时，不能残留上一局的进度标记与选择。
       this.started = false
       this.talentsConfirmed = false
@@ -173,7 +175,7 @@ export const useGameStore = defineStore('game', {
       // 而 gameAPI.param 需要 Life 的参数注册表（浏览器侧就是靠这一步把 Mod 支持接上的）。
       if (Array.isArray(modCodes) && modCodes.length > 0) {
         // 执行（异常隔离：单个 Mod 失败不影响游戏）。
-        const { executed, errors } = executeModCodes({ codes: modCodes, hooks, life: this.life, data, log: logger })
+        const { executed, errors } = executeModCodes({ codes: modCodes, hooks, life: this.life, data, log: logger, requires: modRequires })
         // 记运行信息（日志报告里能看到"这局跑了哪些 Mod"）。
         this.modsRuntime = { loaded: executed, errors }
         // 日志。

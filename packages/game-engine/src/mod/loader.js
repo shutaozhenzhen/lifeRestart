@@ -21,6 +21,8 @@
 
 // manifest 校验与排序（纯函数，平台无关）。
 import { validateManifest, resolveOrder } from './manifest.js'
+// 运行时模块注册表（依赖随包分发；见 modules.js）。
+import { createModuleRegistry, createDenyRequire } from './modules.js'
 
 // #DATA_FILES
 // 约定的数据文件清单（两个平台一致；源若提供文件清单则只读清单里的）。
@@ -147,8 +149,11 @@ export async function loadMod({ mod, source, log } = {}) {
 // @param {object} params.source - 文件源
 // @param {object} [params.log] - 日志器
 // @param {string[]} [params.only] - 只加载这些 Mod（用于"只跑启用的 Mod"；缺省全加载）
+// @param {Function} [params.moduleLoader] - 运行时模块的平台加载适配器
+//   （async ({ id, path, code, modName }) => 命名空间；Node 用 modules-node，浏览器用 blob）。
+//   给了它就自动处理 manifest.modules（Mod 随包分发的依赖），调用方无需手写 createRequire。
 // @returns {Promise<{mods: Array, order: string[], errors: string[], loadAll: Function, disabled: string[]}>} 加载器
-export async function createModLoader({ source, log, only } = {}) {
+export async function createModLoader({ source, log, only, moduleLoader } = {}) {
   // 日志器。
   const logger = log || { debug: () => {}, info: () => {}, error: () => {} }
   // 扫描。
@@ -179,16 +184,34 @@ export async function createModLoader({ source, log, only } = {}) {
     // 可选执行每个 Mod 的 code.js：传 createAPI(name, data) 回调，返回该 Mod 的 gameAPI。
     // code.js 通过 gameAPI 注册钩子/操作数据；执行异常被隔离（不影响其他 Mod）。
     //
+    // 运行时模块（依赖随包分发）：优先用 deps.createRequire(name, manifest)，
+    // 缺省则用 loader 级的 moduleLoader 自动处理 manifest.modules。
+    // 两者都没有时注入一个"说明为什么不能用"的 require —— 注入面保持一致。
+    //
     // @param {object} [deps]
     // @param {(name: string, data: object) => object} [deps.createAPI] - 创建 gameAPI 的回调
+    // @param {Function} [deps.createRequire] - 创建 require 的回调：
+    //   async (name, manifest) => Function | { require: Function, errors?: string[] }
     // @returns {Promise<{data: object, codeList: Array<{name: string, code: string|null}>, errors: string[]}>} 合并数据
-    async loadAll({ createAPI } = {}) {
+    async loadAll({ createAPI, createRequire } = {}) {
       // 合并数据。
       const merged = {}
       // 代码列表。
       const codeList = []
       // 加载期错误（解析失败/执行失败，逐 Mod 隔离）。
       const loadErrors = []
+      // require 构建器：显式回调优先，其次用 loader 级的 moduleLoader。
+      const buildRequire =
+        createRequire ||
+        (moduleLoader
+          ? // 用 moduleLoader 自动建注册表（错误一并带出，便于在报告里可见）。
+            async (name, manifest) => {
+              // 建注册表。
+              const reg = await createModuleRegistry({ modName: name, manifest, source, load: moduleLoader, log: logger })
+              // 返回 require 与错误。
+              return { require: reg.require, errors: reg.errors }
+            }
+          : null)
       // 按序加载。
       for (const name of order) {
         // 找 Mod。
@@ -206,10 +229,33 @@ export async function createModLoader({ source, log, only } = {}) {
         if (code && createAPI) {
           // 创建该 Mod 的 gameAPI（共享合并数据）。
           const gameAPI = createAPI(name, merged)
+          // 该 Mod 的 require（运行时模块；建失败不阻断其它 Mod）。
+          let requireFn = createDenyRequire(name)
+          // 有构建器就用它。
+          if (buildRequire) {
+            try {
+              // 等它建好（模块加载是异步的）。
+              const built = await buildRequire(name, mod.manifest)
+              // 两种返回形态都接受：裸 require 函数 / { require, errors }。
+              if (typeof built === 'function') {
+                // 裸函数。
+                requireFn = built
+              } else if (built && typeof built.require === 'function') {
+                // 带错误清单（注册表形态）—— 错误要能一路带到报告里，不许静默。
+                requireFn = built.require
+                for (const err of built.errors || []) loadErrors.push(`Mod ${name}: ${err}`)
+              }
+            } catch (e) {
+              // 记录。
+              loadErrors.push(`构建 ${name} 的运行时模块失败: ${e.message}`)
+              // 日志。
+              logger.error(`构建 ${name} 的运行时模块失败: ${e.message}`)
+            }
+          }
           // 执行代码（异常隔离，单个 Mod 失败不影响其它）。
           try {
-            // new Function 编译并执行，注入 gameAPI（作用域隔离）。
-            new Function('gameAPI', '"use strict";\n' + code)(gameAPI)
+            // new Function 编译并执行，注入 gameAPI 与 require（作用域隔离）。
+            new Function('gameAPI', 'require', '"use strict";\n' + code)(gameAPI, requireFn)
             // 日志。
             logger.debug(`执行 ${name}/code.js`)
           } catch (e) {

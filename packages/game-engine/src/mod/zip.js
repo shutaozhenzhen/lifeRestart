@@ -92,6 +92,8 @@ export function readModPackage(zipBytes, { log } = {}) {
   const skipped = []
   // 累计解压量。
   let total = 0
+  // 是否已经就 node_modules 提过一次醒（几千个文件不该刷屏）。
+  let nodeModulesReported = false
   // 解压（filter 在解压前就能拿到 originalSize → 挡尺寸炸弹）。
   let raw
   try {
@@ -103,6 +105,20 @@ export function readModPackage(zipBytes, { log } = {}) {
       filter: (file) => {
         // 目录项。
         if (file.name.endsWith('/')) return false
+        // 依赖目录（node_modules/**）：Mod 包不该带它。
+        // 理由：Mod 的依赖以**自包含单文件**随包分发（放 vendor/ 并在 manifest.modules 里声明），
+        //       由引擎在**运行时**加载 —— 不需要（也不该有）node_modules 目录树。
+        //       带上它会直接撞条目数上限，而报"条目过多"会让人以为是包太大，看不出真实原因。
+        if (/(^|\/)node_modules\//.test(file.name.replace(/\\/g, '/'))) {
+          // 只报一次。
+          if (!nodeModulesReported) {
+            // 记录（指向正确做法）。
+            nodeModulesReported = true
+            errors.push('zip 内含 node_modules（已忽略）：依赖请以自包含单文件放 vendor/，并在 manifest.modules 里声明（引擎运行时会加载它）')
+          }
+          // 跳过。
+          return false
+        }
         // 路径不安全。
         if (!isSafeEntryPath(file.name)) {
           // 记录。

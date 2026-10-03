@@ -1,0 +1,35 @@
+本目录下的 `fflate.mjs` 是**第三方依赖**（fflate 0.8.3）的自包含单文件构建产物，
+取自 esm.sh 的 `?bundle` 模式：
+https://esm.sh/fflate@0.8.3/es2022/fflate.bundle.mjs
+
+⚠️ **实测的坑**：esm.sh 的产物**不含**上游的许可证声明（文件头只有一行 `/* esm.sh - fflate@0.8.3 */`），
+而 MIT 要求"版权声明与本许可声明须包含在软件的实质部分中" —— 所以这里单独附上上游 LICENSE 原文。
+
+**给 Mod 作者的结论**：把依赖以自包含单文件放进 `vendor/` 时，
+`vendor/` 里应当**同时放一份该依赖的 LICENSE**（zip 允许 `.txt`，所以它能随 Mod 一起分发）。
+
+来源：https://unpkg.com/fflate@0.8.3/LICENSE
+
+--- 以下为上游 LICENSE 原文 ---
+
+MIT License
+
+Copyright (c) 2026 Arjun Barrett
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -1,0 +1,10 @@
+{
+  "name": "demo-node-mod",
+  "version": "1.0.0",
+  "author": "lifeRestart",
+  "description": "后端 Mod 示例：演示 Mod 架构 v2 的「完全 Node 权限」与「宿主桥」——targets 含 node 时，server.js 里注册的命名处理器可被浏览器侧的 code.js 通过 gameAPI.host.call 调用",
+  "targets": ["browser", "node"],
+  "entry": { "browser": "code.js", "node": "server.js" },
+  "deterministic": false,
+  "permissions": ["hooks"]
+}

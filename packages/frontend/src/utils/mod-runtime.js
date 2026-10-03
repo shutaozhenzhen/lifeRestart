@@ -18,6 +18,8 @@ import { createModLoader, scanMods } from 'game-engine/src/mod/loader.js'
 import { createFetchSource } from 'game-engine/src/mod/source-fetch.js'
 import { readModPackage } from 'game-engine/src/mod/zip.js'
 import { createHookBus, createGameAPI } from 'game-engine/src/mod/gameapi.js'
+// 运行时模块注册表（依赖随包分发、运行期解析；见引擎的 mod/modules.js）。
+import { createModuleRegistry, createDenyRequire } from 'game-engine/src/mod/modules.js'
 import { createAIClient } from 'game-engine/src/ai/ai-client.js'
 import { createAIMod } from 'game-engine/src/ai/ai-mod.js'
 
@@ -115,6 +117,52 @@ export function createBrowserAIConfig({ config, proxyBase = AI_PROXY_BASE, fetch
   })
   // baseUrl 指向代理的 /v1（ai-client 会拼 /chat/completions）。
   return { client, baseUrl: `${String(proxyBase).replace(/\/$/, '')}/v1`, apiKey: config.apiKey, model: config.model }
+}
+
+// #createBlobModuleLoader
+// 浏览器侧的**运行时模块**加载适配器：把随包分发的依赖（自包含单文件）变成模块命名空间。
+//
+// 为什么用 blob URL：zip 安装到 IndexedDB 的 Mod **没有 URL**，只有文件文本；
+// `import()` 需要一个 URL，于是把文本包成 Blob 再造一个 `blob:` URL。
+//
+// ⚠️ **依赖必须是自包含单文件**（硬要求）：`blob:http://…/uuid` 没有目录基准，
+// 依赖内部的相对导入（`./inner.js`）会解析成不存在的 `blob:http://…/inner.js` 而失败。
+// 这条限制是方案选择的直接后果，不是实现偷懒。
+//
+// @param {object} [deps] - 注入点（测试用；缺省用全局 Blob/URL/import）
+// @returns {Function} load({ id, path, code, modName }) => Promise<namespace>（带 dispose()）
+export function createBlobModuleLoader({ createObjectURL, revokeObjectURL, importModule } = {}) {
+  // 三个平台原语（可注入，便于在 happy-dom 下单测）。
+  const makeUrl = createObjectURL || ((blob) => URL.createObjectURL(blob))
+  const dropUrl = revokeObjectURL || ((url) => URL.revokeObjectURL?.(url))
+  // `/* @vite-ignore */`：这是运行时才决定的 URL，别让打包器去静态分析它。
+  const doImport = importModule || ((url) => import(/* @vite-ignore */ url))
+  // 造出来的 URL（便于用完释放）。
+  const urls = []
+  // 适配器。
+  const load = async ({ code }) => {
+    // 包成 JS Blob 并造 URL。
+    const url = makeUrl(new Blob([code], { type: 'text/javascript' }))
+    // 记录。
+    urls.push(url)
+    // 导入。
+    try {
+      // 等模块求值完成。
+      return await doImport(url)
+    } catch (e) {
+      // 补上"为什么"（最常见的成因就是依赖不是单文件）。
+      throw new Error(`${e.message}（浏览器侧依赖必须是自包含单文件：blob URL 没有目录基准，依赖内部的相对导入会失败）`)
+    }
+  }
+  // #dispose：释放所有 blob URL（页面卸载/Mod 卸载时调用；不释放会一直占内存）。
+  load.dispose = () => {
+    // 逐个释放。
+    for (const url of urls) dropUrl(url)
+    // 清空。
+    urls.length = 0
+  }
+  // 返回。
+  return load
 }
 
 // #createStoreSource
@@ -291,18 +339,43 @@ export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enable
   const { data, codeList, errors } = await loader.loadAll()
   // 只保留有代码的项。
   const codes = codeList.filter((c) => c.code).map((c) => ({ name: c.name, code: c.code }))
+  // 阶段一附加：为每个 Mod 建好**运行时模块**注册表（依赖随包分发、运行期解析）。
+  //
+  // 为什么放在这里而不是 executeModCodes 里：模块加载是**异步**的，而 executeModCodes
+  // 要同步执行 code.js（注入的 require 必须立刻可用）。两阶段架构天然适合：
+  // 阶段一加载模块文本（本函数），阶段二同步执行。
+  const moduleLoader = createBlobModuleLoader()
+  // 每个 Mod 的 require（同步取用）。
+  const requires = {}
+  // 模块加载错误（一路带到报告，不许静默）。
+  const moduleErrors = []
+  // 逐个 Mod（按拓扑顺序）。
+  for (const name of loader.order) {
+    // 找它的 manifest。
+    const mod = loader.mods.find((m) => m.name === name)
+    // 建注册表。
+    const reg = await createModuleRegistry({ modName: name, manifest: mod?.manifest, source, load: moduleLoader, log })
+    // 记录 require（没声明 modules 时它也是可用的 deny 版）。
+    requires[name] = reg.require
+    // 收集错误。
+    for (const e of reg.errors) moduleErrors.push(`Mod ${name}: ${e}`)
+  }
   // 返回。
   return {
     // 合并后的 Mod 数据（调用方合并进游戏数据）。
     data,
     // 待执行代码。
     codes,
+    // 每个 Mod 的 require（阶段二注入给 code.js）。
+    requires,
+    // blob URL 释放器（页面/Mod 卸载时调用）。
+    disposeModules: moduleLoader.dispose,
     // 实际加载的 Mod（按拓扑顺序）。
     loaded: [...loader.order],
     // 被启用开关挡掉的。
     disabled: [...loader.disabled],
-    // 扫描/排序/解析错误（不致命，报告里可见）。
-    errors: [...loader.errors, ...errors],
+    // 扫描/排序/解析/模块错误（不致命，报告里可见）。
+    errors: [...loader.errors, ...errors, ...moduleErrors],
     // 共享钩子总线。
     hooks,
   }
@@ -317,9 +390,10 @@ export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enable
 // @param {object} params.life - Life 实例（提供 params）
 // @param {object} [params.data] - 合并后的游戏数据
 // @param {object} [params.aiConfig] - createBrowserAIConfig 的结果
+// @param {Record<string, Function>} [params.requires] - 每个 Mod 的 require（阶段一产出）
 // @param {object} [params.log] - 日志器
 // @returns {{executed: string[], errors: string[]}} 结果
-export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig = null, log } = {}) {
+export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig = null, requires = null, log } = {}) {
   // 结果。
   const executed = []
   const errors = []
@@ -342,8 +416,10 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
     })
     // 执行。
     try {
-      // 编译执行（作用域隔离，只注入 gameAPI）。
-      new Function('gameAPI', '"use strict";\n' + code)(gameAPI)
+      // 该 Mod 的 require（阶段一已把它的运行时模块加载好；没声明则是 deny 版）。
+      const requireFn = requires?.[name] || createDenyRequire(name)
+      // 编译执行（作用域隔离，注入 gameAPI 与 require）。
+      new Function('gameAPI', 'require', '"use strict";\n' + code)(gameAPI, requireFn)
       // 记录。
       executed.push(name)
       // 日志。

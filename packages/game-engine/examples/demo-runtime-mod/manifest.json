@@ -1,0 +1,13 @@
+{
+  "name": "demo-runtime-mod",
+  "version": "1.0.0",
+  "author": "lifeRestart",
+  "description": "示例：Mod 带外部 npm 依赖（fflate）—— 依赖以**自包含单文件**随包分发，由引擎在**运行时**加载（无任何构建步骤）",
+  "targets": ["browser", "node"],
+  "entry": { "browser": "code.js", "node": "server.js" },
+  "modules": {
+    "fflate": "vendor/fflate.mjs"
+  },
+  "deterministic": false,
+  "permissions": ["hooks"]
+}

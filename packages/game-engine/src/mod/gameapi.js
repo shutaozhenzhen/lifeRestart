@@ -9,7 +9,14 @@
  * 钩子点（设计文档 4.1）：
  *   onTalentPoolGenerate / onEventGenerate / onEventRender / onYearAdvance
  *   propertyChange / achievement 等
+ *
+ * Mod 架构 v2：增加 `host` 命名空间（宿主桥，见 mod/host.js 与
+ * `_设计方案_Mod宿主能力与双目标.md`）——浏览器侧的 code.js 经它调用
+ * **该 Mod 自己的** Node 侧入口（`server.js` 注册的命名处理器）。
  */
+
+// 宿主桥（seam #3）：缺省用"无后端"的空桥，保证 gameAPI.host 永远可用。
+import { createHostBridge, createDenyHost } from './host.js'
 
 // #createHookBus
 // 创建钩子总线：注册/触发/移除，支持执行顺序与异常隔离。
@@ -145,9 +152,11 @@ export function createHookBus() {
 // @param {object} [deps.hooks] - 外部钩子总线（createHookBus 实例）；缺省自建
 // @param {object} [deps.ai] - AI 配置 { client, baseUrl, apiKey, model }；缺省不启用 ai
 // @param {object} [deps.params] - 参数注册表（createParamRegistry 实例）；缺省不自建
+// @param {object} [deps.host] - 宿主桥（createHostBridge 的结果）**或其适配器**
+//   （{ available, call }）；缺省 createDenyHost()（available 为空、调用报错）
 // @param {object} [deps.log] - 日志器
 // @returns {object} gameAPI
-export function createGameAPI({ data, hooks, ai, aiModFactory, params, log }) {
+export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, error: () => {} }
   // 钩子总线：注入外部实例（与 Life 共享）或自建。
@@ -158,6 +167,9 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, log }) {
   const aiClient = ai?.client || null
   // AI 默认配置。
   const aiConfig = ai || {}
+  // 宿主桥（Mod 架构 v2）：注入的若是适配器（只有 available/call）则先包成桥；
+  // 完全没注入 → 用空桥（静态站语义），这样 Mod 代码可以无条件写 gameAPI.host.has(...)。
+  const hostBridge = host ? (typeof host.has === 'function' ? host : createHostBridge(host)) : createDenyHost()
 
   // 返回 API。
   const api = {
@@ -189,6 +201,10 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, log }) {
         return aiClient.generateJSON({ ...aiConfig, ...params })
       },
     },
+
+    // 宿主桥（Mod 架构 v2）：调用**本 Mod 自己的**后端入口（server.js 注册的处理器）。
+    // 与 ai 同构：available 是环境探测，不是授权；无后端时 has() 恒为 false。
+    host: hostBridge,
 
     // AI Mod 工厂（注入式；code.js 用它创建 AI Mod 增强器，避免逻辑重复）。
     createAIMod: aiModFactory

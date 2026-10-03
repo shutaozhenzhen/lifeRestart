@@ -142,6 +142,7 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
   // Mod 运行时（失败绝不阻断游戏：Mod 是增强，不是必需）。
   let hooks = null
   let modCodes = []
+  let modRequires = null
   let mods = null
   // 需要且未禁用时加载。
   if (withMods) {
@@ -165,6 +166,8 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
       // 传出钩子总线与待执行代码（由 store.init 在建好 Life 后执行）。
       hooks = bundle.hooks
       modCodes = bundle.codes
+      // 运行时模块（每个 Mod 的 require；阶段二注入给 code.js）。
+      modRequires = bundle.requires
       // 运行信息（报告/界面用）。
       mods = {
         // 目录（界面渲染）。
@@ -186,5 +189,5 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
     }
   }
   // 返回。
-  return { data, dataSource, degraded, hooks, modCodes, mods }
+  return { data, dataSource, degraded, hooks, modCodes, modRequires, mods }
 }

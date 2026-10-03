@@ -14,7 +14,8 @@
 - **AI 集成**：AI 客户端（OpenAI 协议）+ 输出校验器 + `createAIMod` 工厂 + 零依赖代理服务（多模型路由 / SSE 流式 / CORS / mock）
 - **可观测**：五级日志系统（trace 记录每个函数全部参数）+ 函数追踪 + 注入式 sink + 游戏流水（journal，供 AI 上下文）
 - **同 seed 可复现**：`export` 导出轨迹、跨平台一致性校验（进程内 / node 子进程 / Electron 运行时 diff 为零）
-- **可玩原型优先**：全部功能都有 CLI 可玩/可验证入口，无需前端
+- **可玩原型优先**：引擎主干能力都有 CLI 可玩/可验证入口，无需前端即可验证（condition / 属性 / 天赋 / 事件 / 整局人生 / 轨迹导出 / Data Mod 打包 / Mod 加载 / 批量模拟 / AI / 跨平台一致性）
+  - **例外（只有测试与浏览器侧覆盖，暂无 CLI 命令）**：Mod 管理（按名启停 / 卸载 / zip 安装 / 权限校验，`mod/manager.js`）、zip 读写（`mod/zip.js`，`createModZip` 目前仅测试用）、HTTP Mod 文件源（`mod/source-fetch.js`）、AI 输出校验器单独调用（`ai/ai-validate.js`）、成就 / 角色的单独查看与校验、condition 编译缓存的观测（`conditionCacheSize()` / `clearConditionCache()` 已导出但无命令）。Node CLI 用**目录即状态**（`loader-node.js` + `source-node.js`）等价替代了 manager 的启停语义，所以能力不缺、缺的是命令入口
 
 ## 目录结构
 
@@ -61,7 +62,7 @@ pnpm test                   # 等价于 node scripts/test-all.mjs
 node scripts/test-all.mjs   # 没有 pnpm 的环境用这条（npm test 亦可）
 
 # 只跑单个包（参数按目录名/包名子串匹配）
-node scripts/test-all.mjs game-engine   # 引擎 643 用例（35 spec）
+node scripts/test-all.mjs game-engine   # 引擎 708 用例（37 spec）
 node scripts/test-all.mjs frontend      # 前端 212 用例（25 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
 node scripts/test-all.mjs mobile        # 移动端 67 用例（脚本 + 契约 + CI 不变量）
 
@@ -85,7 +86,7 @@ node src/cli/game.cli.js     [--seed <n>] [--locale zh-cn|en-us]   # 整合可�
 # 轨迹与数据
 node src/cli/export.cli.js   --seed <n>                     # 轨迹导出（同 seed 可复现）
 node src/cli/data-mod.cli.js --data <dir> --out <modsDir>   # 原版 JSON → Data Mod 落盘
-node src/cli/mod.cli.js <modsDir>                           # Mod 加载器（依赖图 / 钩子演示）
+node src/cli/mod.cli.js <modsDir> [--call <mod>:<handler>[:<jsonArgs>]]  # Mod 加载器（依赖图 / 钩子 / 宿主处理器）
 node src/cli/simulate.cli.js --runs 30 --seed 42 [--mods ../../mods] [--json]  # 批量模拟（随机天赋+随机属性）
 node src/cli/simulate.cli.js --runs 30 --talents 1001,1002 --alloc CHR=3,INT=4,STR=5,MNY=8 \
        --mods ../../mods --format md --out report.md   # 固定特性+固定属性，导出 CSV/JSON/Markdown
@@ -270,12 +271,12 @@ node scripts/collect-apk.js       # 可选：把 APK 收集到 out/liferestart-m
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 643 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**与**HTTP 文件源**）/ ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
+| `packages/game-engine` | 708 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**、**HTTP 文件源**与 **Mod 架构 v2 宿主桥：`host.js` + `host-node.js` + `manifest` 的 targets/entry/deterministic**）/ ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
 | `packages/frontend` | 212 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载**/**模拟驱动器**/**统计展示**）+ **7 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
 | `platforms/mobile` | 67 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
-| **合计** | **934** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
+| **合计** | **999** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
 
 ### 前端测试分层（2026-10 补齐）
 

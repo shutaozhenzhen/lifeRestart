@@ -11,9 +11,15 @@
 import { createNodeSource } from './source-node.js'
 // 平台无关内核。
 import { createModLoader } from './loader.js'
+// Node 侧运行时模块加载器（Mod 随包分发的依赖，运行时解析）。
+import { createNodeModuleLoader } from './modules-node.js'
 
 // #createNodeModLoader
 // 用文件系统源创建加载器。
+//
+// 默认接上 Node 侧的**运行时模块加载器**：Mod 在 `manifest.modules` 里声明的依赖
+// （自包含单文件，随包分发）会在执行它的 code.js 之前被加载好，
+// code.js 用注入的 `require(id)` 同步取用 —— 全程运行期，无任何构建步骤。
 //
 // @param {object} params
 // @param {string} params.modsDir - mods 目录
@@ -21,6 +27,15 @@ import { createModLoader } from './loader.js'
 // @param {string[]} [params.only] - 只加载这些 Mod
 // @returns {Promise<object>} 加载器（见 loader.js）
 export async function createNodeModLoader({ modsDir, log, only } = {}) {
-  // 建源 + 建加载器。
-  return createModLoader({ source: createNodeSource(modsDir), log, only })
+  // 建源 + 建加载器（带运行时模块适配器）。
+  return createModLoader({
+    // 文件源。
+    source: createNodeSource(modsDir),
+    // 日志。
+    log,
+    // 启用过滤。
+    only,
+    // 运行时模块：用原生 import() 加载 Mod 目录下的模块文件。
+    moduleLoader: createNodeModuleLoader({ modsDir }),
+  })
 }

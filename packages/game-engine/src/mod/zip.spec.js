@@ -216,3 +216,41 @@ describe('mod/zip - manager.importZip 复用同一实现（后端与前端一致
     }
   })
 })
+
+// ========== 组 5：node_modules 护栏（Mod 打包外部依赖的场景）==========
+describe('mod/zip - node_modules 护栏', () => {
+  test('带 node_modules 的包：给出可操作提示而不是"条目过多"', () => {
+    // 造一个"错误地打进了依赖目录"的包：node_modules 下几十个文件 + 一个合法 manifest。
+    const files = { 'manifest.json': MANIFEST, 'code.js': 'gameAPI.on("a", () => {})' }
+    // 模拟 npm 依赖的目录结构。
+    for (let i = 0; i < 40; i++) files[`node_modules/dep/f${i}.js`] = 'export default 1'
+    // 打包成 zip。
+    const zip = createModZip({ files })
+    // 解析。
+    const r = readModPackage(zip)
+    // **安装仍然成功**（依赖被跳过，manifest/code 有效）。
+    expect(r.ok).toBe(true)
+    // 依赖没进产物。
+    expect(Object.keys(r.files).some((f) => f.includes('node_modules'))).toBe(false)
+    // 提示是可操作的（指向运行时方案：vendor/ + manifest.modules），且只出现一次（不刷屏）。
+    const hits = r.errors.filter((e) => e.includes('node_modules'))
+    expect(hits).toHaveLength(1)
+    expect(hits[0]).toMatch(/manifest\.modules/)
+    // 关键：错误信息里**不该**出现误导性的"条目过多"。
+    expect(r.errors.some((e) => e.includes('条目过多'))).toBe(false)
+  })
+
+  test('只有 node_modules 的超大包也不会误报条目过多（上限按过滤后计算）', () => {
+    // 600 个依赖文件（超过 MAX_ENTRIES=512），但有效文件只有 2 个。
+    const files = { 'manifest.json': MANIFEST, 'code.js': 'x' }
+    // 填充。
+    for (let i = 0; i < 600; i++) files[`node_modules/big/f${i}.js`] = '1'
+    // 打包 + 解析。
+    const r = readModPackage(createModZip({ files }))
+    // 成功：条目数上限针对的是"真正会被安装的文件"。
+    expect(r.ok).toBe(true)
+    expect(MAX_ENTRIES).toBe(512)
+    // 也不该报条目过多。
+    expect(r.errors.some((e) => e.includes('条目过多'))).toBe(false)
+  })
+})
