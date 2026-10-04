@@ -63,7 +63,7 @@ node scripts/test-all.mjs   # 没有 pnpm 的环境用这条（npm test 亦可�
 
 # 只跑单个包（参数按目录名/包名子串匹配）
 node scripts/test-all.mjs game-engine   # 引擎 712 用例（37 spec）
-node scripts/test-all.mjs frontend      # 前端 282 用例（30 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
+node scripts/test-all.mjs frontend      # 前端 281 用例（29 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
 node scripts/test-all.mjs mobile        # 移动端 67 用例（脚本 + 契约 + CI 不变量）
 
 # 带参数透传给 vitest：`--` 之后的参数原样传给 vitest（不改包过滤）
@@ -293,11 +293,11 @@ node scripts/collect-apk.js       # 可选：把 APK 收集到 out/liferestart-m
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
 | `packages/game-engine` | 712 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**、**HTTP 文件源**与 **Mod 架构 v2 宿主桥：`host.js` + `host-node.js` + `manifest` 的 targets/entry/deterministic**）/ ai / cli（含**无数据源即报错**的回归）/ data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 282 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载（含空内容）**/**单个 Mod 数据读取与统计**/**重置数据清单**/**模拟驱动器**/**统计展示**）+ **8 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
+| `packages/frontend` | 281 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载（含空内容）**/**单个 Mod 数据读取与统计**/**重置数据清单**/**模拟驱动器**/**统计展示**）+ **8 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
 | `platforms/mobile` | 67 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
-| **合计** | **1077** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
+| **合计** | **1076** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
 
 ### 前端测试分层（2026-10 补齐）
 
