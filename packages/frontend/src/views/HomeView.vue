@@ -8,6 +8,8 @@ import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
 // 数据加载（与模拟页共用同一实现：原版数据 → fixture 降级）。
 import { loadGameData } from '../utils/game-data.js'
+// 重置本地数据（存档 / Mod 状态 / AI Key / 界面偏好 + 已安装 Mod）。
+import { resetAppData, resetSummary } from '../utils/reset-data.js'
 
 // 路由。
 const router = useRouter()
@@ -19,6 +21,14 @@ const loading = ref(false)
 const activeMode = ref('custom')
 // 随机种子输入（留空 = 每局自动生成；填旧种子 = 复现同一局）。
 const seedInput = ref('')
+// 重置数据：是否已展开确认条（危险操作要两步）。
+const confirmingReset = ref(false)
+// 重置中（防重复点击）。
+const resetting = ref(false)
+// 重置结果提示。
+const resetMessage = ref('')
+// 将清空的内容（确认条里逐条列出，别让人盲点）。
+const resetItems = resetSummary()
 
 // 组装游戏数据：数据源由 lifeRestart-data Mod 的启停状态决定。
 // 加载逻辑（含降级、Mod 运行时与 dataSource 标注）统一在 utils/game-data.js —— 模拟页共用同一份实现。
@@ -38,6 +48,44 @@ async function buildData() {
   }
   // 返回整包（data/hooks/modCodes 都要给 store.init）。
   return bundle
+}
+
+// #askReset
+// 第一步：展开确认条（危险操作不直接执行）。
+function askReset() {
+  // 展开。
+  confirmingReset.value = true
+  // 清掉上次结果。
+  resetMessage.value = ''
+}
+
+// #doReset
+// 第二步：确认后真正清空（存档 + Mod 状态 + AI 配置 + 界面偏好 + 已安装 Mod），
+// 并把**内存态**一起归零（否则当前会话还留着上一局的 life / 轨迹 / 日志）。
+//
+// @returns {Promise<void>}
+async function doReset() {
+  // 防重复。
+  resetting.value = true
+  // 清（不抛：失败项在 errors 里）。
+  const result = await resetAppData()
+  // 内存态归零（引擎实例、轨迹、日志缓冲全部回到初始）。
+  store.$reset()
+  // 结果提示（$reset 会清日志，所以写在重置之后）。
+  const parts = [`已清空 ${result.cleared.length} 个存储键`]
+  // 本来就没有的如实说明（避免让人以为清了很多）。
+  if (result.absent.length) parts.push(`${result.absent.length} 项本来为空`)
+  // 卸载的本地 Mod。
+  if (result.removedMods.length) parts.push(`卸载本地 Mod ${result.removedMods.length} 个`)
+  // 失败项（最坏的情况：清了却说成功）。
+  if (result.errors.length) parts.push(`⚠ ${result.errors.length} 项失败：${result.errors[0]}`)
+  // 组装提示。
+  resetMessage.value = `${parts.join('，')}（刷新页面即为全新状态）`
+  // 日志（把结果也写进日志面板/报告）。
+  store.pushLog(result.errors.length ? 'warn' : 'info', `[UI][home] 重置数据：${result.cleared.length} 键 / ${result.removedMods.length} Mod / ${result.errors.length} 失败`)
+  // 收起确认条 + 结束。
+  confirmingReset.value = false
+  resetting.value = false
 }
 
 // 选择模式。
@@ -114,6 +162,24 @@ async function startGame() {
       <button class="btn ghost" @click="router.push('/settings')">设置</button>
       <button class="btn ghost" @click="router.push('/mods')">Mod 管理</button>
       <button class="btn ghost" @click="router.push('/simulate')">模拟统计</button>
+    </div>
+
+    <!-- 重置数据（危险操作：两步确认；只清本应用自己的键，不做 localStorage.clear()） -->
+    <div class="reset-zone">
+      <button v-if="!confirmingReset" class="btn ghost danger" :disabled="loading || resetting" @click="askReset">
+        🗑 重置数据
+      </button>
+      <template v-else>
+        <p class="reset-warn">将清空：{{ resetItems }}（以及本地安装的 Mod）</p>
+        <div class="reset-actions">
+          <button class="btn danger" :disabled="resetting" @click="doReset">
+            {{ resetting ? '清空中…' : '确认清空' }}
+          </button>
+          <button class="btn ghost" :disabled="resetting" @click="confirmingReset = false">取消</button>
+        </div>
+        <p class="reset-hint">不可撤销；只清本应用的数据，不动同源下其它键</p>
+      </template>
+      <p v-if="resetMessage" class="reset-message">{{ resetMessage }}</p>
     </div>
   </div>
 </template>
@@ -215,6 +281,54 @@ async function startGame() {
 .btn.ghost {
   background: transparent;
   border: 1px solid #2a3a5e;
+}
+/* 重置数据区（危险操作：低调但看得见） */
+.reset-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  max-width: 560px;
+}
+.btn.ghost.danger {
+  border-color: #b71c1c;
+  color: #ff6b6b;
+}
+.btn.ghost.danger:hover {
+  background: #b71c1c;
+  color: #fff;
+}
+.btn.danger {
+  padding: 8px 20px;
+  font-size: 13px;
+  background: #b71c1c;
+}
+.btn.danger:hover {
+  background: #d32f2f;
+}
+.reset-actions {
+  display: flex;
+  gap: 10px;
+}
+.reset-actions .btn {
+  padding: 8px 20px;
+  font-size: 13px;
+}
+.reset-warn {
+  font-size: 13px;
+  color: #ffb84d;
+  text-align: center;
+  line-height: 1.5;
+}
+.reset-hint {
+  font-size: 11px;
+  color: #777;
+}
+.reset-message {
+  font-size: 12px;
+  color: #4caf50;
+  text-align: center;
 }
 </style>
 

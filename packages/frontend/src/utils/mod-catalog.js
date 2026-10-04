@@ -15,9 +15,14 @@ import { applyModsState, loadModsState } from './mods-state.js'
 
 // #DEFAULT_MOD_LIST
 // 原型 Mod 清单：既是"发现不到 Mod 时的界面兜底"，也提供**默认启停**（系统 Mod 默认开）。
+//
+// `dataFrom`（可选）：该 Mod 的**数据不在自己的目录里**，而是在站点上另一个目录。
+// 只有系统 Data Mod 用得上：它的数据作为静态产物放在 `<BASE_URL>data/*.json`，
+// `scripts/sync-mods.mjs` 刻意不把那 4MB 再复制一份到 `public/mods/<name>/`
+// （见该脚本的 `DATA_FROM_PUBLIC`）—— 所以"查看数据"必须知道去哪儿读。
 export const DEFAULT_MOD_LIST = [
-  // 原版数据（Data Mod）：系统内置、默认启用。
-  { name: 'lifeRestart-data', enabled: true, system: true, description: '原版数据（系统内置，不可删除）', permissions: [] },
+  // 原版数据（Data Mod）：系统内置、默认启用；数据在 <BASE_URL>data/。
+  { name: 'lifeRestart-data', enabled: true, system: true, description: '原版数据（系统内置，不可删除）', permissions: [], dataFrom: 'data' },
   // 基础 Mod：默认启用（提供 hooks 钩子演示）。
   { name: 'base-mod', enabled: true, system: false, description: '测试基础 Mod', permissions: ['hooks'] },
   // 趣味 Mod：默认禁用。
@@ -53,6 +58,9 @@ export function buildModCatalog({ discovered = [], saved = {}, defaults = DEFAUL
       list.push({
         // 名字（以 manifest 为准）。
         name: mf.name || item.name,
+        // 目录名（**读取文件必须用它**：manifest 的 name 允许与目录名不同，
+        // 而源（HTTP/本地存储）是按目录名寻址的 —— 详情页靠这个字段）。
+        dir: hit.name,
         // 展示。
         version: mf.version || null,
         description: mf.description || item.description || '',
@@ -66,7 +74,7 @@ export function buildModCatalog({ discovered = [], saved = {}, defaults = DEFAUL
       })
     } else {
       // 只在原型清单里：界面仍显示，但标注不可用。
-      list.push({ ...item, version: null, available: false })
+      list.push({ ...item, dir: item.name, version: null, available: false })
     }
     // 从发现表里移除（剩下的都是"原型清单没登记的 Mod"）。
     found.delete(item.name)
@@ -79,6 +87,8 @@ export function buildModCatalog({ discovered = [], saved = {}, defaults = DEFAUL
     list.push({
       // 名字。
       name: mf.name || name,
+      // 目录名（读文件用；见上）。
+      dir: name,
       // 展示。
       version: mf.version || null,
       description: mf.description || '（该 Mod 未提供描述）',

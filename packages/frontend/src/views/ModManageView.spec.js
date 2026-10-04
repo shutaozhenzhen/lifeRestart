@@ -9,7 +9,8 @@
  *   4. 删除：confirm 确认后移除并记入 removed（持久化）；系统 Mod 不可删
  *   5. AI 配置：切服务商填充 baseUrl/model；Key 写入 localStorage；未配 Key 启用时提示
  *   6. 连接测试：成功/失败两条分支都在界面上给出结果
- *   7. 返回按钮回主页
+ *   7. 「查看数据」进 Mod 数据详情页（用**目录名**寻址）
+ *   8. 返回按钮回主页
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
@@ -79,9 +80,9 @@ describe('ModManageView', () => {
     const { wrapper } = mountView(ModManageView)
     // fun-mod 默认禁用（按钮文案 = 状态）。
     const row = modRow(wrapper, 'fun-mod')
-    expect(row.find('.mod-actions .btn').text()).toContain('已禁用')
+    expect(row.find('.btn.toggle').text()).toContain('已禁用')
     // 打开它（带权限 → 会弹授权窗）。
-    await row.findAll('button')[0].trigger('click')
+    await row.find('.btn.toggle').trigger('click')
     await flushPromises()
     // 状态已写入。
     expect(savedState().enabled['fun-mod']).toBe(true)
@@ -95,7 +96,7 @@ describe('ModManageView', () => {
     // 重新挂载（模拟刷新）：状态保留。
     const second = mountView(ModManageView, { route: '/mods' })
     await flushPromises()
-    expect(modRow(second.wrapper, 'fun-mod').find('.mod-actions .btn').text()).toContain('已启用')
+    expect(modRow(second.wrapper, 'fun-mod').find('.btn.toggle').text()).toContain('已启用')
   })
 
   test('删除：确认后移除并记入 removed（系统 Mod 不可删）', async () => {
@@ -154,7 +155,7 @@ describe('ModManageView', () => {
     // 未配置 Key 的场景：清空后再启用 ai-mod 会 alert 提示。
     await inputs[0].setValue('')
     await inputs[0].trigger('change')
-    await modRow(wrapper, 'ai-mod').findAll('button')[0].trigger('click')
+    await modRow(wrapper, 'ai-mod').find('.btn.toggle').trigger('click')
     await flushPromises()
     expect(alertSpy).toHaveBeenCalled()
   })
@@ -180,6 +181,20 @@ describe('ModManageView', () => {
     await findButton(wrapper, '测试连接').trigger('click')
     await flushPromises()
     expect(wrapper.find('.ai-test .err').text()).toContain('proxy unreachable')
+  })
+
+  test('查看数据：进 /mods/<目录名> 的详情页', async () => {
+    // 挂载。
+    const { wrapper, router } = mountView(ModManageView)
+    await flushPromises()
+    // 每条卡片都有「查看数据」按钮。
+    expect(modRow(wrapper, 'lifeRestart-data').find('.btn.detail').exists()).toBe(true)
+    // 点它。
+    await modRow(wrapper, 'lifeRestart-data').find('.btn.detail').trigger('click')
+    await flushPromises()
+    // 跳到详情页（路由参数 = 目录名）。
+    expect(router.currentRoute.value.path).toBe('/mods/lifeRestart-data')
+    expect(router.currentRoute.value.params.name).toBe('lifeRestart-data')
   })
 
   test('返回按钮回主页', async () => {

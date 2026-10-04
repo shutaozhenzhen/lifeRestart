@@ -63,7 +63,7 @@ node scripts/test-all.mjs   # 没有 pnpm 的环境用这条（npm test 亦可�
 
 # 只跑单个包（参数按目录名/包名子串匹配）
 node scripts/test-all.mjs game-engine   # 引擎 712 用例（37 spec）
-node scripts/test-all.mjs frontend      # 前端 213 用例（25 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
+node scripts/test-all.mjs frontend      # 前端 258 用例（28 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
 node scripts/test-all.mjs mobile        # 移动端 67 用例（脚本 + 契约 + CI 不变量）
 
 # 带参数透传给 vitest：`--` 之后的参数原样传给 vitest（不改包过滤）
@@ -128,8 +128,16 @@ cd packages/game-engine && node server.js [--mock] [--port <n>]
 cd lifeRestart && pnpm --filter frontend dev
 ```
 
-页面流转：`/` → `/talent` → `/property` → `/game` → `/summary`，另有 `/mods`（Mod 管理）与 `/settings`（日志等级 + 实时日志面板）。
+页面流转：`/` → `/talent` → `/property` → `/game` → `/summary`，另有 `/mods`（Mod 管理）、`/mods/:name`（**Mod 数据详情**：点 Mod 卡片上的 `查看数据 →`，可视化该 Mod 的天赋/事件/成就/名人/年龄表）、`/settings`（日志等级 + 实时日志面板）。
 AI 连接测试经 vite 代理 `/ai-proxy` 转发到本地代理服务。
+
+**重置数据**（主页底部 `🗑 重置数据`）：两步确认（点一下只展开确认条，可取消）后清空
+**引擎存档**（`lifeRestart:` 前缀：重开次数 / 继承天赋 / 累计天赋 / 累计事件 / 累计成就）、
+**Mod 启停记录**、**AI 配置（含 API Key）**、**日志级别**、**自动播放速度**与**本地安装的 Mod**，
+并把内存态一起归零 —— 随后刷新即为"第一次打开"。
+它**只删清单里的键，不做 `localStorage.clear()`**（同源下别的数据不动）；
+清单在 `packages/frontend/src/utils/reset-data.js`，且**漏键会被测试挡住**：引擎每个
+`type: 'storage'` 参数、frontend 源码里每个存储键字面量，都必须出现在清单里。
 
 **轨迹页**（`/game`）：顶部为紧凑状态栏（年龄/生命 + 五维属性一行胶囊），下方是**逐年完整轨迹列表**
 （每年一岁一条，事件/天赋/天赋替换分类着色，新条目逐条入场并自动跟随最新，向上翻会暂停跟随、可点「回到最新」）。
@@ -278,11 +286,11 @@ node scripts/collect-apk.js       # 可选：把 APK 收集到 out/liferestart-m
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
 | `packages/game-engine` | 712 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**、**HTTP 文件源**与 **Mod 架构 v2 宿主桥：`host.js` + `host-node.js` + `manifest` 的 targets/entry/deterministic**）/ ai / cli（含**无数据源即报错**的回归）/ data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 213 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载（含空内容）**/**模拟驱动器**/**统计展示**）+ **7 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
+| `packages/frontend` | 258 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载（含空内容）**/**单个 Mod 数据读取与统计**/**重置数据清单**/**模拟驱动器**/**统计展示**）+ **8 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
 | `platforms/mobile` | 67 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
-| **合计** | **1004** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
+| **合计** | **1049** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
 
 ### 前端测试分层（2026-10 补齐）
 

@@ -9,13 +9,14 @@
  *   4. 数据请求失败：降级 fixture 数据源（dataSource 标注）+ 仍可开局
  *   5. 设置 / Mod 管理入口跳转
  *   6. 加载中：按钮禁用并显示"加载中..."（防重复点击开局两局）
+ *   7. **重置数据**：两步确认（先展开、可取消）→ 真清空（存档/前端键/内存态）
  */
 import { describe, test, expect, beforeEach } from 'vitest'
 import { nextTick } from 'vue'
 import { flushPromises } from '@vue/test-utils'
 import HomeView from './HomeView.vue'
 import { useGameStore } from '../stores/game.js'
-import { resetApp, mountView, stubFetchOk, stubFetchFail } from '../test-utils/setup.js'
+import { resetApp, mountView, stubFetchOk, stubFetchFail, buildFixtureData } from '../test-utils/setup.js'
 
 // 每个用例前重置 pinia 与 localStorage。
 beforeEach(() => {
@@ -196,5 +197,62 @@ describe('HomeView', () => {
     expect(btn.text()).toBe('加载中...')
     // 原生 disabled 属性。
     expect(btn.attributes('disabled')).toBeDefined()
+  })
+
+  test('重置数据：两步确认（可取消，取消时不清）', async () => {
+    // 准备。
+    stubFetchOk()
+    // 预置一份存档。
+    globalThis.localStorage.setItem('lifeRestart:times', '9')
+    // 挂载。
+    const { wrapper } = mountView(HomeView)
+    // 第一步：点「重置数据」→ 只展开确认条，**还没清**。
+    await findButton(wrapper, '重置数据').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.reset-warn').text()).toContain('重开次数')
+    expect(wrapper.find('.reset-warn').text()).toContain('AI 配置')
+    expect(globalThis.localStorage.getItem('lifeRestart:times')).toBe('9')
+    // 取消 → 收起且数据仍在。
+    await findButton(wrapper, '取消').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.reset-warn').exists()).toBe(false)
+    expect(globalThis.localStorage.getItem('lifeRestart:times')).toBe('9')
+  })
+
+  test('重置数据：确认后清空存档/前端键 + 内存态归零，并给出结果提示', async () => {
+    // 准备。
+    stubFetchOk()
+    // 预置：引擎存档 + 前端键 + 一个**别的应用的键**（必须留着）。
+    globalThis.localStorage.setItem('lifeRestart:times', '9')
+    globalThis.localStorage.setItem('lifeRestart:ACHV', '[[101,1]]')
+    globalThis.localStorage.setItem('modsState', '{"enabled":{}}')
+    globalThis.localStorage.setItem('aiConfig', '{"apiKey":"sk-x"}')
+    globalThis.localStorage.setItem('other-app:token', 'keep-me')
+    // 挂载（引擎直接 store.init 起，不点「立即重开」：那条路径会把 loading 留在真上、
+    // 并跳走页面 —— 这里要测的是重置按钮本身）。
+    const { wrapper } = mountView(HomeView)
+    const store = useGameStore()
+    await store.init(buildFixtureData())
+    expect(store.life).not.toBeNull()
+    expect(store.isReady).toBe(true)
+    // 两步确认。
+    await findButton(wrapper, '重置数据').trigger('click')
+    await nextTick()
+    await findButton(wrapper, '确认清空').trigger('click')
+    await flushPromises()
+    // 存档与前端键都没了。
+    expect(globalThis.localStorage.getItem('lifeRestart:times')).toBeNull()
+    expect(globalThis.localStorage.getItem('lifeRestart:ACHV')).toBeNull()
+    expect(globalThis.localStorage.getItem('modsState')).toBeNull()
+    expect(globalThis.localStorage.getItem('aiConfig')).toBeNull()
+    // **无关键留着**（不做 localStorage.clear()）。
+    expect(globalThis.localStorage.getItem('other-app:token')).toBe('keep-me')
+    // 内存态归零（引擎实例 / 就绪标记）。
+    expect(store.life).toBeNull()
+    expect(store.isReady).toBe(false)
+    // 结果提示如实（清了几项）。
+    expect(wrapper.find('.reset-message').text()).toContain('已清空 4 个存储键')
+    // 确认条收起。
+    expect(wrapper.find('.reset-warn').exists()).toBe(false)
   })
 })

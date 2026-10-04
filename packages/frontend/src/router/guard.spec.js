@@ -39,4 +39,14 @@ describe('shouldRedirectEnginePage（引擎页守卫判定）', () => {
     expect(shouldRedirectEnginePage('/mods', true)).toBeNull()
     expect(shouldRedirectEnginePage('/settings', true)).toBeNull()
   })
+
+  test('Mod 数据详情页（/mods/<目录名>）不需要引擎，刷新直进也不被重定向', () => {
+    // 未初始化（刷新后直接打开某个 Mod 的详情）。
+    expect(shouldRedirectEnginePage('/mods/lifeRestart-data', false)).toBeNull()
+    // 已初始化。
+    expect(shouldRedirectEnginePage('/mods/base-mod', true)).toBeNull()
+    // 守卫是**精确匹配**：只有 /mods 与 /mods/<name> 这类它不认识的路径都放行，
+    // 不会因为前缀是 /mods 就把 /modsXXX 误判成引擎页。
+    expect(shouldRedirectEnginePage('/modsXYZ', false)).toBeNull()
+  })
 })

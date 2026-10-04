@@ -306,6 +306,23 @@ function togglePanel() {
 // 待授权的 Mod（权限弹窗）。
 const pendingAuth = ref(null)
 
+// #openDetail
+// 打开某个 Mod 的**数据详情页**（/mods/<目录名>）。
+//
+// 为什么用 `dir` 而不是 `name`：目录名才是文件源寻址用的键，
+// manifest 里的 name 允许与目录名不同（见 utils/mod-catalog.js）。
+//
+// @param {object} mod - 目录项
+// @returns {void}
+function openDetail(mod) {
+  // 目录名（老数据没有 dir 时退回 name）。
+  const dir = mod.dir || mod.name
+  // 行为日志。
+  gameStore.pushLog('info', `[UI][mods] 查看数据：${mod.name}（目录 ${dir}）`)
+  // 跳转。
+  router.push(`/mods/${encodeURIComponent(dir)}`)
+}
+
 // 切换启用状态。
 function toggle(mod) {
   // 系统 Mod 只可禁用不可删除，原型允许切换。
@@ -389,7 +406,9 @@ function back() {
         </span>
       </div>
       <div class="mod-actions">
-        <button class="btn" :class="{ on: mod.enabled }" @click="mod.name === 'ai-mod' ? toggleAI(mod) : (toggle(mod), requestPermission(mod))">
+        <!-- 查看数据：进该 Mod 的数据详情页（可视化它装了什么） -->
+        <button class="btn detail" @click="openDetail(mod)">查看数据 →</button>
+        <button class="btn toggle" :class="{ on: mod.enabled }" @click="mod.name === 'ai-mod' ? toggleAI(mod) : (toggle(mod), requestPermission(mod))">
           {{ mod.enabled ? '已启用' : '已禁用' }}
         </button>
         <button v-if="mod.name === 'ai-mod'" class="btn config" :class="{ active: aiPanelOpen }" @click="togglePanel">
@@ -581,6 +600,15 @@ function back() {
 }
 .btn.config.active {
   background: #42a5f5;
+}
+.btn.detail {
+  background: #22304f;
+  border: 1px solid #ffd700;
+  color: #ffd700;
+}
+.btn.detail:hover {
+  background: #ffd700;
+  color: #16213e;
 }
 .sys-hint {
   color: #888;

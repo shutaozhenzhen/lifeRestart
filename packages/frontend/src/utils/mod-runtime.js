@@ -264,6 +264,25 @@ export function createCompositeSource(sources = []) {
   }
 }
 
+// #createBrowserModSource
+// 组装浏览器侧的 Mod 文件源：**本地已安装优先** → 服务器（HTTP）。
+//
+// 为什么收敛成一处：`discoverMods` / `loadModBundle` / `mod-detail` 都要同一个源，
+// 各写一遍必然分叉（本仓库反复踩过的坑：同一件事有两份实现）。
+//
+// @param {object} [params]
+// @param {string} [params.baseUrl] - Mod 根路径
+// @param {Function} [params.fetchImpl] - fetch 实现（测试注入）
+// @param {object} [params.store] - 已安装 Mod 的本地存储（可选）
+// @param {object} [params.log] - 日志器
+// @returns {object} 文件源（无 store 时就是纯 HTTP 源）
+export function createBrowserModSource({ baseUrl = MODS_BASE_URL, fetchImpl, store, log } = {}) {
+  // HTTP 源。
+  const http = createFetchSource({ baseUrl, fetchImpl, log })
+  // 有本地存储就组合（**本地优先**）。
+  return store ? createCompositeSource([createStoreSource(store), http]) : http
+}
+
 // #installModFromZip
 // 从 zip 安装 Mod 到本地存储（**前端 zip 安装的入口**）。
 // 解析/校验/安全防护都在引擎的 zip 模块里（与 CLI 的 manager.importZip 同一实现）。
@@ -312,8 +331,7 @@ export async function installModFromZip({ bytes, store, log } = {}) {
 // @returns {Promise<{mods: Array<{name: string, manifest: object}>, errors: string[]}>} 发现结果
 export async function discoverMods({ baseUrl = MODS_BASE_URL, fetchImpl, log, store } = {}) {
   // 源：有本地存储就组合（**本地已安装优先**），否则纯 HTTP。
-  const http = createFetchSource({ baseUrl, fetchImpl, log })
-  const source = store ? createCompositeSource([createStoreSource(store), http]) : http
+  const source = createBrowserModSource({ baseUrl, fetchImpl, store, log })
   // 扫描。
   return scanMods({ source, log })
 }
@@ -331,8 +349,7 @@ export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enable
   // 钩子总线（一次游戏一个：所有 Mod 共享，Life 也注入它）。
   const hooks = createHookBus()
   // 文件源（本地已安装优先 → HTTP）。
-  const http = createFetchSource({ baseUrl, fetchImpl, log })
-  const source = store ? createCompositeSource([createStoreSource(store), http]) : http
+  const source = createBrowserModSource({ baseUrl, fetchImpl, store, log })
   // 加载器（只加载启用的 Mod）。
   const loader = await createModLoader({ source, log, only: enabled })
   // 加载数据与代码（**不**执行 code：浏览器要等 Life 建好拿 params）。
