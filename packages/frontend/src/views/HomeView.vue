@@ -1,8 +1,8 @@
 <script setup>
 // 主页：模式选择 + 开始新人生。
-// 两种模式（对应原版 mode.js）：
-//   custom    自定义模式 → 天赋选择页
-//   celebrity 名人模式 → 名人页（Step 后续实现，先走天赋）
+// 两种模式（对应原版 remake 的 Mode）：
+//   custom    自定义模式 → 天赋选择页（抽卡）
+//   celebrity 名人模式   → 名人选择页（选一位名人，用 TA 的属性与天赋开局）
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
@@ -108,8 +108,8 @@ async function startGame() {
   await store.init(bundle.data, { seed: seedInput.value, hooks: bundle.hooks, modCodes: bundle.modCodes, modRequires: bundle.modRequires })
   // 日志：本局种子（复现的关键信息）。
   store.pushLog('info', `[UI][home] 本局随机种子：${store.seed}`)
-  // 跳转到天赋选择页（名人模式暂同路径，Step 后续分离）。
-  router.push('/talent')
+  // 跳转：名人模式先去选名人（名人自带属性与天赋），自定义模式去抽天赋。
+  router.push(store.mode === 'celebrity' ? '/character' : '/talent')
 }
 </script>
 

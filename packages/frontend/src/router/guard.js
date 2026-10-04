@@ -11,7 +11,7 @@
 
 // #ENGINE_PAGES
 // 需要引擎初始化的页面（引擎未就绪时禁止进入）。
-const ENGINE_PAGES = ['/talent', '/property', '/game', '/summary']
+const ENGINE_PAGES = ['/talent', '/character', '/property', '/game', '/summary']
 
 // #shouldRedirectEnginePage
 // 判定：目标页需要引擎且引擎未初始化 → 返回重定向路径，否则 null（放行）。

@@ -14,8 +14,9 @@ import { shouldRedirectEnginePage } from './guard.js'
 
 describe('shouldRedirectEnginePage（引擎页守卫判定）', () => {
   test('引擎页未初始化 → 重定向 /（刷新直进的原生异常场景）', () => {
-    // 各引擎页。
+    // 各引擎页（含名人模式的 /character：它也依赖 life 才能抽名人）。
     expect(shouldRedirectEnginePage('/talent', false)).toBe('/')
+    expect(shouldRedirectEnginePage('/character', false)).toBe('/')
     expect(shouldRedirectEnginePage('/property', false)).toBe('/')
     expect(shouldRedirectEnginePage('/game', false)).toBe('/')
     expect(shouldRedirectEnginePage('/summary', false)).toBe('/')
@@ -24,6 +25,7 @@ describe('shouldRedirectEnginePage（引擎页守卫判定）', () => {
   test('引擎已初始化 → 放行（null）', () => {
     // 各引擎页。
     expect(shouldRedirectEnginePage('/talent', true)).toBeNull()
+    expect(shouldRedirectEnginePage('/character', true)).toBeNull()
     expect(shouldRedirectEnginePage('/property', true)).toBeNull()
     expect(shouldRedirectEnginePage('/game', true)).toBeNull()
     expect(shouldRedirectEnginePage('/summary', true)).toBeNull()

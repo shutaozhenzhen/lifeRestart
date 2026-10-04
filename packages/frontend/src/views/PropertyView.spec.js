@@ -184,4 +184,32 @@ describe('PropertyView', () => {
     // 到轨迹页。
     expect(router.currentRoute.value.path).toBe('/game')
   })
+
+  test('名人模式：显示名人基础属性 + 额外点数，且 0 点也能直接走', async () => {
+    // 准备：名人模式 + 选定一位名人。
+    const store = useGameStore()
+    store.setMode('celebrity')
+    await store.init(buildFixtureData())
+    store.drawCharacters()
+    store.chooseCharacter(store.characters[0].id)
+    // 挂载。
+    const { wrapper, router } = mountView(PropertyView)
+    // 名人提示条：名字 + 基础属性。
+    const banner = wrapper.find('.celebrity')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain(store.character.name)
+    expect(banner.text()).toContain(String(store.characterBase.CHR))
+    // 可用点数 = 名人的**额外点数**（不是默认 20）。
+    expect(wrapper.find('.points').text()).toBe(String(store.characterExtraPoints))
+    // 每行显示合计 = 名人基础 + 额外（初始额外为 0 → 合计 = 基础）。
+    const totals = wrapper.findAll('.total').map(t => t.text())
+    expect(totals).toHaveLength(4)
+    expect(totals[0]).toContain(String(store.finalProperties.CHR))
+    expect(totals[0]).toContain(`含名人 ${store.characterBase.CHR}`)
+    // 额外点数为 0 时，剩余也是 0 → 「下一步」直接进轨迹页（不需要再分配）。
+    expect(store.leftPoints).toBe(0)
+    await findButton(wrapper, '下一步').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/game')
+  })
 })

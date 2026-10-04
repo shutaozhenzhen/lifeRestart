@@ -51,6 +51,13 @@ function next() {
 <template>
   <div class="property">
     <h2 class="title">属性分配</h2>
+
+    <!-- 名人模式：名人的固定属性是基底，玩家分配的是"额外点数"（来自名人天赋） -->
+    <p v-if="store.character" class="celebrity">
+      名人：<b>{{ store.character.name }}</b> —— 基础属性已固定（颜值 {{ store.characterBase.CHR }} / 智力 {{ store.characterBase.INT }} /
+      体质 {{ store.characterBase.STR }} / 家境 {{ store.characterBase.MNY }}），下面分配的是**额外点数**
+    </p>
+
     <p class="subtitle">剩余点数：<b class="points">{{ store.leftPoints }}</b> / {{ store.propertyPoints }}</p>
 
     <!-- 分配行 -->
@@ -60,6 +67,10 @@ function next() {
         <button class="btn small" @click="adjust(item.key, -1)">−</button>
         <span class="value">{{ store.allocation[item.key] }}</span>
         <button class="btn small" @click="adjust(item.key, 1)">＋</button>
+        <!-- 名人模式：显示合计 = 名人基础 + 额外 -->
+        <span v-if="store.character" class="total">
+          = {{ store.finalProperties[item.key] }}<span class="base">（含名人 {{ store.characterBase[item.key] }}）</span>
+        </span>
       </div>
     </div>
 
@@ -81,6 +92,27 @@ function next() {
 .title {
   text-align: center;
   margin-bottom: 8px;
+}
+/* 名人模式提示条（基础属性已固定） */
+.celebrity {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #ffb84d;
+  background: #1a2a4e;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+/* 合计（名人基础 + 额外） */
+.total {
+  font-size: 13px;
+  color: #ffd700;
+  margin-left: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.total .base {
+  font-size: 11px;
+  color: #888;
 }
 .subtitle {
   text-align: center;

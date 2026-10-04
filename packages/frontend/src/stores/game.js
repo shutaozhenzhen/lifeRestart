@@ -59,6 +59,16 @@ export const useGameStore = defineStore('game', {
     },
     // 游戏模式（custom 自定义 / celebrity 名人）。
     mode: 'custom',
+    // 名人模式：本批候选名人（一次抽 characterPullCount 个，默认 3）。
+    characters: [],
+    // 名人模式：已选名人（null = 还没选）。
+    character: null,
+    // 名人模式：名人的**基础属性**（固定值；属性分配页只读展示，玩家点数是额外部分）。
+    characterBase: { CHR: 0, INT: 0, STR: 0, MNY: 0 },
+    // 名人模式：可额外分配的点数（= 名人天赋带来的点数；默认 20 点已被名人固定属性取代）。
+    characterExtraPoints: 0,
+    // 名人模式：唯一「我」是否已解锁（连点彩蛋，见 character.js 的时间窗口逻辑）。
+    uniqueUnlocked: false,
     // 天赋池（抽取结果）。
     talentPool: [],
     // 已选天赋（ID 数组）。
@@ -100,12 +110,40 @@ export const useGameStore = defineStore('game', {
   getters: {
     // 已初始化。
     isReady: (state) => state.initialized && state.life !== null,
-    // 总可用点数（默认 20 + 天赋加成）。
-    propertyPoints: (state) => state.life ? state.life.getPropertyPoints() : 0,
+    // 总可用点数。
+    //   custom：默认 20 + 天赋加成；
+    //   celebrity：**只有名人的天赋加成** —— 默认那 20 点的位置已经被名人的固定属性占了
+    //   （与原版语义一致：名人模式 = 名人属性 + 天赋带来的额外点数）。
+    propertyPoints: (state) => {
+      // 引擎未就绪。
+      if (!state.life) return 0
+      // 名人模式（且已选定名人）。
+      if (state.mode === 'celebrity' && state.character) return state.characterExtraPoints
+      // 自定义模式。
+      return state.life.getPropertyPoints()
+    },
     // 已分配点数。
     allocatedTotal: (state) => state.allocation.CHR + state.allocation.INT + state.allocation.STR + state.allocation.MNY,
     // 剩余点数。
-    leftPoints: (state) => (state.life ? state.life.getPropertyPoints() : 0) - state.allocatedTotal,
+    leftPoints: (state) => {
+      // 可用点数（见 propertyPoints）。
+      const total = state.mode === 'celebrity' && state.character && state.life
+        ? state.characterExtraPoints
+        : (state.life ? state.life.getPropertyPoints() : 0)
+      // 已分配。
+      const used = state.allocation.CHR + state.allocation.INT + state.allocation.STR + state.allocation.MNY
+      // 剩余。
+      return total - used
+    },
+    // 是否名人模式。
+    isCelebrity: (state) => state.mode === 'celebrity',
+    // 属性分配页要展示的「基础值 + 额外分配 = 合计」。
+    finalProperties: (state) => ({
+      CHR: (state.characterBase.CHR || 0) + state.allocation.CHR,
+      INT: (state.characterBase.INT || 0) + state.allocation.INT,
+      STR: (state.characterBase.STR || 0) + state.allocation.STR,
+      MNY: (state.characterBase.MNY || 0) + state.allocation.MNY,
+    }),
     // 错误条数（悬浮窗角标；按缓冲内容实时统计）。
     errorCount: (state) => countByLevel(state.logBuffer).error,
     // 警告条数（同上）。
@@ -128,6 +166,12 @@ export const useGameStore = defineStore('game', {
       this.talentsConfirmed = false
       this.talentPool = []
       this.selectedTalents = []
+      // 名人模式的中间态也一起清（换局/换模式不能带着上一位名人的属性）。
+      this.characters = []
+      this.character = null
+      this.characterBase = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
+      this.characterExtraPoints = 0
+      this.uniqueUnlocked = false
       this.clearTrace()
       // 上一局的成就提示也不该带到新一局。
       this.clearAchievementToasts()
@@ -314,9 +358,134 @@ export const useGameStore = defineStore('game', {
     },
 
     // 设置游戏模式。
+    // 换模式要清掉上一模式的中间态：否则「名人模式选好名人 → 切回自定义」会带着
+    // 名人的基础属性开局（propertyPoints 与 begin 的合并都以 character 为准）。
     setMode(mode) {
       // 记录模式。
       this.mode = mode
+      // 清中间态。
+      this.characters = []
+      this.character = null
+      this.characterBase = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
+      this.characterExtraPoints = 0
+      this.uniqueUnlocked = false
+      this.talentPool = []
+      this.selectedTalents = []
+      this.talentsConfirmed = false
+      this.allocation = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
+    },
+
+    // #drawCharacters
+    // 抽取名人候选（名人模式）。
+    //
+    // 引擎侧：`characterRandom()` 按权重抽 `characterPullCount` 个（带保底），
+    // 并把名人的天赋 ID 换成天赋对象；同时返回唯一「我」（连点彩蛋解锁时非 null）。
+    //
+    // @returns {{normal: Array<object>, unique: object|null}} 候选与唯一「我」
+    drawCharacters() {
+      // 引擎未初始化保护（刷新后直进页面的双保险）。
+      if (!this.life) {
+        // 错误日志（常显进面板）。
+        this.pushLog('error', '[UI][game] 引擎未初始化，无法抽取名人（应回主页重新开始）')
+        // 空结果。
+        return { normal: [], unique: null }
+      }
+      // 抽一批。
+      const result = this.life.characterRandom()
+      // 过滤掉天赋缺失的条目（Mod 数据不完整时，页面会渲染出 undefined 卡片）。
+      this.characters = (result.normal || []).filter(c => c && Array.isArray(c.talent) && c.talent.every(Boolean))
+      // 唯一「我」。
+      this.uniqueUnlocked = Boolean(result.unique)
+      // 丢弃条目的告警（不静默）。
+      const dropped = (result.normal || []).length - this.characters.length
+      if (dropped > 0) this.pushLog('warn', `[UI][character] ${dropped} 位名人的天赋数据缺失，已跳过`)
+      // 页面日志。
+      this.pushLog('debug', `[UI][character] 抽取名人候选 ${this.characters.length} 位：${this.characters.map(c => c.name).join(' / ') || '（无）'}${this.uniqueUnlocked ? '（唯一「我」已解锁）' : ''}`)
+      // 返回。
+      return { normal: this.characters, unique: result.unique }
+    },
+
+    // #applyCharacter
+    // 写入一位名人：基础属性 + 已选天赋 + 额外点数（内部动作，chooseCharacter/chooseUnique 共用）。
+    //
+    // @param {object} chara - { id, name, property, talent: Array<天赋对象> }
+    // @returns {void}
+    applyCharacter(chara) {
+      // 记录名人本体（页面顶部显示"名人：曹操"）。
+      this.character = {
+        id: chara.id,
+        name: chara.name,
+        property: { ...chara.property },
+        talent: chara.talent.map(t => ({ id: t.id, name: t.name })),
+      }
+      // 基础属性：数据里是字符串，统一转数字（NaN 兜底 0）。
+      const toNum = (v) => {
+        // 转数字。
+        const n = Number(v)
+        // 非法值。
+        return Number.isFinite(n) ? n : 0
+      }
+      // 四维。
+      this.characterBase = {
+        CHR: toNum(chara.property?.CHR),
+        INT: toNum(chara.property?.INT),
+        STR: toNum(chara.property?.STR),
+        MNY: toNum(chara.property?.MNY),
+      }
+      // 名人的天赋直接作为"已选天赋"（名人模式不抽卡）。
+      this.selectedTalents = chara.talent.map(t => String(t.id))
+      // 额外点数 = 名人天赋带来的加成：先清空天赋跑一次拿到基线（= 默认点数），
+      // 再写入名人天赋 —— 两者相减就是"天赋给的点数"（默认点数已被名人属性取代）。
+      this.life.remake([])
+      // 基线（此时 TLT 为空 → 加成为 0）。
+      const baseline = this.life.getPropertyPoints()
+      // 写入名人天赋（触发替换链：名人自带的天赋也可能被替换/互斥）。
+      this.life.remake([...this.selectedTalents])
+      // 额外点数。
+      this.characterExtraPoints = this.life.getPropertyPoints() - baseline
+      // 天赋已确认（begin 不再重复跑替换链，避免重复消耗随机源）。
+      this.talentsConfirmed = true
+      // 分配从 0 开始（玩家分的是"额外点数"）。
+      this.allocation = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
+      // 页面日志。
+      this.pushLog('info', `[UI][character] 选定名人：${chara.name}（基础属性 ${this.characterBase.CHR}/${this.characterBase.INT}/${this.characterBase.STR}/${this.characterBase.MNY}，天赋 ${this.selectedTalents.length} 个，额外点数 ${this.characterExtraPoints}）`)
+    },
+
+    // #chooseCharacter
+    // 选定一位候选名人。
+    //
+    // @param {string|number} id - 名人 ID
+    // @returns {{ok: boolean, message?: string}} 结果
+    chooseCharacter(id) {
+      // 引擎保护。
+      if (!this.life) return { ok: false, message: '引擎未初始化' }
+      // 找候选（ID 字符串比较：数据里可能是数字键）。
+      const chara = this.characters.find(c => String(c.id) === String(id))
+      // 不在候选里。
+      if (!chara) return { ok: false, message: '这位名人不在本批候选里' }
+      // 应用。
+      this.applyCharacter(chara)
+      // 成功。
+      return { ok: true }
+    },
+
+    // #chooseUnique
+    // 选定唯一「我」（连点彩蛋；`drawCharacters()` 连点若干次后解锁）。
+    //
+    // @returns {{ok: boolean, message?: string}} 结果
+    chooseUnique() {
+      // 引擎保护。
+      if (!this.life) return { ok: false, message: '引擎未初始化' }
+      // 生成（引擎侧幂等：已生成过就直接返回存档里的那一个）。
+      const unique = this.life.generateUnique()
+      // 未解锁。
+      if (!unique) return { ok: false, message: '唯一「我」还没解锁（多连点几次「换一批」）' }
+      // 天赋给的是 ID 列表 → 换成对象（与普通名人同形）。
+      const talents = (unique.talent || []).map(id => this.rawData?.talents?.[id]).filter(Boolean)
+      // 应用。
+      this.applyCharacter({ id: 'unique', name: '我', property: unique.property, talent: talents })
+      // 成功。
+      return { ok: true }
     },
 
     // 抽取天赋池。
@@ -406,8 +575,20 @@ export const useGameStore = defineStore('game', {
       }
       // 天赋未确认则补做一次（替换链只跑一次，避免重复消耗随机源）。
       if (!this.talentsConfirmed) this.confirmTalents()
+      // 名人模式：名人的固定属性是基底，玩家分配的是"额外点数"叠加在上面。
+      // （自定义模式：分配值就是最终值。）
+      const finalAllocation = this.character
+        ? {
+            CHR: (this.characterBase.CHR || 0) + (allocation.CHR || 0),
+            INT: (this.characterBase.INT || 0) + (allocation.INT || 0),
+            STR: (this.characterBase.STR || 0) + (allocation.STR || 0),
+            MNY: (this.characterBase.MNY || 0) + (allocation.MNY || 0),
+          }
+        : allocation
       // 开局（写入分配属性 + 触发初始成就）。
-      this.life.start(allocation)
+      this.life.start(finalAllocation)
+      // 名人模式：把最终属性也记进日志（总结页/报告里能看出"名人的底子"）。
+      if (this.character) this.pushLog('info', `[UI][character] 开局属性（名人 ${this.character.name} 基础 + 额外）：${JSON.stringify(finalAllocation)}`)
       // 标记已开局（GameView 挂载时据此避免重复开局）。
       this.started = true
       // 清空轨迹（新的一局）。

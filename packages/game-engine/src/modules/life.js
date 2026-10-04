@@ -27,6 +27,24 @@ import { SILENT_LOGGER } from '../functions/logger.js'
 // 内置默认评价分档（config 未显式传入 propertyConfig 时使用）。
 import { DEFAULT_JUDGE_CONFIG } from '../params/judge-config.js'
 
+// #uniqueWeight
+// 权重生成器（与官方 remake 的 wg 同一形状）：在 [s, e] 上做**三角权重** ——
+// 越靠中间越容易抽到（属性值 0~10 → 5 最常见；天赋个数 1~5 → 3 最常见）。
+//
+// @param {number} s - 下界（含）
+// @param {number} e - 上界（含）
+// @returns {Array<[number, number]>} [值, 权重] 列表
+function uniqueWeight(s, e) {
+  // 取值个数。
+  const length = e - s + 1
+  // 逐值生成（权重先升后降）。
+  return Array.from({ length }, (_, i) => [s + i, Math.min(i + 1, length - i)])
+}
+
+// 唯一"我"的默认权重：属性值 0~10、天赋个数 1~5（与原版一致）。
+const DEFAULT_UNIQUE_PROPERTY_WEIGHT = uniqueWeight(0, 10)
+const DEFAULT_UNIQUE_TALENT_WEIGHT = uniqueWeight(1, 5)
+
 class Life {
   // 构造函数：注入依赖。
   // @param {object} deps
@@ -151,6 +169,10 @@ class Life {
   // @param {Array} [params.propertyAllocateLimit] - 属性分配范围
   // @param {object} [params.defaultPropertys] - 默认属性
   // @param {object} [params.propertyConfig] - 属性配置（含 judge 分档）
+  // @param {number} [params.characterPullCount] - 名人模式候选数量
+  // @param {number} [params.characterRateableKnife] - 名人抽取保底阈值
+  // @param {Array} [params.uniquePropertyWeight] - 唯一"我"的属性值权重表
+  // @param {Array} [params.uniqueTalentWeight] - 唯一"我"的天赋个数权重表
   // @returns {void}
   config({
     defaultPropertyPoints = 20,
@@ -158,6 +180,10 @@ class Life {
     propertyAllocateLimit = [0, 10],
     defaultPropertys = {},
     propertyConfig,
+    characterPullCount = 3,
+    characterRateableKnife = 10,
+    uniquePropertyWeight = DEFAULT_UNIQUE_PROPERTY_WEIGHT,
+    uniqueTalentWeight = DEFAULT_UNIQUE_TALENT_WEIGHT,
   } = {}) {
     // 保存配置。
     this.#defaultPropertyPoints = defaultPropertyPoints
@@ -176,8 +202,17 @@ class Life {
     // 重要性：summary/statistics 完全依赖 judge —— 缺省为空表时评价全为 undefined，
     // 前端总结页会整列显示 —（历史 bug：前端 config() 空参调用）。
     this.#property.config(propertyConfig || { judge: DEFAULT_JUDGE_CONFIG })
+    // 名人配置：**必须在 config 里接上**。漏掉的后果（2026-10 实测）：
+    //   `#characterPullCount` 是 undefined → `new Array(undefined)` 只抽 **1** 个候选
+    //   （应为 3）；保底阈值失效；唯一"我"的权重表是 undefined → generateUnique() 直接抛。
+    this.#character.config({
+      characterPullCount,
+      rateableKnife: characterRateableKnife,
+      propertyWeight: uniquePropertyWeight,
+      talentWeight: uniqueTalentWeight,
+    })
     // 记录配置摘要。
-    this.#log.debug(`config: 点数=${defaultPropertyPoints} 天赋上限=${talentSelectLimit} 分配范围=${JSON.stringify(propertyAllocateLimit)}`)
+    this.#log.debug(`config: 点数=${defaultPropertyPoints} 天赋上限=${talentSelectLimit} 分配范围=${JSON.stringify(propertyAllocateLimit)} 名人候选=${characterPullCount}`)
   }
 
   // #request

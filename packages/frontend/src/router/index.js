@@ -4,10 +4,12 @@
  * Hash 路由（createWebHashHistory），兼容 GitHub Pages 静态部署。
  *
  * 路由表：
- *   /        主页（模式选择）
- *   /talent  天赋选择页（Step 8）
- *   /game    游戏页（属性分配 + 人生轨迹，Step 9）
- *   /summary 人生总结页（Step 10）
+ *   /          主页（模式选择）
+ *   /talent    天赋选择页（Step 8，自定义模式）
+ *   /character 名人选择页（名人模式：选一位名人，用 TA 的属性与天赋开局）
+ *   /property  属性分配页
+ *   /game      游戏页（人生轨迹）
+ *   /summary   人生总结页（Step 10）
  */
 
 // 导入路由。
@@ -20,6 +22,8 @@ import { useGameStore } from '../stores/game.js'
 import { shouldRedirectEnginePage } from './guard.js'
 // 天赋选择页（Step 8）。
 import TalentView from '../views/TalentView.vue'
+// 名人选择页（名人模式：选一位名人，用 TA 的属性与天赋开局）。
+import CharacterView from '../views/CharacterView.vue'
 // 属性分配页（Step 9）。
 import PropertyView from '../views/PropertyView.vue'
 // 人生轨迹页（Step 9）。
@@ -42,6 +46,8 @@ export const routes = [
   { path: '/', name: 'home', component: HomeView },
   // 天赋选择页。
   { path: '/talent', name: 'talent', component: TalentView },
+  // 名人选择页（名人模式：候选名人 → 选定 → 属性分配）。
+  { path: '/character', name: 'character', component: CharacterView },
   // 属性分配页。
   { path: '/property', name: 'property', component: PropertyView },
   // 人生轨迹页。

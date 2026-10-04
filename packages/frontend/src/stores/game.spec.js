@@ -650,3 +650,175 @@ describe('gameStore 随机种子与复现（真实数据）', () => {
     expect(report).toContain('可复现同一局')
   })
 })
+
+// ========== 名人模式（character） ==========
+//
+// 背景：名人模式的引擎模块早就移植好了（character.js + life.characterRandom），
+// 但**前端从来没调用过**，`Life.config()` 也没把名人配置传下去（抽取数量是 undefined
+// → 只出 1 个候选、唯一「我」一按就抛）。这一组用例把整条链路钉住。
+describe('gameStore 名人模式', () => {
+  // #buildCharacterData
+  // 名人模式演示数据：3 位名人（属性可选字符串，模拟真实 characters.json 的形态）。
+  //
+  // @param {object} [params]
+  // @param {boolean} [params.stringProps] - 属性用字符串（真实数据就是这样）
+  // @param {boolean} [params.noTalent] - 三位都不带天赋（用于算准最终属性）
+  // @returns {object} 数据
+  function buildCharacterData({ stringProps = false, noTalent = false } = {}) {
+    // 基础数据。
+    const data = buildData()
+    // 名人。
+    data.characters = {
+      c1: {
+        id: 'c1',
+        name: '秦始皇',
+        property: stringProps ? { CHR: '5', INT: '5', STR: '8', MNY: '9' } : { CHR: 5, INT: 5, STR: 8, MNY: 9 },
+        talent: noTalent ? [] : ['t_001'],
+      },
+      c2: {
+        id: 'c2',
+        name: '李白',
+        property: stringProps ? { CHR: '7', INT: '9', STR: '3', MNY: '4' } : { CHR: 7, INT: 9, STR: 3, MNY: 4 },
+        talent: noTalent ? [] : ['t_002'],
+      },
+      c3: {
+        id: 'c3',
+        name: '诸葛亮',
+        property: stringProps ? { CHR: '6', INT: '10', STR: '4', MNY: '5' } : { CHR: 6, INT: 10, STR: 4, MNY: 5 },
+        talent: noTalent ? [] : ['t_001', 't_002'],
+      },
+    }
+    // 返回。
+    return data
+  }
+
+  // #celebrityStore
+  // 名人模式下的已初始化 store。
+  //
+  // @param {object} [params] - 同 buildCharacterData
+  // @returns {Promise<object>} store
+  async function celebrityStore(params) {
+    // store。
+    const store = useGameStore()
+    // 先切模式（init 不重置 mode）。
+    store.setMode('celebrity')
+    // 初始化。
+    await store.init(buildCharacterData(params))
+    // 返回。
+    return store
+  }
+
+  test('drawCharacters：抽出 3 位候选，天赋已换成对象', async () => {
+    // 准备。
+    const store = await celebrityStore()
+    // 抽。
+    const result = store.drawCharacters()
+    // 候选数量 = characterPullCount 默认 3（fixture 正好 3 位）。
+    expect(result.normal).toHaveLength(3)
+    expect(store.characters).toHaveLength(3)
+    // 天赋是对象（引擎做过 ID → 对象替换）。
+    expect(store.characters[0].talent[0]).toHaveProperty('name')
+    // 唯一「我」默认未解锁。
+    expect(store.uniqueUnlocked).toBe(false)
+  })
+
+  test('chooseCharacter：字符串属性也解析成数字 + 已选天赋 + 额外点数', async () => {
+    // 准备（真实数据形态：属性是字符串）。
+    const store = await celebrityStore({ stringProps: true })
+    // 抽 + 选第一位。
+    store.drawCharacters()
+    const first = store.characters[0]
+    const result = store.chooseCharacter(first.id)
+    // 成功。
+    expect(result.ok).toBe(true)
+    // 名人本体。
+    expect(store.character.name).toBe(first.name)
+    // 基础属性是**数字**（字符串 "5" → 5）；抽到哪位由种子决定，所以按选中的那位比。
+    expect(store.characterBase).toEqual({
+      CHR: Number(first.property.CHR),
+      INT: Number(first.property.INT),
+      STR: Number(first.property.STR),
+      MNY: Number(first.property.MNY),
+    })
+    expect(typeof store.characterBase.CHR).toBe('number')
+    // 而且确实是三家名人之一（证明是按 ID 选对了人，不是随手抄了一份）。
+    expect([[5, 5, 8, 9], [7, 9, 3, 4], [6, 10, 4, 5]]).toContainEqual([
+      store.characterBase.CHR, store.characterBase.INT, store.characterBase.STR, store.characterBase.MNY,
+    ])
+    // 已选天赋 = 名人自带天赋的 ID。
+    expect(store.selectedTalents).toEqual(first.talent.map(t => String(t.id)))
+    // 额外点数 = 天赋带来的加成（默认 20 点已被名人属性取代，不能重复算）。
+    expect(store.characterExtraPoints).toBeGreaterThanOrEqual(0)
+    // 天赋已确认（begin 不再重复跑替换链）。
+    expect(store.talentsConfirmed).toBe(true)
+  })
+
+  test('propertyPoints：名人模式只算额外点数；切回自定义恢复默认 20', async () => {
+    // 准备（不带天赋 → 额外点数必然是 0）。
+    const store = await celebrityStore({ noTalent: true })
+    // 自定义模式下的点数（默认 20 + 加成）。
+    const customPoints = store.propertyPoints
+    // 抽 + 选。
+    store.drawCharacters()
+    store.chooseCharacter(store.characters[0].id)
+    // 名人模式：默认点数已被名人属性取代 → 只剩额外点数（这里没有天赋 → 0）。
+    expect(store.propertyPoints).toBe(0)
+    expect(store.leftPoints).toBe(0)
+    // 切回自定义模式：中间态清空，点数回到默认。
+    store.setMode('custom')
+    expect(store.character).toBeNull()
+    expect(store.characterBase).toEqual({ CHR: 0, INT: 0, STR: 0, MNY: 0 })
+    expect(store.propertyPoints).toBe(customPoints)
+  })
+
+  test('begin：最终属性 = 名人基础属性 + 玩家额外分配', async () => {
+    // 准备（不带天赋 → 最终属性里没有天赋加成，能算准）。
+    const store = await celebrityStore({ noTalent: true })
+    // 抽 + 选秦始皇（CHR 5 / INT 5 / STR 8 / MNY 9）。
+    store.drawCharacters()
+    store.chooseCharacter('c1')
+    // 额外分配 2 点到颜值、1 点到智力。
+    store.begin({ CHR: 2, INT: 1, STR: 0, MNY: 0 })
+    // 引擎属性 = 基础 + 额外。
+    expect(store.propertys.CHR).toBe(7)
+    expect(store.propertys.INT).toBe(6)
+    expect(store.propertys.STR).toBe(8)
+    expect(store.propertys.MNY).toBe(9)
+    // 已开局。
+    expect(store.started).toBe(true)
+  })
+
+  test('begin：不带名人（自定义模式）时分配值就是最终值', async () => {
+    // 准备：自定义模式。
+    const store = useGameStore()
+    store.setMode('custom')
+    await store.init(buildCharacterData({ noTalent: true }))
+    // 直接分配（不带天赋 → 无加成）。
+    store.begin({ CHR: 3, INT: 4, STR: 5, MNY: 6 })
+    // 最终值就是分配值。
+    expect(store.propertys.CHR).toBe(3)
+    expect(store.propertys.INT).toBe(4)
+    expect(store.propertys.STR).toBe(5)
+    expect(store.propertys.MNY).toBe(6)
+  })
+
+  test('chooseUnique：连点解锁后可选定唯一「我」（属性/天赋随机生成）', async () => {
+    // 准备。
+    const store = await celebrityStore()
+    // 连点 10 次（引擎侧：10 秒内连点 10 次解锁）。
+    for (let i = 0; i < 10; i++) store.drawCharacters()
+    // 解锁。
+    expect(store.uniqueUnlocked).toBe(true)
+    // 选定。
+    const result = store.chooseUnique()
+    // 成功。
+    expect(result.ok).toBe(true)
+    // 「我」。
+    expect(store.character.id).toBe('unique')
+    expect(store.character.name).toBe('我')
+    // 四维是数字（生成值 + 解析）。
+    for (const key of ['CHR', 'INT', 'STR', 'MNY']) {
+      expect(typeof store.characterBase[key]).toBe('number')
+    }
+  })
+})

@@ -27,7 +27,7 @@ import { loadLocale, t } from '../i18n/index.js'
 // fixture。
 import { AGE_DATA, TOTAL } from '../fixtures/property.fixture.js'
 import { TALENTS, EVENTS } from '../fixtures/talent-event.fixture.js'
-import { ACHIEVEMENTS } from '../fixtures/achievement-character.fixture.js'
+import { ACHIEVEMENTS, CHARACTERS } from '../fixtures/achievement-character.fixture.js'
 
 // 构建 Life 数据。
 function buildData() {
@@ -594,5 +594,80 @@ describe('Life 日志器注入与 setLogLevel', () => {
     l.next()
     // trace 恢复可见。
     expect(lines.some(m => m.includes('[TRACE]') && m.includes('property.change'))).toBe(true)
+  })
+})
+
+// ========== 测试组 9：名人模式（character 配置接线） ==========
+//
+// 为什么单列一组：character 模块自己有 17 个用例，但它一直是**被直接实例化**测的
+// （构造时显式 config 了权重与抽取数量）—— 于是"Life.config() 忘了把配置传下去"
+// 这个洞没人守着，线上表现就是名人模式抽不满候选、唯一"我"一按就抛。
+describe('life - 名人模式配置接线', () => {
+  // 带名人数据的 Life。
+  // @param {object} [config] - 额外的 config 参数
+  // @returns {Promise<Life>} 实例
+  async function makeCharaLife(config = {}) {
+    // 数据（在 buildData 基础上补名人）。
+    const data = buildData()
+    data.characters = clone(CHARACTERS)
+    // 实例。
+    const life = new Life({
+      data,
+      random: createRng(42),
+      storage: { _d: {}, getItem(k) { return k in this._d ? this._d[k] : null }, setItem(k, v) { this._d[k] = String(v) } },
+    })
+    // 初始化 + 配置。
+    await life.initial()
+    life.config(config)
+    // 返回。
+    return life
+  }
+
+  test('config 之后候选数量 = characterPullCount（默认 3）', async () => {
+    // 实例。
+    const life = await makeCharaLife()
+    // 抽一批。
+    const result = life.characterRandom()
+    // 三个候选（fixture 里正好 3 个名人）。
+    expect(result.normal.length).toBe(3)
+    // 名字都在（按集合比，避免依赖排序规则）。
+    expect(new Set(result.normal.map(c => c.name))).toEqual(new Set(['秦始皇', '李白', '诸葛亮']))
+    // 天赋 ID 已替换成对象。
+    expect(result.normal[0].talent[0]).toHaveProperty('name')
+  })
+
+  test('characterPullCount 可配：2 → 只抽 2 个候选', async () => {
+    // 配置为 2。
+    const life = await makeCharaLife({ characterPullCount: 2 })
+    // 抽取。
+    expect(life.characterRandom().normal.length).toBe(2)
+  })
+
+  test('候选数量超过名人数：不产生 undefined（候选耗尽即止）', async () => {
+    // 要 5 个，只有 3 个名人。
+    const life = await makeCharaLife({ characterPullCount: 5 })
+    // 结果里没有空洞。
+    const normal = life.characterRandom().normal
+    expect(normal.length).toBe(3)
+    expect(normal.every(c => c && c.id)).toBe(true)
+  })
+
+  test('唯一"我"：权重表已接上，generateUnique 可生成（不再抛）', async () => {
+    // 实例。
+    const life = await makeCharaLife()
+    // 生成（此前 #propertyWeight 是 undefined → TypeError）。
+    const unique = life.generateUnique()
+    // 四维齐全且在 0~10。
+    for (const key of ['CHR', 'INT', 'STR', 'MNY']) {
+      expect(typeof unique.property[key]).toBe('number')
+      expect(unique.property[key]).toBeGreaterThanOrEqual(0)
+      expect(unique.property[key]).toBeLessThanOrEqual(10)
+    }
+    // 天赋个数 1~5（权重表区间），且给的是 ID。
+    expect(unique.talent.length).toBeGreaterThanOrEqual(1)
+    expect(unique.talent.length).toBeLessThanOrEqual(5)
+    expect(typeof unique.talent[0]).toBe('string')
+    // 再取一次：同一个"我"（持久化后不重新生成）。
+    expect(life.generateUnique().property).toEqual(unique.property)
   })
 })

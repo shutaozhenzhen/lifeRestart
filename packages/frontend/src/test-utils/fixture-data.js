@@ -18,7 +18,7 @@ import { clone } from 'game-engine/src/functions/util.js'
 // 引擎 fixture（测试脚手架）。
 import { AGE_DATA, TOTAL } from 'game-engine/src/fixtures/property.fixture.js'
 import { TALENTS, EVENTS } from 'game-engine/src/fixtures/talent-event.fixture.js'
-import { ACHIEVEMENTS } from 'game-engine/src/fixtures/achievement-character.fixture.js'
+import { ACHIEVEMENTS, CHARACTERS } from 'game-engine/src/fixtures/achievement-character.fixture.js'
 // 测试专用天赋池容量补充（理由见该模块：fixture 池太小 → 抽卡一两格就停、
 // 随机性不可观测；它**不是**产品内置内容）。
 import { padTalents } from 'game-engine/src/fixtures/talent-padding.js'
@@ -36,6 +36,7 @@ export function buildFixtureData() {
     talents: clone(padTalents(TALENTS)),
     events: clone(EVENTS),
     achievements: clone(ACHIEVEMENTS),
-    characters: {},
+    // 名人（名人模式：候选人 + 固定属性 + 自带天赋）。fixture 里 3 位，正好够抽一批。
+    characters: clone(CHARACTERS),
   }
 }

@@ -225,6 +225,67 @@ describe('全流程集成', () => {
     wrapper.unmount()
   }, 180000)
 
+  test('名人模式：主页 → 名人页 → 属性页（基础+额外）→ 轨迹页', async () => {
+    // 挂载应用（fixture 数据：3 位名人）。
+    const { wrapper, store } = await mountApp()
+
+    // ── 阶段 1：选名人模式 + 开始 ──
+    await findButton(wrapper, '名人模式').trigger('click')
+    expect(store.mode).toBe('celebrity')
+    await findButton(wrapper, '立即重开').trigger('click')
+    await flushPromises()
+    // 名人模式去的是**名人页**，不是天赋页。
+    expect(router.currentRoute.value.path).toBe('/character')
+
+    // ── 阶段 2：抽名人 + 选一位 ──
+    await findButton(wrapper, '抽取名人').trigger('click')
+    await flushPromises()
+    // 候选 3 位（引擎 characterPullCount 默认 3）。
+    expect(store.characters).toHaveLength(3)
+    expect(wrapper.findAll('.card')).toHaveLength(3)
+    // 选第一位。
+    await wrapper.findAll('.card')[0].trigger('click')
+    await flushPromises()
+    // 名人已选定（基础属性 / 自带天赋 / 额外点数都写好了）。
+    expect(store.character).not.toBeNull()
+    expect(store.selectedTalents.length).toBeGreaterThan(0)
+    expect(store.characterExtraPoints).toBeGreaterThanOrEqual(0)
+    // 页面顶部有"已选"提示。
+    expect(wrapper.find('.picked').text()).toContain(store.character.name)
+
+    // ── 阶段 3：属性页显示名人基础属性 + 额外点数 ──
+    await findButton(wrapper, '下一步').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/property')
+    // 名人提示条（基础属性已固定）。
+    expect(wrapper.find('.celebrity').text()).toContain(store.character.name)
+    // 可用点数 = 额外点数（默认 20 点已被名人属性取代）。
+    expect(wrapper.find('.points').text()).toBe(String(store.characterExtraPoints))
+    // 没点名人的话这一步会显示 20 —— 反过来确认模式真的生效了。
+    expect(store.characterExtraPoints).not.toBe(20)
+    // 分配完额外点数（可能本来就是 0）。
+    await findButton(wrapper, '随机分配').trigger('click')
+    await flushPromises()
+    expect(store.leftPoints).toBe(0)
+
+    // ── 阶段 4：进轨迹页（名人模式也要能正常开局）──
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await findButton(wrapper, '下一步').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/game')
+    expect(store.started).toBe(true)
+    // 日志里能看到这一局用的是哪位名人（排障时能对上）。
+    expect(store.logBuffer.some(l => l.includes('选定名人'))).toBe(true)
+    // 推进一步：轨迹正常累积。
+    await vi.advanceTimersByTimeAsync(900)
+    await flushPromises()
+    expect(store.history.length).toBeGreaterThanOrEqual(1)
+    vi.useRealTimers()
+
+    // 卸载。
+    wrapper.unmount()
+  }, 120000)
+
   test('路由守卫：未初始化直进引擎页 → 重定向回主页', async () => {
     // 全新 pinia（未初始化任何一局）。
     const pinia = createPinia()
