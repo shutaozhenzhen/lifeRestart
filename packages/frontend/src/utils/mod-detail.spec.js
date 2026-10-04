@@ -392,6 +392,43 @@ describe('mod-detail - summarizeModData', () => {
   })
 })
 
+// #fsFetchTwoRoots
+// 把**两个目录**拼成一个假服务器：`mods/...` 去 modsRoot，`data/...` 去 dataRoot。
+//
+// 为什么要两个根：Mod 目录与数据目录在仓库里本来就是两处（与线上一致：
+// `public/mods/` 是生成产物、`public/data/` 是入库产物），而测试只能用**入库**的文件。
+//
+// @param {object} params
+// @param {string} params.modsRoot - Mod 目录的根（lifeRestart）
+// @param {string} params.dataRoot - 数据目录的根（packages/frontend/public）
+// @returns {Function} fetch 实现
+function fsFetchTwoRoots({ modsRoot, dataRoot }) {
+  // 两个根的前缀映射。
+  const bases = [
+    { prefix: 'mods/', root: modsRoot },
+    { prefix: 'data/', root: dataRoot },
+  ]
+  // 请求。
+  return async (url) => {
+    // 去掉前导 /。
+    const rel = String(url).replace(/^\/+/, '')
+    // 找匹配的前缀。
+    const hit = bases.find((b) => rel.startsWith(b.prefix))
+    // 不匹配 → 404。
+    if (!hit) return { ok: false, status: 404, text: async () => '' }
+    // 读文件。
+    try {
+      // 读文本（**只提供 text()**，与真实源一致）。
+      const text = readFileSync(join(hit.root, rel), 'utf8')
+      // 命中。
+      return { ok: true, status: 200, text: async () => text }
+    } catch {
+      // 不存在。
+      return { ok: false, status: 404, text: async () => '' }
+    }
+  }
+}
+
 describe('mod-detail - 真实数据（仓库里的 mods/）', () => {
   test('lifeRestart-data：读到原版规模，且与 summarize 一致', async () => {
     // 把磁盘上的 lifeRestart/ 当服务器。
@@ -424,30 +461,45 @@ describe('mod-detail - 真实数据（仓库里的 mods/）', () => {
     expect(Object.keys(detail.data.talents).length).toBeGreaterThan(0)
   }, 60000)
 
-  test('浏览器真实形态：public/mods/（manifest）+ public/data/（数据）两边都读到', async () => {
-    // 以 packages/frontend/public 为站点根（线上就是这么发的）。
-    const publicRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public')
+  test('浏览器真实形态：Mod 目录的 manifest + 站点 data/ 的数据，两边都读到', async () => {
+    // 站点根（**混合来源**）：Mod 目录读仓库里的 `mods/`（入库、干净克隆就有），
+    // 数据目录读 `packages/frontend/public/data/`（同样入库）。
+    //
+    // 为什么不用 `packages/frontend/public/mods/`：那是 `scripts/sync-mods.mjs`
+    // 生成的**被 gitignore 的产物**（.gitignore 第 64 行），干净克隆里根本不存在 ——
+    // 早期版本的本用例就踩了这个坑，本地绿、CI 红（expected false to be true）。
+    // 真实链路里不会有这个问题：`pnpm dev` / `pnpm build` 的脚本都会先跑 sync-mods。
+    const layout = {
+      // Mod 目录 → 仓库的 mods/。
+      modsRoot: REPO_ROOT,
+      // 数据目录 → 前端的 public/。
+      dataRoot: join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public'),
+    }
     // 读：baseUrl=mods/、dataFrom=data —— 与浏览器里的调用完全一致。
     const detail = await loadModDetail({
       // Mod 名（目录名）。
       name: 'lifeRestart-data',
       // Mod 根。
       baseUrl: 'mods/',
-      // 文件系统当服务器。
-      fetchImpl: fsFetch(publicRoot),
+      // 按前缀分流到两个根目录。
+      fetchImpl: fsFetchTwoRoots(layout),
       // 数据目录（内置清单里就是这个值；这里显式传，避免测试依赖清单）。
       dataFrom: 'data',
       // 站点根。
       siteBaseUrl: '/',
     })
-    // manifest 出自 mods/lifeRestart-data/（说明 files.json 生效），数据出自 data/。
+    // manifest 出自 Mod 目录、数据出自数据目录。
     expect(detail.found).toBe(true)
-    expect(detail.filesFromIndex).toBe(true)
     expect(detail.dataFrom).toBe('/data/')
     // 五张表都读到了（这是"查看数据"页最重要的用例：Data Mod 的数据不在自己目录里）。
     expect(detail.present).toEqual(['age', 'talents', 'events', 'achievements', 'characters'])
     expect(Object.keys(detail.data.talents).length).toBe(184)
     expect(Object.keys(detail.data.age).length).toBe(501)
+    // 文件清单里必须有数据文件（否则界面看着像"没有数据"）。
+    // 注意：这里**不断言** filesFromIndex —— 它取决于 `files.json` 是否存在，
+    // 而那是 sync-mods 的生成产物（干净克隆里没有），断言它等于把测试绑在生成物上。
+    expect(detail.files).toContain('talents.json')
+    expect(detail.files).toContain('age.json')
     // 无错误。
     expect(detail.errors).toEqual([])
   }, 60000)
