@@ -2,7 +2,11 @@
  * talent 天赋系统 — 交互原型 CLI
  *
  * 用法：
- *   node src/cli/talent.cli.js [--seed <n>]
+ *   node src/cli/talent.cli.js --data <dir> [--seed <n>]
+ *   例：node src/cli/talent.cli.js --data ../../../remake/public/data
+ *
+ * --data 是**必需的**：引擎不内置任何天赋数据（以前缺省会用测试 fixture，
+ * 里面是「填充天赋1/2/3」这类占位数据 —— 既是内容泄漏，也掩盖了"没给数据源"）。
  *
  * 交互命令：
  *   pool [count]              抽取天赋池（默认 10）
@@ -25,7 +29,9 @@ import { clone } from '../functions/util.js'
 // 条件引擎（talent 条件用新语法）。
 import { check } from '../condition/index.js'
 // 共享交互辅助。
-import { runInteractive, makeRng, makeCliLogger } from './cli-util.js'
+import { runInteractive, makeRng, makeCliLogger, parseOption, noContentError } from './cli-util.js'
+// 数据加载（与 game.cli.js 同一实现：--data → 原版 JSON 目录）。
+import { loadData } from './game.cli.js'
 
 // #HELP
 // 帮助文本。
@@ -145,20 +151,39 @@ export function createHandler(talent, log) {
 // #entryPoint
 // 仅直接运行时执行。
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href) {
-  // 解析随机源。
-  const { random } = makeRng(process.argv.slice(2))
-  // 创建 Talent（注入条件引擎 + 随机源）。
-  const talent = new Talent({
-    clone,
-    check: cond => check(cond, DEMO_PROPS),
-    random,
-  })
-  // 加载演示数据。
-  const { TALENTS } = await import('../fixtures/talent-event.fixture.js')
-  // 初始化。
-  talent.initial({ talents: clone(TALENTS) })
-  // 配置。
-  talent.config()
-  // 交互循环。
-  runInteractive('> talent ', createHandler(talent, makeCliLogger(process.argv.slice(2), 'talent')))
+  // 参数。
+  const argv = process.argv.slice(2)
+  // 数据目录（必需）。
+  const dataDir = parseOption(argv, '--data')
+  // 天赋表。
+  let talents
+  try {
+    // 没有数据源 → 明确报错（以前这里静默用测试 fixture）。
+    if (!dataDir) {
+      throw noContentError('请用 --data <dir> 指定数据目录，例如：node src/cli/talent.cli.js --data ../../../remake/public/data')
+    }
+    // 加载。
+    talents = (await loadData({ dataDir })).talents
+  } catch (e) {
+    // 报错 + 失败退出码。
+    console.error(`[talent] ${e.message}`)
+    process.exitCode = 1
+  }
+  // 有数据才进交互循环。
+  if (talents) {
+    // 解析随机源。
+    const { random } = makeRng(argv)
+    // 创建 Talent（注入条件引擎 + 随机源）。
+    const talent = new Talent({
+      clone,
+      check: cond => check(cond, DEMO_PROPS),
+      random,
+    })
+    // 初始化。
+    talent.initial({ talents: clone(talents) })
+    // 配置。
+    talent.config()
+    // 交互循环。
+    runInteractive('> talent ', createHandler(talent, makeCliLogger(argv, 'talent')))
+  }
 }

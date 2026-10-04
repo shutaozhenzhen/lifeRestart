@@ -9,7 +9,9 @@
  *   2. 同 seed 两次运行输出必须完全一致（可复现性验证）。
  *   3. 为 Step 26 跨平台一致性对比提供标准输出格式。
  *
- * --data <dir> 加载原版 JSON（如 remake 的 public/data）；缺省用 fixture。
+ * --data <dir> 加载原版 JSON（如 remake 的 public/data）——**必需**：
+ *   引擎不内置任何内容，没有数据源时直接报错退出
+ *   （以前缺省会用测试 fixture，那既是内容泄漏、也掩盖了"没给数据源"）。
  *
  * 输出格式：
  *   { seed, mode, years: [{ age, props, events, talents }], end: { age, reason } }
@@ -17,10 +19,10 @@
 
 // 导入模块。
 import Life from '../modules/life.js'
-import { clone, createRng } from '../functions/util.js'
+import { createRng } from '../functions/util.js'
 // 共享辅助。
-import { makeRng, makeCliLogger } from './cli-util.js'
-// 数据加载（--data 原版 JSON / 缺省 fixture）。
+import { makeRng, makeCliLogger, noContentError } from './cli-util.js'
+// 数据加载（--data → 原版 JSON 目录）。
 import { loadData } from './game.cli.js'
 
 // #runLife
@@ -33,15 +35,21 @@ import { loadData } from './game.cli.js'
 // @param {object} [params.allocation] - 属性分配
 // @param {number} [params.startLif] - 起始生命（默认 1，设大便于长轨迹对比）
 // @param {string} [params.dataDir] - --data 数据目录（原版 JSON）
+// @param {object} [params.data] - 直接给数据（调用方自备，如测试里的 fixture）
 // @param {object} [params.log] - 日志器
 // @returns {Promise<object>} 轨迹 JSON
-export async function runLife({ seed, years = 100, talents = [], allocation = {}, startLif = 1, dataDir, log }) {
+// @throws {Error} 既没给 data 也没给 dataDir 时抛「没有内容来源」错误
+export async function runLife({ seed, years = 100, talents = [], allocation = {}, startLif = 1, dataDir, data = null, log }) {
   // 日志器。
   const logger = log || makeCliLogger([], 'export')
-  // 加载数据（--data → 原版 JSON，缺省 → fixture）。
-  const data = await loadData({ dataDir })
+  // 数据源：调用方直给 / --data 目录；两者都没有 → 明确报错（引擎不内置内容）。
+  const gameData = data || (dataDir ? await loadData({ dataDir }) : null)
+  // 没有内容来源。
+  if (!gameData) {
+    throw noContentError('请用 --data <dir>，例如：node src/cli/export.cli.js --seed 42 --data ../../../remake/public/data')
+  }
   // 创建 Life（固定种子 RNG + 日志器注入）。
-  const life = new Life({ data, random: createRng(seed), logger })
+  const life = new Life({ data: gameData, random: createRng(seed), logger })
   // 初始化。
   await life.initial()
   // 配置（评价分档用引擎内置默认，见 src/params/judge-config.js）。
@@ -118,9 +126,16 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
     // 起始生命。
     const lifIdx = argv.indexOf('--start-lif')
     const startLif = lifIdx !== -1 ? Number(argv[lifIdx + 1]) : 1
-    // 数据目录（原版 JSON）。
+    // 数据目录（原版 JSON，必需）。
     const dataIdx = argv.indexOf('--data')
     const dataDir = dataIdx !== -1 ? argv[dataIdx + 1] : undefined
+    // 没有数据源：明确报错退出（引擎不内置内容）。
+    if (!dataDir) {
+      // 提示。
+      console.error(`[export] ${noContentError('请用 --data <dir>，例如：node src/cli/export.cli.js --seed 42 --data ../../../remake/public/data').message}`)
+      // 退出。
+      process.exit(1)
+    }
     // 运行。
     // 注入日志器（引擎内核日志随 --log-level 切换）。
     const result = await runLife({ seed, years, talents, startLif, dataDir, log: makeCliLogger(argv, 'export') })

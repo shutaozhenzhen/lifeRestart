@@ -2,19 +2,20 @@
  * simulate.cli.js — 批量模拟 CLI 原型（「模拟系统」的可观测入口）
  *
  * 用法：
- *   node src/cli/simulate.cli.js [--runs 200] [--seed 42] [--mods <dir>] [--json] [--log-level trace]
+ *   node src/cli/simulate.cli.js --mods ../../mods [--runs 200] [--seed 42] [--json] [--log-level trace]
  *
  * 说明：
  *   - 每局流程：随机抽天赋（10 选 3，带互斥校验）→ 随机分配属性（默认点数 + 天赋加成）
  *     → 推进到人生结束 → 采集快照；多局聚合出寿命分布 / 总评分档 / 属性均值 / 收集率。
  *   - `--seed` 时**游戏内随机与策略随机共用同一 RNG**（见 createSimulation），结果可完整复现。
  *   - `--mods <dir>` 用 Mod 加载器取数据（通常指向 `mods/`，Data Mod 提供原版真实数据）；
- *     缺省用内置 fixture 数据（跑得快，适合冒烟）。
+ *     **数据源是必需的** —— 引擎不内置任何内容，没给 `--mods` 时直接报错退出
+ *     （以前缺省会用测试 fixture 演示数据，那既是内容泄漏、也掩盖了"没给数据源"）。
  *   - 前端「模拟统计」页复用同一个内核（src/sim/simulator.js），不存在两套实现。
  */
 
 // 参数与日志工具（--seed / --log-level 统一解析）。
-import { makeRng, makeCliLogger } from './cli-util.js'
+import { makeRng, makeCliLogger, noContentError } from './cli-util.js'
 // 日志器（未显式指定级别时用静默级别，避免引擎 INFO 日志污染报告输出）。
 import { createLogger } from '../functions/logger.js'
 // 导出器（CSV/JSON/Markdown 与策略文案，与前端页共用同一实现）。
@@ -26,11 +27,6 @@ import { createSimulation } from '../sim/simulator.js'
 // Mod 加载（可选：真实数据 + 钩子）。
 import { createNodeModLoader } from '../mod/loader-node.js'
 import { createGameAPI, createHookBus } from '../mod/gameapi.js'
-// fixture 数据（无 --mods 时的默认数据源）。
-import { clone } from '../functions/util.js'
-import { AGE_DATA, TOTAL } from '../fixtures/property.fixture.js'
-import { TALENTS, EVENTS } from '../fixtures/talent-event.fixture.js'
-import { ACHIEVEMENTS } from '../fixtures/achievement-character.fixture.js'
 
 // #memoryStorage
 // 模拟专用内存存储：不能让批量模拟污染玩家存档（重开次数/成就等）。
@@ -43,22 +39,6 @@ export function memoryStorage() {
     getItem(k) { return k in data ? data[k] : null },
     // 写。
     setItem(k, v) { data[k] = String(v) },
-  }
-}
-
-// #buildFixtureData
-// 内置 fixture 数据（结构与 Data Mod 产物一致）。
-//
-// @returns {object} 游戏数据
-export function buildFixtureData() {
-  // 返回深拷贝，避免多次调用互相污染。
-  return {
-    age: clone(AGE_DATA),
-    total: TOTAL,
-    talents: clone(TALENTS),
-    events: clone(EVENTS),
-    achievements: clone(ACHIEVEMENTS),
-    characters: {},
   }
 }
 
@@ -167,18 +147,24 @@ export function formatReport(stats, { elapsedMs, talentName } = {}) {
 // @param {number} [params.runs] - 局数
 // @param {number|null} [params.seed] - 种子
 // @param {string|null} [params.modsDir] - mods 目录（取真实数据）
+// @param {object} [params.data] - 直接给数据（调用方自备，如测试里的 fixture）
 // @param {object} [params.strategy] - 策略（随机/固定特性与属性）
 // @param {number} [params.chunk] - 每批局数（用于进度回调）
 // @param {Function} [params.onProgress] - 进度回调 (done, total, lastResult) => void
 // @param {object} [params.log] - 日志器
 // @returns {Promise<{stats: object, results: Array, elapsedMs: number, data: object}>} 结果
-export async function simulateCli({ runs = 50, seed = null, modsDir = null, strategy, chunk = 10, onProgress, log } = {}) {
-  // 数据源：Mod（真实数据）或 fixture。
-  const data = modsDir ? await loadModData({ modsDir, log }) : buildFixtureData()
+// @throws {Error} 既没给 data 也没给 modsDir 时抛「没有内容来源」错误
+export async function simulateCli({ runs = 50, seed = null, modsDir = null, data = null, strategy, chunk = 10, onProgress, log } = {}) {
+  // 数据源：调用方直给 / Mod 加载器；两者都没有 → 明确报错（引擎不内置内容）。
+  const gameData = data || (modsDir ? await loadModData({ modsDir, log }) : null)
+  // 没有内容来源。
+  if (!gameData) {
+    throw noContentError('请用 --mods <dir> 指定 Mod 目录（例如 --mods ../../mods），或给 simulateCli 传 data')
+  }
   // 开始计时。
   const startedAt = Date.now()
   // 创建模拟环境（同一个 RNG 注入 Life 与策略层 → 可复现）。
-  const { simulator } = await createSimulation({ data, seed, storage: memoryStorage(), logger: log, strategy })
+  const { simulator } = await createSimulation({ data: gameData, seed, storage: memoryStorage(), logger: log, strategy })
   // 分批跑：每批结束后回调进度（前端靠它渲染进度条 / 判断取消）。
   for (let done = 0; done < runs; done += chunk) {
     // 本批局数（最后一批可能不足）。
@@ -261,12 +247,14 @@ export function parseStrategy(argv = []) {
 //
 // @param {object} params
 // @param {string[]} [params.argv] - 参数
+// @param {object} [params.data] - 直接给数据（调用方自备，如测试里的 fixture）
 // @param {Function} [params.stdout] - 输出函数（整段文本）
 // @param {Function} [params.progress] - 进度文本函数（原地刷新）
 // @param {Function} [params.writeFile] - 写文件函数（--out）
 // @returns {Promise<{stats: object, text: string, fileName: string, outFile: string|null}>} 产物
 export async function runCli({
   argv = [],
+  data = null,
   stdout = (text) => console.log(text),
   progress,
   writeFile = (file, text) => writeFileSync(file, text),
@@ -295,12 +283,14 @@ export async function runCli({
   // 计时起点（进度行用）。
   const startedAt = Date.now()
   // 跑。
-  const { stats, results, elapsedMs, data } = await simulateCli({
+  const { stats, results, elapsedMs, data: loadedData } = await simulateCli({
     // 局数。
     runs,
     // 种子。
     seed,
-    // 数据源。
+    // 数据源：调用方直给（测试）或 --mods 目录；都没有 → simulateCli 明确报错。
+    data,
+    // 数据源（目录）。
     modsDir,
     // 策略。
     strategy,
@@ -320,7 +310,7 @@ export async function runCli({
       : undefined,
   })
   // 天赋 ID → 名称（报告与 md 导出都要用）。
-  const talents = data?.talents || {}
+  const talents = loadedData?.talents || {}
   // 取名函数。
   const talentName = (id) => talents[id]?.name || id
   // 策略解析警告与模拟警告合并展示。
@@ -356,7 +346,7 @@ async function main() {
         '  --seed <n>      随机种子（给定时结果可复现）',
         '  --talents <ids> 固定特性（逗号分隔天赋 ID；random=随机，默认）',
         '  --alloc <spec>  固定属性（如 CHR=3,INT=4,STR=5,MNY=8；random=随机，默认）',
-        '  --mods <dir>    用 Mod 数据（通常指向 mods/，Data Mod 提供原版数据）',
+        '  --mods <dir>    【必需】Mod 目录（通常指向 mods/，Data Mod 提供原版数据）',
         '  --format <fmt>  导出 csv | json | md',
         '  --out <file>    导出到文件（缺省打印到 stdout）',
         '  --json          等价于 --format json',
@@ -386,6 +376,11 @@ async function main() {
 
 // 仅直接运行时执行。
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href) {
-  // 执行。
-  main()
+  // 执行（缺少数据源等错误统一打印 + 置失败退出码，不抛原始堆栈）。
+  main().catch((e) => {
+    // 报错。
+    console.error(`[sim] ${e.message}`)
+    // 失败退出码。
+    process.exitCode = 1
+  })
 }

@@ -23,7 +23,7 @@ import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // fixture 数据（Life 需要的最小数据）。
-import { buildFixtureData } from './game-data.js'
+import { buildFixtureData } from '../test-utils/fixture-data.js'
 
 // #makeFetch
 // 静态文件服务器替身（键为 URL 路径）。

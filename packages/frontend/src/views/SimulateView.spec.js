@@ -3,11 +3,15 @@
  * SimulateView 页面测试 — 模拟统计页
  *
  * 覆盖：
- *   1. 首屏：控制区（局数档位/种子/快速模式/数据源/预计耗时）
+ *   1. 首屏：控制区（局数档位/种子/数据源/预计耗时）——**不再有「快速模式」**
  *   2. 跑一次模拟：进度推进 → 结果区渲染（概览/寿命分布/分档/属性均值/收集/最佳一局）
  *   3. 停止：运行中可取消，并保留已完成部分的聚合结果
  *   4. 可复现：填种子后结果标注 seed
- *   5. 返回主页
+ *   5. 无内容 Mod：明确提示，且不会"用演示数据兜底"跑空模拟
+ *   6. 返回主页
+ *
+ * 注：以前这里靠「快速模式」把数据换成引擎测试 fixture 才快；
+ * 现在内容只能来自 fetch 的 Data Mod 产物（stubFetchOk 注入 fixture 只是测试提速手段）。
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
@@ -18,7 +22,7 @@ import { resetApp, mountView, stubFetchOk, stubFetchFail, waitFor } from '../tes
 beforeEach(() => {
   // 重置。
   resetApp()
-  // 数据请求返回 fixture（模拟在 fixture 上是毫秒级）。
+  // 数据请求返回 fixture（内容来自 fetch 的"Data Mod 产物"，fixture 只用于测试提速）。
   stubFetchOk()
 })
 
@@ -34,7 +38,7 @@ function findButton(wrapper, text) {
 }
 
 describe('SimulateView', () => {
-  test('首屏渲染控制区：局数档位、种子、快速模式、数据源与耗时预估', async () => {
+  test('首屏渲染控制区：局数档位、种子、数据源与耗时预估', async () => {
     // 挂载。
     const { wrapper } = mountView(SimulateView)
     // 等数据加载完成。
@@ -44,9 +48,11 @@ describe('SimulateView', () => {
     expect(chips.length).toBe(4)
     // 默认 30 高亮。
     expect(wrapper.find('.chip.run.active').text()).toBe('30')
-    // 种子输入与快速模式开关。
+    // 种子输入。
     expect(wrapper.find('input.num.wide').exists()).toBe(true)
-    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(true)
+    // **没有「快速模式」**（它曾经用引擎测试 fixture 当演示数据 → 填充天赋出现在页面上）。
+    expect(wrapper.text()).not.toContain('快速模式')
+    expect(wrapper.text()).not.toContain('演示数据')
     // 数据源标注（fixture 桩被当作原版数据）。
     expect(wrapper.find('.source').text()).toContain('lifeRestart-data')
     // 开始按钮与预计耗时。
@@ -60,8 +66,6 @@ describe('SimulateView', () => {
     // 挂载。
     const { wrapper } = mountView(SimulateView)
     await flushPromises()
-    // 用快速模式（演示数据，保证毫秒级）。
-    await wrapper.find('input[type="checkbox"]').setValue(true)
     // 局数改为 10（更快）。
     await wrapper.findAll('.chip.run')[0].trigger('click')
     await flushPromises()
@@ -92,8 +96,7 @@ describe('SimulateView', () => {
     // 挂载。
     const { wrapper } = mountView(SimulateView)
     await flushPromises()
-    // 快速模式 + 100 局（足够长以便中途停止）。
-    await wrapper.find('input[type="checkbox"]').setValue(true)
+    // 100 局（足够长以便中途停止）。
     await wrapper.findAll('.chip.run')[3].trigger('click')
     await flushPromises()
     expect(wrapper.findAll('.chip.run')[3].text()).toBe('100')
@@ -114,10 +117,9 @@ describe('SimulateView', () => {
   })
 
   test('填种子后结果标注 seed（可复现）', async () => {
-    // 挂载 + 快速模式。
+    // 挂载。
     const { wrapper } = mountView(SimulateView)
     await flushPromises()
-    await wrapper.find('input[type="checkbox"]').setValue(true)
     // 只跑 10 局。
     await wrapper.findAll('.chip.run')[0].trigger('click')
     // 填种子。
@@ -131,18 +133,21 @@ describe('SimulateView', () => {
     expect(wrapper.text()).toContain('seed=42')
   })
 
-  test('原版数据不可用：提示并自动切到快速模式', async () => {
-    // 让数据请求失败。
+  test('没有内容 Mod：明确提示，且不会用演示数据兜底跑空模拟', async () => {
+    // 让数据请求失败 → 内容为空（引擎不内置内容）。
     stubFetchFail()
     // 挂载。
     const { wrapper } = mountView(SimulateView)
     await flushPromises()
-    // 有提示。
-    expect(wrapper.find('.warn').text()).toContain('快速模式')
-    // 快速模式已自动勾选。
-    expect(wrapper.find('input[type="checkbox"]').element.checked).toBe(true)
-    // 数据源标注为 fixture。
-    expect(wrapper.find('.source').text()).toContain('fixture')
+    // 提示指向内容 Mod（而不是某个演示模式）。
+    expect(wrapper.find('.warn').text()).toContain('没有可模拟的内容')
+    expect(wrapper.find('.warn').text()).toContain('lifeRestart-data')
+    // 数据源标注为空内容。
+    expect(wrapper.find('.source').text()).toContain('空内容')
+    // 点「开始模拟」也不会跑出结果（回归：以前会静默切到 fixture 演示数据）。
+    await findButton(wrapper, '开始模拟').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.overview').exists()).toBe(false)
   })
 
   test('返回按钮回主页', async () => {
@@ -157,10 +162,9 @@ describe('SimulateView', () => {
   })
 
   test('固定特性：可搜索挑选，跑局后结果使用所选特性', async () => {
-    // 挂载 + 快速模式。
+    // 挂载。
     const { wrapper } = mountView(SimulateView)
     await flushPromises()
-    await wrapper.find('input[type="checkbox"]').setValue(true)
     // 只跑 10 局。
     await wrapper.findAll('.chip.run')[0].trigger('click')
     // 切到固定特性（页面上有两个「固定」按钮：特性/属性，用专属 class 区分）。
@@ -193,10 +197,9 @@ describe('SimulateView', () => {
   })
 
   test('固定属性：手填四项并在结果中生效；超预算给出警告', async () => {
-    // 挂载 + 快速模式。
+    // 挂载。
     const { wrapper } = mountView(SimulateView)
     await flushPromises()
-    await wrapper.find('input[type="checkbox"]').setValue(true)
     // 只跑 10 局。
     await wrapper.findAll('.chip.run')[0].trigger('click')
     // 切到固定属性（专属 class）。
@@ -221,10 +224,9 @@ describe('SimulateView', () => {
   })
 
   test('导出：CSV / JSON / Markdown 三个按钮都会触发下载并给出反馈', async () => {
-    // 挂载 + 快速模式 + 10 局。
+    // 挂载 + 10 局。
     const { wrapper } = mountView(SimulateView)
     await flushPromises()
-    await wrapper.find('input[type="checkbox"]').setValue(true)
     await wrapper.findAll('.chip.run')[0].trigger('click')
     await findButton(wrapper, '开始模拟').trigger('click')
     await waitFor(() => wrapper.find('.overview').exists())

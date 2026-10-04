@@ -274,15 +274,18 @@ describe('全流程集成', () => {
     wrapper.unmount()
   }, 180000)
 
-  test('数据加载失败时降级为 fixture 数据源（并在报告里可见）', async () => {    // 挂载时让数据请求失败（走 HomeView 的降级分支）。
+  test('数据加载失败时降级为**空内容**数据源（并在报告里可见）', async () => {    // 挂载时让数据请求失败（走 HomeView 的降级分支）。
     const { wrapper, store } = await mountApp({ dataFail: true })
     // 开始新人生。
     await findButton(wrapper, '立即重开').trigger('click')
     await flushPromises()
-    // 数据源标注为降级。
-    expect(store.dataSource).toContain('fixture')
-    // 依然可以玩（引擎已初始化）。
+    // 数据源标注为空内容（**不再**降级到引擎测试 fixture：那会把「填充天赋1/2/3」
+    // 这类测试占位数据当内容显示给玩家）。
+    expect(store.dataSource).toContain('空内容')
+    // 引擎仍能初始化（只是没有任何内容可抽）。
     expect(store.isReady).toBe(true)
+    // 内容确实为空。
+    expect(Object.keys(store.rawData?.talents || {})).toEqual([])
     // 卸载。
     wrapper.unmount()
   })

@@ -75,8 +75,8 @@ describe('talent - initial', () => {
   })
 
   test('returns count', () => {
-    // 天赋总数。
-    expect(talent.count).toBe(12)
+    // 天赋总数（fixture 的 t_001~t_009；原先的「填充天赋」已删除）。
+    expect(talent.count).toBe(9)
   })
 })
 

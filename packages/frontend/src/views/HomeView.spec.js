@@ -85,7 +85,7 @@ describe('HomeView', () => {
     expect(router.currentRoute.value.path).toBe('/talent')
   })
 
-  test('数据请求失败：降级为 fixture 数据源且仍能开局', async () => {
+  test('数据请求失败：降级为**空内容**数据源且仍能开局（不内置内容）', async () => {
     // 数据失败。
     stubFetchFail()
     // 挂载。
@@ -96,10 +96,11 @@ describe('HomeView', () => {
     await findButton(wrapper, '立即重开').trigger('click')
     // 等待。
     await flushPromises()
-    // 降级标注（日志报告里也能看到原因）。
-    expect(store.dataSource).toContain('fixture')
-    // 依然就绪可玩。
+    // 降级标注为空内容（日志报告里也能看到原因）。
+    expect(store.dataSource).toContain('空内容')
+    // 引擎依然就绪（只是没有任何天赋/事件可玩）。
     expect(store.isReady).toBe(true)
+    expect(Object.keys(store.rawData?.talents || {})).toEqual([])
     // 依然跳转。
     expect(router.currentRoute.value.path).toBe('/talent')
   })

@@ -2,7 +2,8 @@
  * test-utils/setup — 前端测试公共装置（**仅测试使用**，不被应用代码引用，不会进构建产物）
  *
  * 提供五件事：
- *   1. buildFixtureData()：与 HomeView 同源的演示数据（fixture，**只用于快速用例**）。
+ *   1. buildFixtureData()：**仅测试用**的 fixture 演示数据（转出自 test-utils/fixture-data.js）。
+ *      注意：产品代码**不再**降级到它 —— 无内容 Mod 时游戏就是空内容（见 utils/game-data.js）。
  *   2. loadRealData()/stubFetchReal()：**真实数据**（501 年龄 / 184 天赋 / 1720 事件）。
  *      涉及"随机种子是否真的生效""复现是否真的成立"这类结论，必须用真实数据 ——
  *      fixture 只有 4 个候选天赋且每个年龄单一事件，随机性几乎不可观测。
@@ -20,30 +21,14 @@ import { createPinia, setActivePinia, getActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 // 克隆工具。
 import { clone } from 'game-engine/src/functions/util.js'
-// fixture 数据（与 game.spec / HomeView 同源）。
-import { AGE_DATA, TOTAL } from 'game-engine/src/fixtures/property.fixture.js'
-import { TALENTS, EVENTS } from 'game-engine/src/fixtures/talent-event.fixture.js'
-import { ACHIEVEMENTS } from 'game-engine/src/fixtures/achievement-character.fixture.js'
+// fixture 数据构造（**仅测试用**，实现见 fixture-data.js）。
+import { buildFixtureData } from './fixture-data.js'
 // 线上路由表（测试复用同一份，避免分叉）。
 import { routes } from '../router/index.js'
 // 真实数据加载（独立模块，见其文件头说明）。
 export { loadRealData, stubFetchReal } from './real-data.js'
-
-// #buildFixtureData
-// 组装演示数据（结构 = HomeView.fetchOriginalData / buildData 的返回值）。
-//
-// @returns {object} { age, total, talents, events, achievements, characters }
-export function buildFixtureData() {
-  // 逐字段深拷贝，避免用例之间互相污染。
-  return {
-    age: clone(AGE_DATA),
-    total: TOTAL,
-    talents: clone(TALENTS),
-    events: clone(EVENTS),
-    achievements: clone(ACHIEVEMENTS),
-    characters: {},
-  }
-}
+// fixture 数据构造（用例可直接 `import { buildFixtureData } from '../test-utils/setup.js'`）。
+export { buildFixtureData }
 
 // #installLocalStorage
 // 安装内存 localStorage（Node 环境没有该全局）。

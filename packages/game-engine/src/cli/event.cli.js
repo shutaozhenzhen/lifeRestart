@@ -2,7 +2,11 @@
  * event 事件系统 — 交互原型 CLI
  *
  * 用法：
- *   node src/cli/event.cli.js [--seed <n>]
+ *   node src/cli/event.cli.js --data <dir> [--seed <n>]
+ *   例：node src/cli/event.cli.js --data ../../../remake/public/data
+ *
+ * --data 是**必需的**：引擎不内置任何事件数据（以前缺省会用测试 fixture ——
+ * 那既是内容泄漏，也掩盖了"没给数据源"这个真实原因）。
  *
  * 交互命令：
  *   get <id>            读取事件
@@ -22,7 +26,9 @@ import { clone } from '../functions/util.js'
 // 条件引擎。
 import { check } from '../condition/index.js'
 // 共享交互辅助。
-import { runInteractive, makeCliLogger } from './cli-util.js'
+import { runInteractive, makeCliLogger, parseOption, noContentError } from './cli-util.js'
+// 数据加载（与 game.cli.js 同一实现：--data → 原版 JSON 目录）。
+import { loadData } from './game.cli.js'
 
 // #HELP
 // 帮助文本。
@@ -114,22 +120,41 @@ export function createHandler(event, getProps, setProps, log) {
 // #entryPoint
 // 仅直接运行时执行。
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href) {
-  // 当前属性快照。
-  let props = { CHR: 10, INT: 8, STR: 5, MNY: 1000, SPR: 60, LIF: 1, AGE: 25, TLT: [], EVT: [] }
-  // 创建 Event。
-  const event = new Event({
-    clone,
-    check: cond => check(cond, props),
-  })
-  // 加载演示数据。
-  const { EVENTS } = await import('../fixtures/talent-event.fixture.js')
-  // 初始化。
-  event.initial({ events: clone(EVENTS) })
-  // 交互循环。
-  runInteractive('> event ', createHandler(
-    event,
-    () => props,
-    p => { props = p },
-    makeCliLogger(process.argv.slice(2), 'event'),
-  ))
+  // 参数。
+  const argv = process.argv.slice(2)
+  // 数据目录（必需）。
+  const dataDir = parseOption(argv, '--data')
+  // 事件表。
+  let events
+  try {
+    // 没有数据源 → 明确报错（以前这里静默用测试 fixture）。
+    if (!dataDir) {
+      throw noContentError('请用 --data <dir> 指定数据目录，例如：node src/cli/event.cli.js --data ../../../remake/public/data')
+    }
+    // 加载。
+    events = (await loadData({ dataDir })).events
+  } catch (e) {
+    // 报错 + 失败退出码。
+    console.error(`[event] ${e.message}`)
+    process.exitCode = 1
+  }
+  // 有数据才进交互循环。
+  if (events) {
+    // 当前属性快照。
+    let props = { CHR: 10, INT: 8, STR: 5, MNY: 1000, SPR: 60, LIF: 1, AGE: 25, TLT: [], EVT: [] }
+    // 创建 Event。
+    const event = new Event({
+      clone,
+      check: cond => check(cond, props),
+    })
+    // 初始化。
+    event.initial({ events: clone(events) })
+    // 交互循环。
+    runInteractive('> event ', createHandler(
+      event,
+      () => props,
+      p => { props = p },
+      makeCliLogger(argv, 'event'),
+    ))
+  }
 }

@@ -11,9 +11,11 @@
  *   4. 支持 --data 加载原版 JSON（Step 6 数据加载层对接点）。
  *
  * --data <dir> 指向数据目录（内含 {locale}/talents.json 等），
- * 例如 remake 的 public/data：node src/cli/game.cli.js --data ../remake/public/data
+ * 例如 remake 的 public/data：node src/cli/game.cli.js --data ../../../remake/public/data
  * 加载后经 prepareForEngine（ID 字符串化）+ convertConditions（旧语法→新语法）再进引擎。
- * 缺省 --data 时使用内置 fixture 数据（原型演示）。
+ * **--data 是必需的**：引擎不内置任何游戏内容，没有数据源时直接报错退出
+ * （以前缺省会用测试 fixture 演示数据 —— 那会把「填充天赋1/2/3」这类
+ *   测试占位数据显示给玩家，且掩盖"没给数据源"这个真实原因）。
  *
  * 交互命令：
  *   draw          抽取天赋池
@@ -29,12 +31,11 @@
 
 // 导入模块。
 import Life from '../modules/life.js'
-import { clone, createRng } from '../functions/util.js'
 import { loadLocale, t } from '../i18n/index.js'
 // 数据加载层：createLoader（真实数据）/ prepareForEngine / convertConditions。
 import { createLoader, prepareForEngine, convertConditions } from '../data-loader.js'
 // 共享交互辅助。
-import { runInteractive, makeRng, parseCommand, makeCliLogger } from './cli-util.js'
+import { runInteractive, makeRng, parseCommand, makeCliLogger, parseOption, noContentError } from './cli-util.js'
 // Node 内置：本地文件读取（实现注入式 fetch，浏览器端用原生 fetch）。
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -58,35 +59,24 @@ function makeNodeFetch(dataDir) {
 }
 
 // #loadData
-// 加载引擎数据：有 --data 用原版 JSON（走加载层 + 转换），否则用 fixture。
+// 加载引擎数据：**必须**给 --data（引擎不内置内容，没有兜底数据）。
 //
 // @param {object} params
 // @param {string|undefined} params.dataDir - --data 指向的数据目录
 // @param {string} [params.locale] - 语言目录名
 // @returns {Promise<object>} 引擎数据 { age, talents, events, achievements, characters }
+// @throws {Error} 未给 dataDir 时抛「没有内容来源」错误（含示例命令）
 export async function loadData({ dataDir, locale = 'zh-cn' }) {
-  // 指定了数据目录：加载原版 JSON。
-  if (dataDir) {
-    // 创建加载器（注入本地文件 fetch）。
-    const loader = createLoader({ fetch: makeNodeFetch(dataDir), baseUrl: '', locale })
-    // 加载全部数据文件。
-    const raw = await loader.loadAll()
-    // ID 字符串化 + 旧语法转新语法。
-    return convertConditions(prepareForEngine(raw))
+  // 没有数据目录：明确报错（以前这里会静默降级到测试 fixture）。
+  if (!dataDir) {
+    throw noContentError('请用 --data <dir> 指定数据目录，例如：node src/cli/game.cli.js --data ../../../remake/public/data')
   }
-  // 缺省：加载内置 fixture 数据（原型演示）。
-  const { AGE_DATA, TOTAL } = await import('../fixtures/property.fixture.js')
-  const { TALENTS, EVENTS } = await import('../fixtures/talent-event.fixture.js')
-  const { ACHIEVEMENTS } = await import('../fixtures/achievement-character.fixture.js')
-  // 组装引擎数据。
-  return {
-    age: clone(AGE_DATA),
-    total: TOTAL,
-    talents: clone(TALENTS),
-    events: clone(EVENTS),
-    achievements: clone(ACHIEVEMENTS),
-    characters: {},
-  }
+  // 创建加载器（注入本地文件 fetch）。
+  const loader = createLoader({ fetch: makeNodeFetch(dataDir), baseUrl: '', locale })
+  // 加载全部数据文件。
+  const raw = await loader.loadAll()
+  // ID 字符串化 + 旧语法转新语法。
+  return convertConditions(prepareForEngine(raw))
 }
 
 // #createGame
@@ -134,12 +124,20 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
   }
 
   // #resolveTalentId
-  // 解析用户输入为天赋 ID：数字 → 天赋池索引；其他 → 原样当 ID。
+  // 解析用户输入为天赋 ID：
+  //   ① 先按 **ID 精确匹配**池中项 —— 真实数据的 ID 是**数字字符串**（如 "1007"），
+  //      以前一律按"纯数字 = 下标"解释，于是 `select 1007` 会去找第 1007 个（永远没有）
+  //      并报"无效的天赋索引"；现在 ID 优先，`--data` 真实数据下也能按 ID 选。
+  //   ② 再退回"纯数字 → 天赋池索引"（原型里手抽后按 [n] 选更省事）。
   //
-  // @param {string} input - 用户输入（索引或 ID）
+  // @param {string} input - 用户输入（ID 或索引）
   // @returns {string|null} 天赋 ID；池中无对应索引返回 null
   const resolveTalentId = (input) => {
-    // 纯数字：按天赋池索引查找。
+    // ① 池里按 ID 匹配（字符串比对，避免 1007 与 "1007" 不一致）。
+    const byId = state.pool.find((t) => t && String(t.id) === String(input))
+    // 命中。
+    if (byId) return byId.id
+    // ② 纯数字：按天赋池索引查找。
     if (/^\d+$/.test(input)) {
       // 取池中对应项。
       const item = state.pool[Number(input)]
@@ -148,7 +146,7 @@ export function createGame({ data, random = Math.random, locale = 'zh-cn', stora
       // 返回其 ID。
       return item.id
     }
-    // 非数字：原样当 ID。
+    // 非数字且不在池中：原样当 ID（保持原有语义，交由互斥/替换链判断）。
     return input
   }
 
@@ -299,15 +297,23 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // 解析随机源。
   const { random } = makeRng(process.argv.slice(2))
   // 解析语言。
-  const localeArg = process.argv.findIndex(a => a === '--locale')
-  const locale = localeArg !== -1 ? process.argv[localeArg + 1] : 'zh-cn'
+  const locale = parseOption(process.argv.slice(2), '--locale') || 'zh-cn'
   // 解析 --data（指向数据目录，如 remake 的 public/data）。
-  const dataArg = process.argv.findIndex(a => a === '--data')
-  const dataDir = dataArg !== -1 ? process.argv[dataArg + 1] : undefined
-  // 加载引擎数据（--data → 原版 JSON；缺省 → fixture）。
-  const data = await loadData({ dataDir, locale })
-  // 创建游戏。
-  const { handlers } = createGame({ data, random, locale, log: makeCliLogger(process.argv.slice(2), 'game') })
-  // 交互循环（handler 是异步的，逐行处理）。
-  runInteractive('> 人生 ', handlers)
+  const dataDir = parseOption(process.argv.slice(2), '--data')
+  // 加载引擎数据（必须给 --data：引擎不内置内容）。
+  let data
+  try {
+    data = await loadData({ dataDir, locale })
+  } catch (e) {
+    // 没有数据源 / 加载失败：明确报错并置失败退出码。
+    console.error(`[game] ${e.message}`)
+    process.exitCode = 1
+  }
+  // 拿到数据才进交互循环。
+  if (data) {
+    // 创建游戏。
+    const { handlers } = createGame({ data, random, locale, log: makeCliLogger(process.argv.slice(2), 'game') })
+    // 交互循环（handler 是异步的，逐行处理）。
+    runInteractive('> 人生 ', handlers)
+  }
 }

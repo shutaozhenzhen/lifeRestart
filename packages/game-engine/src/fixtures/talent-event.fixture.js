@@ -5,6 +5,12 @@
  * 但条件使用新项目的新语法（params.X > n），ID 全部为字符串。
  *
  * 供 talent.spec.js / event.spec.js 使用。
+ *
+ * 注意：这里的数据**只给测试用** —— 引擎不内置任何游戏内容，
+ * 产品路径（前端 / CLI）没有数据源时就是空内容，不存在"默认天赋"。
+ * 曾经这里有 t_010~t_012「填充天赋1/2/3（填充池容量）」，
+ * 本意是给十连抽测试凑够池容量，却被前端降级路径当内容显示给了玩家；
+ * 现在已删除（需要更大池容量的用例请在自己用例里显式造数据）。
  */
 
 // #TALENTS
@@ -17,6 +23,7 @@
 //   t_006 replacement.talent 替换链：抽到 t_006 会替换为 t_007 或 t_008
 //   t_007 replacement.grade 按等级替换
 //   t_008 无 replacement（替换链终点）
+//   t_009 等级 3 天赋（无其它语义，用于星级分布）
 export const TALENTS = {
   t_001: {
     id: 't_001',
@@ -81,24 +88,6 @@ export const TALENTS = {
     name: '传世名将',
     description: '等级3天赋',
     grade: 3,
-  },
-  t_010: {
-    id: 't_010',
-    name: '填充天赋1',
-    description: '填充池容量',
-    grade: 0,
-  },
-  t_011: {
-    id: 't_011',
-    name: '填充天赋2',
-    description: '填充池容量',
-    grade: 0,
-  },
-  t_012: {
-    id: 't_012',
-    name: '填充天赋3',
-    description: '填充池容量',
-    grade: 0,
   },
 }
 

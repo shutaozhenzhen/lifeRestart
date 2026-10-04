@@ -2,10 +2,14 @@
  * simulate.cli 测试 — 批量模拟 CLI 原型
  *
  * 覆盖：
- *   1. fixture 数据下跑多局：统计结构完整、进度回调按批触发、可复现
+ *   1. 小数据下跑多局：统计结构完整、进度回调按批触发、可复现
  *   2. formatReport：终端报告含关键指标 / 直方图 / 最佳一局 / 吞吐
  *   3. 真实数据路径：用 Mod 加载器取 Data Mod（mods/）后能跑
  *   4. 内存存储：模拟不写外部存储（不污染玩家存档）
+ *   5. 没有内容来源：明确报错（引擎不内置内容）
+ *
+ * 注：以前这里靠 simulateCli 的"缺省 fixture"内置数据，现在引擎不内置内容，
+ * 测试自己构造 fixture 并通过 `data` 注入（`--mods` 路径见测试组 3）。
  */
 
 // vitest DSL。
@@ -13,17 +17,40 @@ import { describe, test, expect } from 'vitest'
 // node 路径工具（定位 mods 目录）。
 import { fileURLToPath } from 'node:url'
 // 被测模块。
-import { buildFixtureData, formatReport, loadModData, memoryStorage, parseStrategy, runCli, simulateCli } from './simulate.cli.js'
+import { formatReport, loadModData, memoryStorage, parseStrategy, runCli, simulateCli } from './simulate.cli.js'
+// 测试用数据（引擎 fixture：**仅测试**用，产品路径不再内置内容）。
+import { clone } from '../functions/util.js'
+import { AGE_DATA, TOTAL } from '../fixtures/property.fixture.js'
+import { TALENTS, EVENTS } from '../fixtures/talent-event.fixture.js'
+import { ACHIEVEMENTS } from '../fixtures/achievement-character.fixture.js'
 
 // mods 目录（lifeRestart/mods，相对本文件向上 4 层）。
 const MODS_DIR = fileURLToPath(new URL('../../../../mods/', import.meta.url))
 
+// #fixtureData
+// 小规模测试数据（结构与 Data Mod 产物一致；每次新建避免互相污染）。
+//
+// @returns {object} 游戏数据
+function fixtureData() {
+  // 组装。
+  return {
+    age: clone(AGE_DATA),
+    total: { ...TOTAL },
+    talents: clone(TALENTS),
+    events: clone(EVENTS),
+    achievements: clone(ACHIEVEMENTS),
+    characters: {},
+  }
+}
+
 describe('simulate.cli - simulateCli', () => {
-  test('fixture 数据跑 5 局：结果条数、统计结构、进度回调', async () => {
+  test('小数据跑 5 局：结果条数、统计结构、进度回调', async () => {
     // 记录进度。
     const progress = []
     // 跑（每批 2 局）。
     const { stats, results, elapsedMs } = await simulateCli({
+      // 数据（测试自备）。
+      data: fixtureData(),
       // 局数。
       runs: 5,
       // 种子（可复现）。
@@ -50,8 +77,8 @@ describe('simulate.cli - simulateCli', () => {
 
   test('同种子两次结果一致（逐局可比对）', async () => {
     // 两次相同种子。
-    const a = await simulateCli({ runs: 3, seed: 11 })
-    const b = await simulateCli({ runs: 3, seed: 11 })
+    const a = await simulateCli({ data: fixtureData(), runs: 3, seed: 11 })
+    const b = await simulateCli({ data: fixtureData(), runs: 3, seed: 11 })
     // 逐局一致。
     expect(a.results.map((r) => [r.age, r.talents, r.sum])).toEqual(b.results.map((r) => [r.age, r.talents, r.sum]))
     // 统计一致。
@@ -67,14 +94,21 @@ describe('simulate.cli - simulateCli', () => {
     // 未写过的键返回 null（与 localStorage 语义一致）。
     expect(storage.getItem('nope')).toBeNull()
     // 跑一局不抛。
-    await expect(simulateCli({ runs: 1, seed: 1 })).resolves.toBeTruthy()
+    await expect(simulateCli({ data: fixtureData(), runs: 1, seed: 1 })).resolves.toBeTruthy()
+  })
+
+  test('没有内容来源：明确报错（引擎不内置内容）', async () => {
+    // 既没给 data 也没给 modsDir。
+    await expect(simulateCli({ runs: 1 })).rejects.toThrow('引擎不内置任何游戏内容')
+    // 错误里给出怎么给数据源。
+    await expect(simulateCli({ runs: 1 })).rejects.toThrow('--mods')
   })
 })
 
 describe('simulate.cli - formatReport', () => {
   test('报告包含关键指标、直方图与最佳一局', async () => {
-    // 跑几局（fixture，快）。
-    const { stats } = await simulateCli({ runs: 4, seed: 5 })
+    // 跑几局（小数据，快）。
+    const { stats } = await simulateCli({ data: fixtureData(), runs: 4, seed: 5 })
     // 渲染。
     const text = formatReport(stats, { elapsedMs: 1234 })
     // 关键行。
@@ -96,7 +130,7 @@ describe('simulate.cli - formatReport', () => {
 
   test('无种子时标注不可复现', async () => {
     // 跑一局（不传种子）。
-    const { stats } = await simulateCli({ runs: 1 })
+    const { stats } = await simulateCli({ data: fixtureData(), runs: 1 })
     // 报告。
     const text = formatReport({ ...stats, seed: null })
     // 标注。
@@ -161,7 +195,9 @@ describe('simulate.cli - runCli（输出与导出）', () => {
     const progress = []
     // 固定特性 + 随机属性。
     const { text, stats } = await runCli({
-      // 参数（fixture 数据，快）。
+      // 数据（测试自备）。
+      data: fixtureData(),
+      // 参数。
       argv: ['--runs', '4', '--seed', '8', '--talents', 'random'],
       // 输出。
       stdout: (t) => printed.push(t),
@@ -184,6 +220,8 @@ describe('simulate.cli - runCli（输出与导出）', () => {
     const progress = []
     // 跑。
     const { text, fileName } = await runCli({
+      // 数据（测试自备）。
+      data: fixtureData(),
       // 参数。
       argv: ['--runs', '3', '--seed', '1', '--format', 'csv'],
       // 输出。
@@ -206,6 +244,8 @@ describe('simulate.cli - runCli（输出与导出）', () => {
     const written = []
     // 跑。
     const { outFile, text } = await runCli({
+      // 数据（测试自备）。
+      data: fixtureData(),
       // 参数。
       argv: ['--runs', '2', '--seed', '2', '--format', 'md', '--out', 'out.md'],
       // 输出函数：不应该被调用。
@@ -230,7 +270,7 @@ describe('simulate.cli - runCli（输出与导出）', () => {
     // 收集。
     const printed = []
     // 跑。
-    const { text } = await runCli({ argv: ['--runs', '2', '--seed', '3', '--json'], stdout: (t) => printed.push(t) })
+    const { text } = await runCli({ data: fixtureData(), argv: ['--runs', '2', '--seed', '3', '--json'], stdout: (t) => printed.push(t) })
     // 可解析。
     const payload = JSON.parse(text)
     expect(payload.meta.runs).toBe(2)
@@ -240,11 +280,13 @@ describe('simulate.cli - runCli（输出与导出）', () => {
   })
 
   test('固定特性导出：md 报告里出现天赋名称与策略', async () => {
-    // 取 fixture 里的两个天赋 ID 与名称。
-    const data = buildFixtureData()
+    // 取测试数据里的两个天赋 ID 与名称。
+    const data = fixtureData()
     const ids = Object.keys(data.talents).slice(0, 2)
     // 跑（固定特性）。
     const { text, stats } = await runCli({
+      // 数据。
+      data,
       // 参数。
       argv: ['--runs', '2', '--seed', '4', '--format', 'md', '--talents', ids.join(',')],
       // 输出。
@@ -312,13 +354,13 @@ describe('simulate.cli - 真实数据路径', () => {
     expect(fingerprint(a)).not.toEqual(fingerprint(b))
   }, 120000)
 
-  test('fixture 数据规模较小（用于快速冒烟）', () => {
+  test('测试数据规模较小（用于快速冒烟）', () => {
     // 构造。
-    const data = buildFixtureData()
+    const data = fixtureData()
     // 与真实数据区分开。
     expect(Object.keys(data.age).length).toBeLessThan(100)
     // 两次调用互不污染（深拷贝）。
-    const again = buildFixtureData()
+    const again = fixtureData()
     expect(again.age).not.toBe(data.age)
   })
 })

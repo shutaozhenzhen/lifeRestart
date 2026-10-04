@@ -34,6 +34,8 @@ import { loadRealData } from '../test-utils/real-data.js'
 import { AGE_DATA, TOTAL } from 'game-engine/src/fixtures/property.fixture.js'
 import { TALENTS, EVENTS } from 'game-engine/src/fixtures/talent-event.fixture.js'
 import { ACHIEVEMENTS } from 'game-engine/src/fixtures/achievement-character.fixture.js'
+// 测试专用天赋池容量补充（fixture 池太小 → 抽卡凑不齐 3 个）。
+import { padTalents } from 'game-engine/src/fixtures/talent-padding.js'
 // 克隆工具。
 import { clone } from 'game-engine/src/functions/util.js'
 
@@ -57,12 +59,14 @@ function mockLocalStorage() {
 
 // #buildData
 // 组装演示数据（与 HomeView.buildData 一致）。
+// 天赋表带**测试专用**占位补充：fixture 原表只有 9 个天赋，抽卡按等级分池
+// 且池空即止，池子太小会让「选满 3 个天赋」根本凑不齐。
 function buildData() {
   // 返回完整数据。
   return {
     age: clone(AGE_DATA),
     total: TOTAL,
-    talents: clone(TALENTS),
+    talents: clone(padTalents(TALENTS)),
     events: clone(EVENTS),
     achievements: clone(ACHIEVEMENTS),
     characters: {},

@@ -9,12 +9,17 @@
  *   4. 互斥失败 → 显示引擎返回的原因（用替身驱动分支，避免依赖 fixture 里恰好有互斥对）
  *   5. 未选满时「下一步」禁用；选满后可用
  *   6. 选满后「下一步」→ 调用 confirmTalents（remake）并跳属性页
+ *   7. 无内容 Mod（所有 Mod 关闭）：抽卡前就提示无可用天赋
+ *
+ * 回归点：以前「所有 Mod 关闭」时降级到引擎测试 fixture，天赋池里是
+ * 「填充天赋1/2/3」这类占位数据，而且界面上没有任何解释。
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import TalentView from './TalentView.vue'
 import { useGameStore } from '../stores/game.js'
 import { resetApp, mountView, stubFetchOk, buildFixtureData } from '../test-utils/setup.js'
+import { buildEmptyData } from '../utils/game-data.js'
 
 // 每个用例前重置。
 beforeEach(() => {
@@ -161,5 +166,23 @@ describe('TalentView', () => {
     expect(confirmSpy).toHaveBeenCalledTimes(1)
     // 跳转属性页。
     expect(router.currentRoute.value.path).toBe('/property')
+  })
+
+  test('没有内容 Mod：抽卡前就提示无可用天赋（不会凭空造出天赋）', async () => {
+    // 空内容数据 —— 这就是「所有 Mod 关闭」时的真实形态。
+    const store = useGameStore()
+    await store.init(buildEmptyData())
+    // 数据源（页面把它一起显示，便于判断为什么是空的）。
+    store.dataSource = '空内容（lifeRestart-data 已禁用）'
+    // 挂载（**不抽卡**）。
+    const { wrapper } = mountView(TalentView)
+    // 抽卡前就有提示。
+    expect(wrapper.find('.message').text()).toContain('无可用天赋')
+    expect(wrapper.find('.message').text()).toContain('lifeRestart-data')
+    expect(wrapper.find('.message').text()).toContain('空内容')
+    // 抽卡后仍是空池（引擎不内置内容，也没有"填充天赋"兜底）。
+    await findButton(wrapper, '十连抽').trigger('click')
+    expect(store.talentPool).toEqual([])
+    expect(wrapper.findAll('.card').length).toBe(0)
   })
 })

@@ -105,3 +105,36 @@ export function makeCliLogger(argv, prefix = '') {
   // 创建日志器。
   return createLogger({ level, prefix, maxArgLength })
 }
+
+// #NO_CONTENT_HINT
+// 「引擎不内置任何游戏内容」这句话只写一处：所有需要内容的 CLI 共用同一说法。
+//
+// 背景：引擎曾在 CLI 里把**测试 fixture**（含「填充天赋1/2/3」「填充池容量」）
+// 当兜底数据，于是"没给数据源"也能跑出看着正常的输出 —— 既是内容泄漏，
+// 也把"你没有指定内容来源"这个真实原因藏了起来。现在改为**明确报错**。
+export const NO_CONTENT_HINT = '引擎不内置任何游戏内容（天赋/事件/成就/名人只能来自 Mod 或数据目录）'
+
+// #noContentError
+// 组装「没有内容来源」的错误（把该 CLI 支持的参数与可运行示例写清楚）。
+//
+// @param {string} usage - 用法提示（含示例命令）
+// @returns {Error} 错误（调用方负责打印 + 置 exitCode=1）
+export function noContentError(usage) {
+  // 一句话原因 + 具体怎么给数据源。
+  return new Error(`${NO_CONTENT_HINT}。${usage}`)
+}
+
+// #parseOption
+// 从 argv 读 `--name value` 形式的选项（未给出返回 undefined）。
+//
+// @param {string[]} argv - CLI 参数
+// @param {string} name - 选项名（含 `--`）
+// @returns {string|undefined} 值
+export function parseOption(argv, name) {
+  // 选项位置。
+  const index = argv.indexOf(name)
+  // 未给出。
+  if (index === -1) return undefined
+  // 取紧随其后的值。
+  return argv[index + 1]
+}

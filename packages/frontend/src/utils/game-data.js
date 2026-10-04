@@ -7,16 +7,18 @@
  *   行为（正是本项目此前踩过的坑）。这里收敛成一处，并保持与主页完全一致的
  *   日志文案与 dataSource 标注。
  *
- * 数据源优先级：
+ * 数据源优先级（**引擎不内置任何游戏内容**）：
  *   1. `lifeRestart-data` Mod 启用（缺省视为启用）→ 加载 public/data/*.json（Data Mod 产物）
- *   2. 加载失败或被禁用 → 内置 fixture 演示数据（并标注原因，日志报告里可见）
+ *   2. 加载失败或被禁用 → **空内容**（天赋/事件/成就/名人都为空）+ 写明原因的 dataSource
+ *
+ * 为什么不再降级到 fixture 演示数据：
+ *   以前降级用的是引擎测试 fixture，里面有「填充天赋1/2/3」这类占位数据。
+ *   于是「所有 Mod 关闭」时玩家看到的是测试数据，而且界面上没有任何解释 ——
+ *   既是内容泄漏（引擎不该内置内容），也掩盖了"没有内容 Mod"这个真实原因。
+ *   现在无 Mod = 无内容，原因写进 dataSource（日志报告 + 页面提示可见）。
+ *   fixture 只剩测试用途，见 test-utils/fixture-data.js。
  */
 
-// fixture 数据与克隆工具。
-import { clone } from 'game-engine/src/functions/util.js'
-import { AGE_DATA, TOTAL } from 'game-engine/src/fixtures/property.fixture.js'
-import { TALENTS, EVENTS } from 'game-engine/src/fixtures/talent-event.fixture.js'
-import { ACHIEVEMENTS } from 'game-engine/src/fixtures/achievement-character.fixture.js'
 // Mod 运行时（浏览器侧：发现 + 加载启用的 Mod 数据与代码）与目录/状态。
 import { discoverMods, loadModBundle } from './mod-runtime.js'
 import { buildModCatalog, enabledModNames } from './mod-catalog.js'
@@ -24,18 +26,19 @@ import { loadModsState } from './mods-state.js'
 // 已安装 Mod 的浏览器存储（IndexedDB，含内存回退）。
 import { getModStore } from './mod-store.js'
 
-// #buildFixtureData
-// 组装 fixture 演示数据（结构 = 原版数据加载结果）。
+// #buildEmptyData
+// 空内容数据：引擎不内置任何天赋/事件/成就/名人 —— 内容只能来自 Mod。
+// 结构与原版数据加载结果一致（缺内容时游戏能启动，但什么都抽不到）。
 //
 // @returns {object} { age, total, talents, events, achievements, characters }
-export function buildFixtureData() {
-  // 深拷贝，避免多处消费互相污染。
+export function buildEmptyData() {
+  // 空表 + 零总量（TTLT 等比率参数的分母有 `|| 1` 保护，不会算出 NaN）。
   return {
-    age: clone(AGE_DATA),
-    total: TOTAL,
-    talents: clone(TALENTS),
-    events: clone(EVENTS),
-    achievements: clone(ACHIEVEMENTS),
+    age: {},
+    total: { TACHV: 0, TEVT: 0, TTLT: 0 },
+    talents: {},
+    events: {},
+    achievements: {},
     characters: {},
   }
 }
@@ -128,15 +131,15 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
       // 来源描述（含规模摘要）。
       dataSource = `lifeRestart-data（${Object.keys(data.talents).length} 天赋 / ${Object.keys(data.events).length} 事件）`
     } catch (e) {
-      // 降级：标注失败原因。
-      data = buildFixtureData()
-      dataSource = `fixture 演示数据（原版数据加载失败：${e.message}）`
+      // 降级：空内容 + 标注失败原因。
+      data = buildEmptyData()
+      dataSource = `空内容（原版数据加载失败：${e.message}）`
       degraded = true
     }
   } else {
-    // 被禁用：直接用 fixture。
-    data = buildFixtureData()
-    dataSource = 'fixture 演示数据（lifeRestart-data 已禁用）'
+    // 被禁用：空内容（引擎没有可退的"默认内容"，内容 Mod 就是内容的唯一来源）。
+    data = buildEmptyData()
+    dataSource = '空内容（lifeRestart-data 已禁用）'
     degraded = true
   }
   // Mod 运行时（失败绝不阻断游戏：Mod 是增强，不是必需）。
@@ -162,6 +165,13 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
       for (const key of Object.keys(bundle.data)) {
         // 合并一个数据集。
         data[key] = { ...(data[key] || {}), ...bundle.data[key] }
+      }
+      // 内容总量按**合并后**的实际规模重算：无内容 Mod 时数据为空、内容全靠 Mod，
+      // 沿用加载时的 total 会与真实表对不上（收集率等比率参数的分母就错了）。
+      data.total = {
+        TACHV: Object.keys(data.achievements || {}).length,
+        TEVT: Object.keys(data.events || {}).length,
+        TTLT: Object.keys(data.talents || {}).length,
       }
       // 传出钩子总线与待执行代码（由 store.init 在建好 Life 后执行）。
       hooks = bundle.hooks

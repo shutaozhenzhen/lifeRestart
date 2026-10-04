@@ -244,8 +244,8 @@ describe('talent.cli', () => {
   test('count returns total', () => {
     // 总数。
     const r = handler(['count'])
-    // 12。
-    expect(r.text).toContain('12')
+    // 9（fixture 的 t_001~t_009；原先的「填充天赋」已删除）。
+    expect(r.text).toContain('9')
   })
 })
 
@@ -374,6 +374,35 @@ describe('game.cli', () => {
     const r = await game.handlers(['select', '999'])
     // 提示无效索引。
     expect(r.text).toContain('无效')
+  })
+
+  test('select 支持**数字字符串 ID**（真实数据的 ID 形态，如 "1007"）', async () => {
+    // 数字 ID 的天赋表（每个等级都有 → 抽卡池必非空）。
+    const numericTalents = () => {
+      // 结果表。
+      const out = {}
+      // 造 8 个：等级 0/1/2/3 各两个。
+      for (let i = 0; i < 8; i++) {
+        // 数字字符串 ID。
+        const id = String(1001 + i)
+        // 写入。
+        out[id] = { id, name: `数字天赋${i + 1}`, description: '测试用', grade: i % 4 }
+      }
+      // 返回。
+      return out
+    }
+    // 用数字 ID 的数据建游戏。
+    const g = createGame({ data: { ...makeGameData(), talents: numericTalents() }, random: createRng(7) })
+    // 抽卡。
+    await g.handlers(['draw'])
+    // 池里第一项的 ID（形如 "1001"）。
+    const firstId = g.state.pool.find(Boolean)?.id
+    expect(firstId).toBeDefined()
+    // 按 ID 选：以前"纯数字"会被当成**池下标**（1001）→ 报「无效的天赋索引」。
+    const r = await g.handlers(['select', firstId])
+    // 选中成功。
+    expect(r.text).not.toContain('无效')
+    expect(g.state.selected).toEqual([firstId])
   })
 
   test('full game loop plays one life', async () => {

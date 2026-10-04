@@ -30,7 +30,7 @@ lifeRestart/
 │   │   ├── src/ai/             # AI 客户端 / 输出校验器 / createAIMod / 代理服务（ai-proxy）
 │   │   ├── src/functions/      # logger（五级日志 + traceFn）、random、journal 等
 │   │   ├── src/cli/            # 全部 CLI 原型（见下）
-│   │   ├── src/fixtures/       # 测试用最小数据集
+│   │   ├── src/fixtures/       # **测试专用**最小数据集（产品路径不得引用：引擎不内置内容）
 │   │   └── server.js           # AI 代理服务（零依赖 Node http）
 │   └── frontend/               # Vue 3 + Pinia + Hash 路由（页面流转 + Mod 管理页 + 设置页）
 │       └── public/data/        # 运行期数据（原版 JSON，Data Mod 转换产物）
@@ -62,8 +62,8 @@ pnpm test                   # 等价于 node scripts/test-all.mjs
 node scripts/test-all.mjs   # 没有 pnpm 的环境用这条（npm test 亦可）
 
 # 只跑单个包（参数按目录名/包名子串匹配）
-node scripts/test-all.mjs game-engine   # 引擎 708 用例（37 spec）
-node scripts/test-all.mjs frontend      # 前端 212 用例（25 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
+node scripts/test-all.mjs game-engine   # 引擎 712 用例（37 spec）
+node scripts/test-all.mjs frontend      # 前端 213 用例（25 spec：纯逻辑 + 组件/页面 + 真实数据全流程）
 node scripts/test-all.mjs mobile        # 移动端 67 用例（脚本 + 契约 + CI 不变量）
 
 # 带参数透传给 vitest：`--` 之后的参数原样传给 vitest（不改包过滤）
@@ -77,19 +77,21 @@ node scripts/test-all.mjs game-engine -- -t 属性页先读数
 
 ```bash
 # 基础能力演示
+# 注意：需要内容的命令**必须**给数据源（--data <原版 JSON 目录> 或 --mods <mods 目录>），
+# 否则直接报错退出（exit 1）—— 引擎不内置任何游戏内容（天赋 / 事件 / 成就 / 名人）
 node src/condition/cli.js                                   # condition 工具（check / convert / props）
 node src/cli/property.cli.js                                # 属性系统
-node src/cli/talent.cli.js   [--seed <n>]                   # 天赋系统（抽卡 / 池管理）
-node src/cli/event.cli.js                                   # 事件系统
-node src/cli/game.cli.js     [--seed <n>] [--locale zh-cn|en-us]   # 整合可玩版
+node src/cli/talent.cli.js   --data ../../../remake/public/data [--seed <n>]   # 天赋系统（抽卡 / 池管理）
+node src/cli/event.cli.js    --data ../../../remake/public/data                # 事件系统
+node src/cli/game.cli.js     --data ../../../remake/public/data [--seed <n>] [--locale zh-cn|en-us]   # 整合可玩版
 
 # 轨迹与数据
-node src/cli/export.cli.js   --seed <n>                     # 轨迹导出（同 seed 可复现）
+node src/cli/export.cli.js   --seed <n> --data ../../../remake/public/data   # 轨迹导出（同 seed 可复现）
 node src/cli/data-mod.cli.js --data <dir> --out <modsDir>   # 原版 JSON → Data Mod 落盘
 node src/cli/mod.cli.js <modsDir> [--call <mod>:<handler>[:<jsonArgs>]]  # Mod 加载器（依赖图 / 钩子 / 宿主处理器）
-node src/cli/simulate.cli.js --runs 30 --seed 42 [--mods ../../mods] [--json]  # 批量模拟（随机天赋+随机属性）
-node src/cli/simulate.cli.js --runs 30 --talents 1001,1002 --alloc CHR=3,INT=4,STR=5,MNY=8 \
-       --mods ../../mods --format md --out report.md   # 固定特性+固定属性，导出 CSV/JSON/Markdown
+node src/cli/simulate.cli.js --mods ../../mods --runs 30 --seed 42 [--json]  # 批量模拟（随机天赋+随机属性）
+node src/cli/simulate.cli.js --mods ../../mods --runs 30 --talents 1001,1002 --alloc CHR=3,INT=4,STR=5,MNY=8 \
+       --format md --out report.md   # 固定特性+固定属性，导出 CSV/JSON/Markdown
 
 # AI 链路
 node src/cli/ai-game.cli.js  --mods <dir> [--mock-ai] [--seed <n>] [--journal <file>]  # AI 可玩版
@@ -97,7 +99,7 @@ node src/cli/smoke.cli.js    --mods <dir> [--mock-ai] [--seed <n>]              
 node src/cli/export-ai.cli.js --journal <file> --out <dir>                             # AI 生成结果导出为 Mod（闭环）
 
 # 跨平台一致性
-node src/cli/consistency.cli.js --seed <n> [--mods <dir> --mock-ai] [--electron <bin>]
+node src/cli/consistency.cli.js --seed <n> --mods ../../mods [--mock-ai] [--electron <bin>]
 ```
 
 示例：
@@ -163,15 +165,19 @@ AI 连接测试经 vite 代理 `/ai-proxy` 转发到本地代理服务。
 ——寿命分布直方图、总评分档、属性均值（终局 / 历史最高）、收集率、最佳一局（含天赋名称与分配明细）。
 **策略两条轴各自可随机或固定**：特性（随机抽卡 ／ 从全部天赋里挑最多 3 个做控制变量实验）、
 属性（随机分配 ／ 手填四项）。支持局数档位（10/30/50/100 + 自定义）、随机种子（可复现）、
-**快速模式**（演示数据，毫秒级一局）、运行进度（局/秒 + 预计剩余）与**随时停止**（保留已完成部分的聚合）；
+运行进度（局/秒 + 预计剩余）与**随时停止**（保留已完成部分的聚合）；
 结果可**导出 CSV / JSON / Markdown**（Markdown 可直接贴进 issue，JSON 供脚本二次分析）。
+
+> **内容只来自 Mod**：引擎不内置任何天赋/事件。没有加载到内容 Mod 时**拒绝跑空模拟**，
+> 页面直接提示去 `/mods` 启用 `lifeRestart-data`（曾经有个「快速模式」用引擎测试 fixture 当演示数据，
+> 会把「填充天赋1/2/3」显示给玩家，已删除）。
 
 固定策略的两条硬约束（都有一致行为与测试）：固定特性里**不存在的 ID 会被剔除**、全无效则回退随机，
 并在结果与报告里给 ⚠ 警告（不静默）；固定属性**超出可用点数时按比例缩减**到正好用完（单项不超上限）并警告。
 
 > 性能：真实数据下**单局 0.3~1.5 秒**（老年阶段每年要判几百个事件条件，寿命越长越慢），
 > 所以页面按局分批执行、批间让出主线程，并对 `condition` 加了**编译缓存**（见下）。
-> 想快速看分布就勾「快速模式」。CLI 等价入口见下方 `simulate.cli.js`（支持 `--talents` / `--alloc` / `--format` / `--out`）。
+> CLI 等价入口见下方 `simulate.cli.js`（支持 `--talents` / `--alloc` / `--format` / `--out`；**`--mods` 必需**）。
 
 ## 在线版（GitHub Pages）
 
@@ -265,18 +271,18 @@ node scripts/collect-apk.js       # 可选：把 APK 收集到 out/liferestart-m
 2. 轨迹页状态栏显示当前种子（点击复制）；总结页显示种子 + 「用此种子再来一局」
    （同种子重开 → 抽卡顺序与上一局一致，再做出同样的选择即可复现整局）。
 3. 日志报告头部带上种子，因此**用户把报告贴过来，就等于把那一局带过来了**。
-4. CLI/模拟：`--seed 42` 固定种子；`node src/cli/simulate.cli.js --seed 42 --runs 30` 结果可复现。
+4. CLI/模拟：`--seed 42` 固定种子；`node src/cli/simulate.cli.js --mods ../../mods --seed 42 --runs 30` 结果可复现。
 
 ## 测试
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 708 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**、**HTTP 文件源**与 **Mod 架构 v2 宿主桥：`host.js` + `host-node.js` + `manifest` 的 targets/entry/deterministic**）/ ai / cli / data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 212 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载**/**模拟驱动器**/**统计展示**）+ **7 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
+| `packages/game-engine` | 712 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**、**HTTP 文件源**与 **Mod 架构 v2 宿主桥：`host.js` + `host-node.js` + `manifest` 的 targets/entry/deterministic**）/ ai / cli（含**无数据源即报错**的回归）/ data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
+| `packages/frontend` | 213 | 纯逻辑（日志/自动播放/storage/mods-state/**Mod 运行时与 zip 安装**/**数据加载（含空内容）**/**模拟驱动器**/**统计展示**）+ **7 个页面 + 1 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
 | `platforms/mobile` | 67 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
-| **合计** | **999** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
+| **合计** | **1004** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
 
 ### 前端测试分层（2026-10 补齐）
 
@@ -292,9 +298,12 @@ node scripts/collect-apk.js       # 可选：把 APK 收集到 out/liferestart-m
   （默认仍是 node 环境，纯逻辑用例不受影响）。
 - 公共装置见 `src/test-utils/setup.js`（fixture 数据、内存 localStorage、fetch 打桩、`mountView` 复用当前 pinia）；
   **真实数据**加载见 `src/test-utils/real-data.js`（直读 `public/data/*.json`，node 环境也能用）。
+  fixture 构造单独放在 `src/test-utils/fixture-data.js`（**只被 *.spec.js 引用**；产品代码里没有它 —— 引擎不内置内容）。
 - **数据选择原则**：涉及「种子是否生效 / 能否复现 / 寿命分布」这类结论的用例**一律用真实数据**
-  （501 年龄 / 184 天赋 / 1720 事件），fixture 只用于接线类快速用例——fixture 只有 4 个候选天赋、
-  每个年龄单一事件，随机性几乎不可观测（只看得到顺序）。全流程集成测试的主流程也跑真实数据。
+  （501 年龄 / 184 天赋 / 1720 事件），fixture 只用于接线类快速用例。**注意 fixture 的天赋池很小**，
+  而抽卡按等级分池且「池空即止」→ 需要"选满 3 个 / 看得出种子差异"的用例要显式调
+  `game-engine/src/fixtures/talent-padding.js` 的 `padTalents()` 补池容量。
+  全流程集成测试的主流程也跑真实数据。
 - 断言原则：页面测试断言**值/文案/状态**，而不是"没抛异常"。
 
 源码为**逐行中文注释**。测试在 CI 中自动执行：`.github/workflows/test.yml`（push/PR 触发，

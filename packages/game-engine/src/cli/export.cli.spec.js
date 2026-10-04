@@ -1,16 +1,58 @@
 /**
  * 轨迹导出 CLI 单元测试 — export.cli.spec.js（Step 11 冒烟对比）
  *
- * 覆盖范围：9 个测试用例，分为 3 组：
+ * 覆盖范围：
  *   1. 可复现性（同 seed 两次输出一致）
  *   2. 输出结构（years/log/end）
  *   3. 参数影响（不同 seed 不同结果、不同天赋不同结果）
+ *   4. 没有内容来源：明确报错（引擎不内置内容）
+ *
+ * 注：引擎不再内置内容，测试自备 fixture 数据并经 `data` 注入
+ * （产品路径要么 `--data`，要么 `data`；两者都没有就报错）。
  */
 
 // 导入 vitest 测试 DSL 和被测函数。
 import { describe, test, expect } from 'vitest'
-// runLife 函数。
-import { runLife } from './export.cli.js'
+// runLife 函数（产品实现）。
+import { runLife as runLifeImpl } from './export.cli.js'
+// 测试用数据（引擎 fixture：**仅测试**用）。
+import { clone } from '../functions/util.js'
+import { AGE_DATA, TOTAL } from '../fixtures/property.fixture.js'
+import { TALENTS, EVENTS } from '../fixtures/talent-event.fixture.js'
+import { ACHIEVEMENTS } from '../fixtures/achievement-character.fixture.js'
+
+// #fixtureData
+// 小规模测试数据（结构与 Data Mod 产物一致）。
+//
+// @returns {object} 游戏数据
+function fixtureData() {
+  // 组装（每次新建，避免用例互相污染）。
+  return {
+    age: clone(AGE_DATA),
+    total: { ...TOTAL },
+    talents: clone(TALENTS),
+    events: clone(EVENTS),
+    achievements: clone(ACHIEVEMENTS),
+    characters: {},
+  }
+}
+
+// #runLife
+// 测试包装：注入 fixture 数据（原有调用点无需逐个改动）。
+//
+// @param {object} opts - runLife 参数
+// @returns {Promise<object>} 轨迹
+const runLife = (opts) => runLifeImpl({ data: fixtureData(), ...opts })
+
+// ========== 测试组 0：内容来源 ==========
+describe('export - 内容来源', () => {
+  test('没有数据源：明确报错（引擎不内置内容）', async () => {
+    // 既没给 data 也没给 dataDir。
+    await expect(runLifeImpl({ seed: 1 })).rejects.toThrow('引擎不内置任何游戏内容')
+    // 报错里给出怎么给数据源。
+    await expect(runLifeImpl({ seed: 1 })).rejects.toThrow('--data')
+  })
+})
 
 // ========== 测试组 1：可复现性 ==========
 describe('export - reproducibility', () => {

@@ -23,7 +23,7 @@ import { mountView, resetApp } from '../test-utils/setup.js'
 // 引擎（打包 zip、造 Life）。
 import { createModZip } from 'game-engine/src/mod/zip.js'
 import Life from 'game-engine/src/modules/life.js'
-import { buildFixtureData } from './game-data.js'
+import { buildFixtureData } from '../test-utils/fixture-data.js'
 
 // 合法 manifest。
 const MANIFEST = JSON.stringify({ name: 'sta-mod', version: '1.0.0', description: '耐力属性' })

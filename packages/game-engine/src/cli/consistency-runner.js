@@ -7,7 +7,7 @@
  * 环境变量：
  *   CONSISTENCY_SEED      种子
  *   CONSISTENCY_YEARS     年数
- *   CONSISTENCY_MODS      mods 目录（空 = fixture）
+ *   CONSISTENCY_MODS      mods 目录（**必需**：引擎不内置内容）
  *   CONSISTENCY_MOCK_AI   1 = 启用确定性 mock AI
  */
 

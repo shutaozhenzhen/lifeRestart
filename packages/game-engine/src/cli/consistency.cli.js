@@ -11,10 +11,13 @@
  *   3. --electron <bin>：Electron 运行时（ELECTRON_RUN_AS_NODE）跑同一局 → 与 node 一致（跨运行时）。
  *
  * 用法：
- *   node src/cli/consistency.cli.js --seed 42
- *   node src/cli/consistency.cli.js --seed 42 --runs 5
+ *   node src/cli/consistency.cli.js --seed 42 --mods ../../mods
+ *   node src/cli/consistency.cli.js --seed 42 --runs 5 --mods ../../mods
  *   node src/cli/consistency.cli.js --seed 7 --mods ../../mods --mock-ai
- *   node src/cli/consistency.cli.js --seed 7 --electron <path-to-electron.exe>
+ *   node src/cli/consistency.cli.js --seed 7 --mods ../../mods --electron <path-to-electron.exe>
+ *
+ * --mods 是**必需的**：引擎不内置任何内容（以前缺省用测试 fixture 兜底，
+ * 那既是内容泄漏、也掩盖了"没给数据源"这个真实原因）。
  *
  * 退出码：0 = 全部一致；1 = 存在差异或执行失败。
  */
@@ -23,8 +26,7 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runWithAI, makeAIConfig, loadModData } from './smoke.cli.js'
-import { loadData } from './game.cli.js'
-import { makeCliLogger } from './cli-util.js'
+import { makeCliLogger, noContentError } from './cli-util.js'
 
 // #silentLog
 // 静默日志器（子进程/进程内一致化，避免污染 JSON）。
@@ -35,21 +37,21 @@ const silentLog = { debug: () => {}, info: () => {}, warn: () => {}, error: () =
 // 所有运行（进程内/子进程/electron）必须用同一构造，保证输入一致。
 //
 // @param {object} params
-// @param {string} [params.modsDir] - mods 目录（空 = fixture 数据）
+// @param {string} [params.modsDir] - mods 目录（**必需**：引擎不内置内容，见 noContentError）
 // @param {boolean} [params.mockAi] - 是否启用确定性 mock AI
 // @returns {Promise<{data: object, bus: object|null}>}
+// @throws {Error} 未给 modsDir 时抛「没有内容来源」错误
 export async function prepareRun({ modsDir, mockAi = false } = {}) {
-  // 有 mods。
-  if (modsDir) {
-    // AI 配置（mock 为确定性客户端）。
-    const aiConfig = mockAi ? makeAIConfig(['--mock-ai']) : null
-    // 加载 mods 数据 + 钩子。
-    const r = await loadModData({ modsDir, aiConfig, log: silentLog })
-    // 返回。
-    return { data: r.data, bus: aiConfig ? r.bus : null }
+  // 没有数据源：明确报错（以前这里用测试 fixture 兜底）。
+  if (!modsDir) {
+    throw noContentError('请用 --mods <dir> 指定 Mod 目录，例如：node src/cli/consistency.cli.js --seed 42 --mods ../../mods')
   }
-  // 无 mods：fixture 数据，无钩子。
-  return { data: await loadData({}), bus: null }
+  // AI 配置（mock 为确定性客户端）。
+  const aiConfig = mockAi ? makeAIConfig(['--mock-ai']) : null
+  // 加载 mods 数据 + 钩子。
+  const r = await loadModData({ modsDir, aiConfig, log: silentLog })
+  // 返回。
+  return { data: r.data, bus: aiConfig ? r.bus : null }
 }
 
 // #runOnce
@@ -218,10 +220,10 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   // electron。
   const electronIdx = argv.indexOf('--electron')
   const electronBin = electronIdx !== -1 ? argv[electronIdx + 1] : undefined
-  // 工作目录（game-engine 根，保证子进程解析 fixture/mods 相对路径一致）。
+  // 工作目录（game-engine 根，保证子进程解析 mods 相对路径一致）。
   const cwd = process.cwd()
   // 提示。
-  log.info(`seed=${seed} runs=${runs} years=${years} mods=${modsDir || 'fixture'} mockAi=${mockAi} electron=${electronBin || '无'}`)
+  log.info(`seed=${seed} runs=${runs} years=${years} mods=${modsDir || '（未给！）'} mockAi=${mockAi} electron=${electronBin || '无'}`)
   // 执行。
   try {
     // 运行。

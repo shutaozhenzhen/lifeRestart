@@ -21,15 +21,18 @@ import { clone, createRng } from '../functions/util.js'
 import { AGE_DATA, TOTAL } from '../fixtures/property.fixture.js'
 import { TALENTS, EVENTS } from '../fixtures/talent-event.fixture.js'
 import { ACHIEVEMENTS } from '../fixtures/achievement-character.fixture.js'
+// 测试专用池容量补充（fixture 池太小 → 随机性不可观测，见该模块说明）。
+import { padTalents } from '../fixtures/talent-padding.js'
 
 // #buildData
-// 组装 fixture 数据。
+// 组装 fixture 数据（天赋表带测试专用占位补充，否则抽卡一两格就抽空，
+// "不同种子 → 不同结果"这类断言不可观测）。
 function buildData() {
   // 返回。
   return {
     age: clone(AGE_DATA),
     total: TOTAL,
-    talents: clone(TALENTS),
+    talents: clone(padTalents(TALENTS)),
     events: clone(EVENTS),
     achievements: clone(ACHIEVEMENTS),
     characters: {},

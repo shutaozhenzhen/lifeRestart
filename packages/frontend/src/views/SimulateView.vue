@@ -9,14 +9,18 @@
 //
 // 为什么长这样：
 //   真实数据下**单局 0.3~1.5 秒**（老年阶段每年要判几百个事件条件），所以
-//   页面必须：分批执行 + 进度条 + 每局速度与剩余时间估算 + 可随时取消；
-//   另外提供「快速模式」（演示数据）让几十毫秒一局，适合快速看分布。
+//   页面必须：分批执行 + 进度条 + 每局速度与剩余时间估算 + 可随时取消。
+//
+// 内容来源：**只有 Mod**（引擎不内置任何天赋/事件）。这里曾有个「快速模式」，
+//   用引擎测试 fixture（含「填充天赋1/2/3」）当演示数据 —— 已删除：
+//   它把测试数据当成产品内容，还掩盖了"没有内容 Mod"这个真实原因。
+//   没有内容时不跑模拟，直接提示去 /mods 启用 lifeRestart-data。
 //
 // 复用：模拟内核/策略/导出器都在 game-engine（与 CLI 同一份实现）。
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-// 数据加载（与主页同一实现：原版数据 → fixture 降级）。
-import { loadGameData, buildFixtureData } from '../utils/game-data.js'
+// 数据加载（与主页同一实现：Data Mod 产物 → 空内容 + 原因标注）。
+import { loadGameData } from '../utils/game-data.js'
 // 分批模拟驱动器。
 import { runSimulation } from '../utils/simulation-runner.js'
 // 下载文本（Blob + <a download>，与日志导出同一实现）。
@@ -46,13 +50,13 @@ const ALLOC_ITEMS = [
 ]
 // 天赋列表一次最多渲染多少条（184 条全渲染会拖慢页面，用搜索过滤）。
 const TALENT_RENDER_LIMIT = 60
+// 无内容时的统一提示（文案只写一处，页面对齐）。
+const NO_CONTENT_HINT = '没有可模拟的内容：未加载任何数据 Mod（到 /mods 启用 lifeRestart-data 后重试）'
 
-// 局数（默认 30：真实数据约 40 秒，快速模式约 1 秒）。
+// 局数（默认 30：真实数据约 40 秒）。
 const runs = ref(30)
 // 随机种子输入（空 = 不可复现）。
 const seedInput = ref('')
-// 快速模式（用演示数据，几十毫秒一局）。
-const fastMode = ref(false)
 // 运行中。
 const running = ref(false)
 // 取消标记。
@@ -69,9 +73,9 @@ const stats = ref(null)
 const results = ref([])
 // 数据源描述。
 const dataSource = ref('')
-// 真实数据（进入页面时加载一次，供非快速模式使用）。
+// 内容数据（进入页面时加载一次；引擎不内置内容，只能来自 Data Mod）。
 const realData = ref(null)
-// 加载失败提示（真实数据不可用时提示用户切快速模式）。
+// 内容不可用提示（没有数据 Mod 时明确指向 /mods）。
 const loadError = ref('')
 // 导出反馈。
 const exportFeedback = ref('')
@@ -104,12 +108,12 @@ function pct(value) {
   return `${((Number(value) || 0) * 100).toFixed(1)}%`
 }
 
-// 数据源：真实数据 / 演示数据。
-const activeData = computed(() => (fastMode.value ? buildFixtureData() : realData.value))
+// 是否有内容可跑：引擎不内置内容，没有数据 Mod 就没有天赋/事件（跑了也没意义）。
+const hasContent = computed(() => Object.keys(realData.value?.talents || {}).length > 0)
 // 天赋全表（按星级、名称排序，便于挑选）。
 const talentList = computed(() => {
   // 取表。
-  const table = activeData.value?.talents || {}
+  const table = realData.value?.talents || {}
   // 转数组。
   return Object.values(table)
     // 兜底 ID（极端数据下缺 id）。
@@ -181,16 +185,16 @@ const etaSeconds = computed(() => {
   // 剩余局数 × 每局耗时。
   return Math.max(0, Math.round((runs.value - done.value) * secondsPerRun.value))
 })
-// 开始前的粗估（真实数据 ~1.4s/局，演示数据 ~0.01s/局）。
-const estimateSeconds = computed(() => Math.round(runs.value * (fastMode.value ? 0.01 : 1.4)))
+// 开始前的粗估（真实数据 ~1.4s/局；寿命越长越慢，这里只给量级）。
+const estimateSeconds = computed(() => Math.round(runs.value * 1.4))
 
 // #start
 // 开始模拟。
 async function start() {
-  // 数据不可用。
-  if (!activeData.value) {
-    // 提示。
-    loadError.value = '数据未就绪（真实数据加载失败），请勾选「快速模式」用演示数据'
+  // 内容不可用（无数据 Mod = 无天赋/事件，跑出来只会是一堆空人生）。
+  if (!hasContent.value) {
+    // 提示（指向内容 Mod，而不是某个演示模式）。
+    loadError.value = NO_CONTENT_HINT
     // 中断。
     return
   }
@@ -210,7 +214,7 @@ async function start() {
   // 跑。
   const result = await runSimulation({
     // 数据。
-    data: activeData.value,
+    data: realData.value,
     // 局数。
     runs: Math.max(1, Number(runs.value) || 1),
     // 种子。
@@ -270,17 +274,16 @@ function exportResult(format) {
   exportFeedback.value = `已导出 ${format.toUpperCase()}：${fileName}`
 }
 
-// 挂载：加载数据（失败则提示可用快速模式）。
+// 挂载：加载内容数据（与主页同一实现）。
 onMounted(async () => {
   // 加载。
-  const { data, dataSource: source, degraded } = await loadGameData()
+  const { data, dataSource: source } = await loadGameData()
   // 记录。
   realData.value = data
   dataSource.value = source
-  // 加载失败时默认勾上快速模式，保证页面开箱可用。
-  if (degraded) {
-    fastMode.value = true
-    loadError.value = '原版数据不可用，已切到快速模式（演示数据）'
+  // 无内容时明确提示（引擎不内置内容，没有"演示数据"可退）。
+  if (Object.keys(data.talents || {}).length === 0) {
+    loadError.value = NO_CONTENT_HINT
   }
 })
 
@@ -383,16 +386,8 @@ function back() {
       </template>
 
       <div class="field">
-        <label>快速模式</label>
-        <label class="checkbox">
-          <input v-model="fastMode" type="checkbox" :disabled="running" />
-          用演示数据（每局毫秒级，适合快速看分布）
-        </label>
-      </div>
-
-      <div class="field">
         <label>数据源</label>
-        <span class="source">{{ fastMode ? 'fixture 演示数据' : dataSource || '（未就绪）' }}</span>
+        <span class="source">{{ dataSource || '（未就绪）' }}</span>
       </div>
 
       <div class="actions">
@@ -600,13 +595,6 @@ function back() {
 }
 .num.wide {
   width: 160px;
-}
-.checkbox {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #9aa7bd;
 }
 .source {
   font-size: 12px;

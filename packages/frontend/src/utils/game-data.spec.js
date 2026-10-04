@@ -2,16 +2,19 @@
  * game-data 单元测试 — 数据加载（主页与模拟页共用）
  *
  * 覆盖：
- *   1. buildFixtureData：深拷贝（两次调用互不污染）
+ *   1. buildEmptyData：引擎**不内置任何内容**（天赋/事件/成就/名人为空）
  *   2. loadModState：缺省 null / 读取启停 / 损坏 JSON 容错
  *   3. fetchOriginalData：注入 fetch，路径与 total 统计正确
- *   4. loadGameData：原版数据成功 / 加载失败降级 / Mod 被禁用降级（并给出可读 dataSource）
+ *   4. loadGameData：原版数据成功 / 加载失败 → 空内容 / Mod 被禁用 → 空内容
+ *
+ * 回归点：曾经这里的降级路径返回**引擎测试 fixture**（含「填充天赋1/2/3」），
+ * 于是「所有 Mod 关闭」时玩家在天赋页看到测试占位数据。见下面对 `{}` 的断言。
  */
 
 // vitest DSL。
 import { describe, test, expect } from 'vitest'
 // 被测模块。
-import { buildFixtureData, fetchOriginalData, loadGameData, loadModState } from './game-data.js'
+import { buildEmptyData, fetchOriginalData, loadGameData, loadModState } from './game-data.js'
 
 // #memStorage
 // 内存存储替身。
@@ -25,21 +28,20 @@ function memStorage(initial = {}) {
   }
 }
 
-describe('game-data - buildFixtureData', () => {
-  test('返回深拷贝（两次调用互不污染）', () => {
-    // 两次构造。
-    const a = buildFixtureData()
-    const b = buildFixtureData()
-    // 不同引用。
-    expect(a.age).not.toBe(b.age)
-    expect(a.talents).not.toBe(b.talents)
-    // 结构完整。
-    for (const key of ['age', 'talents', 'events', 'achievements', 'characters', 'total']) {
-      expect(a[key], key).toBeDefined()
-    }
-    // 改一份不影响另一份。
-    a.talents.extra = { id: 'x' }
-    expect(b.talents.extra).toBeUndefined()
+describe('game-data - buildEmptyData', () => {
+  test('引擎不内置内容：所有内容表为空、总量为 0', () => {
+    // 构造。
+    const data = buildEmptyData()
+    // 五张内容表全空 —— 内容只能来自 Mod。
+    expect(data.talents).toEqual({})
+    expect(data.events).toEqual({})
+    expect(data.achievements).toEqual({})
+    expect(data.characters).toEqual({})
+    expect(data.age).toEqual({})
+    // 总量为 0（页面据此判断"无内容可玩"）。
+    expect(data.total).toEqual({ TACHV: 0, TEVT: 0, TTLT: 0 })
+    // 两次调用互不共享引用（避免调用方互相污染）。
+    expect(buildEmptyData().talents).not.toBe(data.talents)
   })
 })
 
@@ -118,7 +120,7 @@ describe('game-data - loadGameData', () => {
     expect(data.age).toBeDefined()
   })
 
-  test('加载失败：降级 fixture 且标注原因（degraded=true）', async () => {
+  test('加载失败：降级为空内容且标注原因（degraded=true）', async () => {
     // 桩：抛错。
     const fetchImpl = async () => {
       throw new Error('offline')
@@ -127,14 +129,16 @@ describe('game-data - loadGameData', () => {
     const { data, dataSource, degraded } = await loadGameData({ fetchImpl, storage: memStorage() })
     // 降级。
     expect(degraded).toBe(true)
-    // 标注含 fixture 与失败原因（日志报告里能看出为什么）。
-    expect(dataSource).toContain('fixture')
+    // 标注含空内容与失败原因（日志报告里能看出为什么）。
+    expect(dataSource).toContain('空内容')
     expect(dataSource).toContain('offline')
-    // 数据是 fixture（12 天赋）。
-    expect(Object.keys(data.talents).length).toBe(12)
+    // **没有任何内置内容**（回归：曾经这里是 12 个 fixture 天赋，含「填充天赋1/2/3」）。
+    expect(data.talents).toEqual({})
+    expect(data.events).toEqual({})
+    expect(data.total.TTLT).toBe(0)
   })
 
-  test('Mod 被禁用：直接使用 fixture 并标注禁用', async () => {
+  test('Mod 被禁用：空内容并标注禁用（引擎没有可退的默认内容）', async () => {
     // 存储里 lifeRestart-data 被禁用。
     const storage = memStorage({ modsState: JSON.stringify({ enabled: { 'lifeRestart-data': false } }) })
     // 桩：若被调用就说明逻辑错了。
@@ -142,11 +146,13 @@ describe('game-data - loadGameData', () => {
       throw new Error('should not fetch')
     }
     // 加载。
-    const { dataSource, degraded } = await loadGameData({ fetchImpl, storage })
+    const { data, dataSource, degraded } = await loadGameData({ fetchImpl, storage })
     // 降级 + 标注禁用。
     expect(degraded).toBe(true)
+    expect(dataSource).toContain('空内容')
     expect(dataSource).toContain('已禁用')
-    // 数据是 fixture。
-    expect(dataSource).toContain('fixture')
+    // 天赋/事件池为空（玩家看到的是"没有内容 Mod"，而不是测试占位数据）。
+    expect(data.talents).toEqual({})
+    expect(data.events).toEqual({})
   })
 })

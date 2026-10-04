@@ -1,7 +1,11 @@
 <script setup>
 // 天赋选择页（对应原版 talent.js）。
 // 流程：抽卡（draw）→ 点选天赋卡片（限 3 个 + 互斥校验）→ 下一步进入游戏。
-import { ref } from 'vue'
+//
+// 内容来源：**只有 Mod**（引擎不内置任何天赋）。
+//   没有内容 Mod 时天赋池必然是空的 —— 这一点在**抽卡之前**就告诉玩家，
+//   而不是让人反复点「十连抽」才看到「无可选天赋」。
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
 
@@ -15,6 +19,11 @@ const drawn = ref(false)
 const message = ref('')
 // 当前选中的索引集合。
 const selectedIndexes = ref(new Set())
+
+// 无可用天赋：本局数据里一条天赋都没有（= 没有任何 Mod 提供天赋）。
+// 前提 `isReady`：直接刷新 /talent 时引擎还没初始化（rawData 为 null），
+// 那不是"没有内容 Mod"，不能给出误导性的原因。
+const noContent = computed(() => store.isReady && Object.keys(store.rawData?.talents || {}).length === 0)
 
 // 抽卡。
 function draw() {
@@ -87,6 +96,11 @@ function next() {
     <!-- 提示 -->
     <p v-if="message" class="message">{{ message }}</p>
 
+    <!-- 无内容 Mod：提前说明（引擎不内置内容，不可能抽出天赋） -->
+    <p v-if="noContent" class="message">
+      （无可用天赋：当前没有 Mod 提供天赋数据。到「Mod 管理」启用 lifeRestart-data，或安装其它内容 Mod。数据源：{{ store.dataSource || '未知' }}）
+    </p>
+
     <!-- 天赋卡片 -->
     <div class="grid">
       <button
@@ -103,7 +117,7 @@ function next() {
       </button>
     </div>
 
-    <p v-if="drawn && store.talentPool.length === 0" class="message">（无可选天赋，请重新抽取）</p>
+    <p v-if="drawn && store.talentPool.length === 0 && !noContent" class="message">（无可选天赋，请重新抽取）</p>
   </div>
 </template>
 

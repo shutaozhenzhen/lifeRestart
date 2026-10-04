@@ -93,7 +93,8 @@ describe('life - initial/config', () => {
     // 重新初始化（新实例避免二次解析）。
     const life2 = await makeLife()
     // 天赋总数（await：vitest 已警告未 await 的 resolves 断言将在下个大版本失败）。
-    await expect(life2.initial()).resolves.toMatchObject({ TTLT: 12, TEVT: 6, TACHV: 3 })
+    // 9 = fixture 的 t_001~t_009（原先的 t_010~t_012「填充天赋」已按要求删除）。
+    await expect(life2.initial()).resolves.toMatchObject({ TTLT: 9, TEVT: 6, TACHV: 3 })
   })
 
   test('config sets limits', () => {

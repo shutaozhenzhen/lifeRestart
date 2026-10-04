@@ -15,7 +15,7 @@ import { describe, test, expect, beforeEach } from 'vitest'
 // 被测模块。
 import { runSimulation } from './simulation-runner.js'
 // 数据（fixture：毫秒级一局，测试快）。
-import { buildFixtureData } from './game-data.js'
+import { buildFixtureData } from '../test-utils/fixture-data.js'
 // 测试装置（内存 localStorage）。
 import { installLocalStorage } from '../test-utils/setup.js'
 
