@@ -410,8 +410,8 @@ function fsFetchTwoRoots({ modsRoot, dataRoot }) {
   ]
   // 请求。
   return async (url) => {
-    // 去掉前导 /。
-    const rel = String(url).replace(/^\/+/, '')
+    // 归一化：去掉前导 `/` 与 `./`（Pages 形态的 base 是 `./mods/`，相对路径要能落到根上）。
+    const rel = String(url).replace(/^\.?\//, '').replace(/^\.\//, '')
     // 找匹配的前缀。
     const hit = bases.find((b) => rel.startsWith(b.prefix))
     // 不匹配 → 404。
@@ -500,6 +500,40 @@ describe('mod-detail - 真实数据（仓库里的 mods/）', () => {
     // 而那是 sync-mods 的生成产物（干净克隆里没有），断言它等于把测试绑在生成物上。
     expect(detail.files).toContain('talents.json')
     expect(detail.files).toContain('age.json')
+    // 无错误。
+    expect(detail.errors).toEqual([])
+  }, 60000)
+
+  test('GitHub Pages 形态：相对 base（./mods/ + ./data/）下同样能读到', async () => {
+    // 线上（子路径部署）Vite 的 BASE_URL 是 './'，因此：
+    //   Mod 根 = './mods/'、数据目录 = './data/' —— 都是**相对**当前文档的路径。
+    // 这条用例把"相对 base 一路传到 fetch"钉住（写死 '/mods/' 会在线上 404）。
+    const layout = {
+      // Mod 目录 → 仓库的 mods/。
+      modsRoot: REPO_ROOT,
+      // 数据目录 → 前端的 public/。
+      dataRoot: join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public'),
+    }
+    // 读（与线上调用完全一致，只是 base 是相对的）。
+    const detail = await loadModDetail({
+      // Mod 名（目录名）。
+      name: 'lifeRestart-data',
+      // Pages 形态的 Mod 根。
+      baseUrl: './mods/',
+      // 按前缀分流到两个根目录（已支持 ./ 前缀）。
+      fetchImpl: fsFetchTwoRoots(layout),
+      // 数据目录由清单声明（Pages 下解析成 ./data/）。
+      dataFrom: 'data',
+      // 站点根（Pages 形态）。
+      siteBaseUrl: './',
+    })
+    // 读到了。
+    expect(detail.found).toBe(true)
+    // 数据前缀是相对的（不是 /data/）。
+    expect(detail.dataFrom).toBe('./data/')
+    // 五张表齐全。
+    expect(detail.present).toEqual(['age', 'talents', 'events', 'achievements', 'characters'])
+    expect(Object.keys(detail.data.talents).length).toBe(184)
     // 无错误。
     expect(detail.errors).toEqual([])
   }, 60000)

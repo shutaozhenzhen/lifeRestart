@@ -103,7 +103,9 @@ async function load() {
   // 加载完成。
   loading.value = false
   // 页面日志（可观测：读到了什么 / 出了什么问题）。
-  store.pushLog(result.found ? 'info' : 'warn', `[UI][mod-detail] ${result.found ? '读到' : '未找到'} ${name.value}：${result.present.join('/') || '无数据'}｜文件 ${result.files.length} 个${result.errors.length ? `｜错误 ${result.errors.length} 条` : ''}`)
+  // **带上第一条错误的正文**：只报"错误 1 条"的话，线上出问题时日志报告里查不出原因
+  // （2026-10 真实教训：Pages 404 那次报告里只有条数，得靠人肉猜）。
+  store.pushLog(result.found ? 'info' : 'warn', `[UI][mod-detail] ${result.found ? '读到' : '未找到'} ${name.value}：${result.present.join('/') || '无数据'}｜文件 ${result.files.length} 个｜${result.errors.length ? `${result.errors.length} 条错误：${result.errors[0]}` : '无错误'}`)
   // 默认页签落在**第一个非空数据集**上（没有数据时留在天赋）。
   const first = DATASETS.find((d) => (stats.value.totals[d.key] || 0) > 0)
   // 切换。

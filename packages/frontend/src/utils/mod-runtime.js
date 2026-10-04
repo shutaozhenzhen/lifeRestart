@@ -23,8 +23,32 @@ import { createModuleRegistry, createDenyRequire } from 'game-engine/src/mod/mod
 import { createAIClient } from 'game-engine/src/ai/ai-client.js'
 import { createAIMod } from 'game-engine/src/ai/ai-mod.js'
 
-// Mod 静态资源根路径（由 scripts/sync-mods.mjs 生成）。
-export const MODS_BASE_URL = '/mods/'
+// #resolveSitePath
+// 把"相对站点根的路径"解析成可直接请求的 URL 前缀（**必须拼 BASE_URL**）。
+//
+// ⚠️ 这里踩过一次线上坑（2026-10，GitHub Pages 实测）：Mod 根路径曾写死 `/mods/`。
+// dev 里站点根就是 `/`，一切正常；但 Pages 部署在**子路径** `/lifeRestart/` 下，
+// `/mods/...` 会请求到**域名根** → 404，整条 Mod 链路静默失效：
+//   · Mod 管理页"可用 Mod 0 个"（`index.json` 404，只剩内置清单的卡片）
+//   · 点「查看数据」全是"未找到"（`manifest.json` 404）
+//   · 游戏里的 Mod 数据与代码也不加载（只有 `data/` 的原版数据还在）
+// 判断标准很简单：**这个前缀会不会被 fetch** —— 会，就必须过这里。
+//
+// @param {string} rel - 相对站点根的路径（如 `mods/`、`data`）
+// @param {string} [baseUrl] - 站点基础路径（dev `/`、Pages `./`；缺省 import.meta.env.BASE_URL）
+// @returns {string} URL 前缀（以 / 结尾）
+export function resolveSitePath(rel, baseUrl) {
+  // 基础路径（与 utils/game-data.js 的 fetchOriginalData 同一套规则）。
+  const base = String(baseUrl !== undefined ? baseUrl : (import.meta.env.BASE_URL || '/'))
+  // 相对路径：**剥掉前导斜杠** —— 留着就变成"域名根"，正是上面那个坑。
+  const clean = String(rel).replace(/^\/+/, '')
+  // 拼（两侧都保证有 /）。
+  return `${base.endsWith('/') ? base : `${base}/`}${clean.endsWith('/') ? clean : `${clean}/`}`
+}
+
+// Mod 静态资源根路径（由 scripts/sync-mods.mjs 生成到 `<BASE_URL>mods/`）。
+// dev = `/mods/`，Pages = `./mods/`（相对当前文档，子路径部署下自动正确）。
+export const MODS_BASE_URL = resolveSitePath('mods/')
 
 // #NATIVE_AI_PROXY_PORT
 // 移动端（Capacitor 壳）里内置 Node 运行时监听的端口。

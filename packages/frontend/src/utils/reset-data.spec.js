@@ -13,10 +13,8 @@
 
 // vitest DSL。
 import { describe, test, expect } from 'vitest'
-// node 文件/路径（源码扫描守卫）。
-import { readFileSync, readdirSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { dirname, join, extname } from 'node:path'
+// 源码扫描（守卫用；目录遍历收敛在 test-utils/source-scan.js）。
+import { readSourceFiles } from '../test-utils/source-scan.js'
 // 被测模块。
 import { APP_STORAGE_KEYS, ENGINE_SAVE_KEYS, resetAppData, resetPlan, resetSummary } from './reset-data.js'
 // 引擎内置参数（守卫用：storage 参数一个都不能漏）。
@@ -24,11 +22,9 @@ import { BUILTIN_PARAMS } from 'game-engine/src/params/params.js'
 // 内存 Mod 存储（"已安装 Mod" 场景）。
 import { createMemoryModStore } from './mod-store.js'
 
-// 源码目录（src）。
-const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
+// 源码目录（src）在 test-utils/source-scan.js 里。
 
-// #memStorage
-// 内存存储适配器（带 removeItem，语义与 localStorage 一致）。
+// #memStorage// 内存存储适配器（带 removeItem，语义与 localStorage 一致）。
 //
 // @param {object} [initial] - 初始数据
 // @returns {object} { storage, data }
@@ -44,35 +40,6 @@ function memStorage(initial = {}) {
   }
   // 返回。
   return { storage, data }
-}
-
-// #walk
-// 递归列出目录下的 .js / .vue 文件（跳过测试与测试装置）。
-//
-// @param {string} dir - 目录
-// @returns {string[]} 文件绝对路径
-function walk(dir) {
-  // 结果。
-  const out = []
-  // 逐项。
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    // 全路径。
-    const full = join(dir, entry.name)
-    // 子目录：跳过测试装置目录。
-    if (entry.isDirectory()) {
-      if (entry.name === 'test-utils') continue
-      out.push(...walk(full))
-      continue
-    }
-    // 只收 js / vue。
-    if (!['.js', '.vue'].includes(extname(entry.name))) continue
-    // 跳过 spec。
-    if (entry.name.endsWith('.spec.js')) continue
-    // 收。
-    out.push(full)
-  }
-  // 返回。
-  return out
 }
 
 describe('reset-data - 清单', () => {
@@ -181,13 +148,11 @@ describe('reset-data - 清单不许漏（守卫）', () => {
     const known = new Set(resetPlan().map((i) => i.key))
     // 源码里找到的键。
     const found = new Set()
-    // 扫描所有非测试的 js/vue。
-    for (const file of walk(SRC_DIR)) {
-      // 内容。
-      const text = readFileSync(file, 'utf8')
+    // 扫描所有非测试的 js/vue（目录遍历在 test-utils/source-scan.js）。
+    for (const { text } of readSourceFiles()) {
       // `getItem('x')` / `setItem('x', …)` / `removeItem('x')`。
       for (const m of text.matchAll(/\.(?:get|set|remove)Item\(\s*'([^']+)'/g)) {
-        // 记下（附文件，失败信息更有用）。
+        // 记下（失败信息里能看出是哪个键）。
         found.add(`${m[1]}`)
       }
     }

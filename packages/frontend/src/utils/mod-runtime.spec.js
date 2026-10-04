@@ -12,7 +12,9 @@
 // vitest DSL。
 import { describe, test, expect } from 'vitest'
 // 被测模块。
-import { createBrowserAIConfig, discoverMods, executeModCodes, loadModBundle, readAIConfig, resolveAIProxyBase, NATIVE_AI_PROXY_PORT } from './mod-runtime.js'
+import { createBrowserAIConfig, discoverMods, executeModCodes, loadModBundle, readAIConfig, resolveAIProxyBase, resolveSitePath, MODS_BASE_URL, NATIVE_AI_PROXY_PORT } from './mod-runtime.js'
+// 源码扫描（守卫用）。
+import { readSourceFiles } from '../test-utils/source-scan.js'
 import { DEFAULT_MOD_LIST, buildModCatalog, enabledModNames } from './mod-catalog.js'
 import { buildSyncPlan, syncMods, writeSync } from '../../scripts/sync-mods.mjs'
 // 引擎（造真实 Life 验证参数注册）。
@@ -334,5 +336,81 @@ describe('sync-mods - 同步计划与写盘', () => {
       // 清理。
       rmSync(outDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('Mod 根路径必须跟着 BASE_URL（子路径部署的坑）', () => {
+  test('resolveSitePath：dev / Pages / 子路径三种形态', () => {
+    // dev（站点根就是 /）。
+    expect(resolveSitePath('mods/')).toBe('/mods/')
+    expect(resolveSitePath('mods/', '/')).toBe('/mods/')
+    // GitHub Pages 构建：base './'（**相对**，子路径下自动正确）。
+    expect(resolveSitePath('mods/', './')).toBe('./mods/')
+    // 用户页/自定义子路径（绝对子路径也对）。
+    expect(resolveSitePath('mods', '/lifeRestart/')).toBe('/lifeRestart/mods/')
+    expect(resolveSitePath('data', './')).toBe('./data/')
+    // 空 base 也要能用（退化成站点根）。
+    expect(resolveSitePath('mods/', '')).toBe('/mods/')
+  })
+
+  test('前导斜杠会被剥掉 —— 这正是线上 404 的成因', () => {
+    // 写死 `/mods/`（绝对路径）在子路径部署下会打到域名根。
+    expect(resolveSitePath('/mods/', './')).toBe('./mods/')
+    expect(resolveSitePath('//mods/', '/lifeRestart/')).toBe('/lifeRestart/mods/')
+  })
+
+  test('语义验证：相对 base 解析到子路径，绝对路径解析到域名根', () => {
+    // Pages 的实际形态：文档在 https://<user>.github.io/lifeRestart/。
+    const doc = 'https://shutaozhenzhen.github.io/lifeRestart/'
+    // 我们的写法（相对）→ 落在子路径下（部署里文件就在这里）。
+    expect(new URL(resolveSitePath('mods/', './') + 'index.json', doc).pathname).toBe('/lifeRestart/mods/index.json')
+    // 旧写法（绝对）→ 落到域名根，那里什么都没有（2026-10 线上就是这个 404）。
+    expect(new URL('/mods/' + 'index.json', doc).pathname).toBe('/mods/index.json')
+  })
+
+  test('MODS_BASE_URL 由 BASE_URL 推导，不是写死的字面量', () => {
+    // 与同一个函数算出来的一致（改 BASE_URL 就会跟着变）。
+    expect(MODS_BASE_URL).toBe(resolveSitePath('mods/'))
+    // 以当前 BASE_URL 开头（dev/PAGES 都对）。
+    const base = import.meta.env.BASE_URL || '/'
+    expect(MODS_BASE_URL.startsWith(base.endsWith('/') ? base : `${base}/`)).toBe(true)
+    // 也必须以 /mods/ 结尾。
+    expect(MODS_BASE_URL.endsWith('mods/')).toBe(true)
+  })
+
+  test('源码守卫：不许再出现写死的绝对 mods 路径', () => {
+    // 扫 src（跳过 spec 与 test-utils）。
+    const hits = []
+    // 找 '…/mods/…' / "…/mods/…" 这类**单双引号**字面量。
+    //   · 不只匹配整串 `/mods/`：`'/mods/index.json'` 才是真实写法（第一版漏过它）
+    //   · 含 `:` 的跳过（路由路径 `/mods/:name` 是合法的，不是 fetch 前缀）
+    //   · 反引号不看（`router.push(\`/mods/${x}\`)` 也是路由，不是请求）
+    for (const { file, text } of readSourceFiles()) {
+      // 逐个候选。
+      for (const m of text.matchAll(/['"](\/mods\/[^'"]*)['"]/g)) {
+        // 路由参数（`/mods/:name`）跳过。
+        if (m[1].includes(':')) continue
+        // 记下（带文件与原文，失败信息可读）。
+        hits.push(`${file}: ${m[0]}`)
+      }
+    }
+    // 一个都不许有：会 fetch 的前缀必须过 resolveSitePath。
+    expect(hits, `这些地方写死了绝对 mods 路径（子路径部署会 404）：\n${hits.join('\n')}`).toEqual([])
+  })
+
+  test('源码守卫：调 createFetchSource 必须显式给 baseUrl', () => {
+    // 引擎那个源有个历史默认值 `baseUrl = '/mods/'`（CLI/测试用）—— 浏览器里若有人
+    // 不传 baseUrl 直接用它，就会重演同一个 404。前端所有调用必须显式传。
+    const misses = []
+    // 扫 src。
+    for (const { file, text } of readSourceFiles()) {
+      // 逐个调用点。
+      for (const m of text.matchAll(/createFetchSource\(\s*\{([^}]*)\}/g)) {
+        // 参数对象里必须有 baseUrl。
+        if (!/\bbaseUrl\b/.test(m[1])) misses.push(`${file}: createFetchSource({${m[1].trim()}}`)
+      }
+    }
+    // 断言。
+    expect(misses, `这些调用没给 baseUrl（会退到引擎默认的绝对路径）：\n${misses.join('\n')}`).toEqual([])
   })
 })

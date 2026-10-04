@@ -18,7 +18,7 @@
 import { loadMod, DATA_FILES, CODE_FILE } from 'game-engine/src/mod/loader.js'
 import { validateManifest, manifestTargets, manifestEntry, manifestDeterministic, manifestModules } from 'game-engine/src/mod/manifest.js'
 // 浏览器侧文件源（HTTP + 本地已安装）。
-import { createBrowserModSource, MODS_BASE_URL } from './mod-runtime.js'
+import { createBrowserModSource, MODS_BASE_URL, resolveSitePath } from './mod-runtime.js'
 // HTTP 文件源（"数据目录"兜底用）。
 import { createFetchSource } from 'game-engine/src/mod/source-fetch.js'
 // 内置 Mod 清单（Data Mod 的 `dataFrom`：数据在站点另一个目录）。
@@ -27,9 +27,11 @@ import { DEFAULT_MOD_LIST } from './mod-catalog.js'
 // #resolveDataBase
 // 把 `dataFrom`（相对站点根的目录名，如 `data`）解析成可直接请求的 URL 前缀。
 //
-// 为什么要拼 BASE_URL：GitHub Pages 部署在子路径（`/lifeRestart/`）下，
+// 为什么必须拼 BASE_URL：GitHub Pages 部署在子路径（`/lifeRestart/`）下，
 // 站点根的 `/data/...` 会 404；`import.meta.env.BASE_URL` 在 dev 是 `/`、
 // Pages 构建是 `./`（与 utils/game-data.js 的 fetchOriginalData 同一套规则）。
+// 拼接规则收敛在 mod-runtime.js 的 `resolveSitePath`（Mod 根路径用的是同一个 —— 
+// 那个函数上记着"写死绝对路径导致线上 404"的完整教训）。
 //
 // @param {string|null} dataFrom - 相对目录（null = 不使用）
 // @param {string} [baseUrl] - 站点基础路径（缺省 import.meta.env.BASE_URL）
@@ -37,12 +39,8 @@ import { DEFAULT_MOD_LIST } from './mod-catalog.js'
 export function resolveDataBase(dataFrom, baseUrl) {
   // 没声明。
   if (!dataFrom) return null
-  // 基础路径（node 环境 / 单测里 import.meta.env 可能不存在）。
-  const base = String(baseUrl !== undefined ? baseUrl : (import.meta.env?.BASE_URL || '/'))
-  // 相对目录（去掉前导斜杠）。
-  const rel = String(dataFrom).replace(/^\/+/, '')
-  // 拼（两侧都保证有 /）。
-  return `${base.endsWith('/') ? base : `${base}/`}${rel.endsWith('/') ? rel : `${rel}/`}`
+  // 走共用实现。
+  return resolveSitePath(dataFrom, baseUrl)
 }
 
 // #createDataFallbackSource
