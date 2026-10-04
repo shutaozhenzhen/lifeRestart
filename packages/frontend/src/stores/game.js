@@ -412,11 +412,13 @@ export const useGameStore = defineStore('game', {
     // @returns {void}
     applyCharacter(chara) {
       // 记录名人本体（页面顶部显示"名人：曹操"）。
+      // 天赋保留**完整对象**（description/grade/effect/status/exclusive/replacement）——
+      // 名人页与属性页都要显示天赋详情，只留 {id,name} 就没得显示了。
       this.character = {
         id: chara.id,
         name: chara.name,
         property: { ...chara.property },
-        talent: chara.talent.map(t => ({ id: t.id, name: t.name })),
+        talent: chara.talent.map(t => ({ ...t })),
       }
       // 基础属性：数据里是字符串，统一转数字（NaN 兜底 0）。
       const toNum = (v) => {

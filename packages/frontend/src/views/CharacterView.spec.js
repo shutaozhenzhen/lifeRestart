@@ -180,6 +180,54 @@ describe('CharacterView', () => {
     expect(store.character.name).toBe('我')
   })
 
+  test('选定名人后：显示 TA 的天赋详情（星级 / 描述 / 效果 / 标记）', async () => {
+    // 准备。
+    const store = await readyStore()
+    // 挂载。
+    const { wrapper } = mountView(CharacterView)
+    // 抽 + 选第一位。
+    await findButton(wrapper, '抽取名人').trigger('click')
+    await wrapper.findAll('.card')[0].trigger('click')
+    // 详情列表出现（公共组件 TalentDetailList）。
+    const list = wrapper.find('.talent-list')
+    expect(list.exists()).toBe(true)
+    // 标题带名人名与个数。
+    expect(list.find('.heading').text()).toContain(store.character.name)
+    expect(list.find('.heading').text()).toContain(`${store.character.talent.length} 个`)
+    // 逐条与 store 里的天赋一一对应，且显示的是**真实描述**（不是只显示名字）。
+    const rows = list.findAll('.row')
+    expect(rows.length).toBe(store.character.talent.length)
+    for (let i = 0; i < rows.length; i++) {
+      // 对应的天赋。
+      const t = store.character.talent[i]
+      // 名称。
+      expect(rows[i].text()).toContain(t.name)
+      // 星级文案（如 "1 星"）。
+      expect(rows[i].text()).toContain(`${t.grade} 星`)
+      // 描述。
+      if (t.description) expect(rows[i].text()).toContain(t.description)
+      // 效果（如 "效果：智力 +1"）。
+      if (t.effect) expect(rows[i].text()).toContain('效果：')
+      // 有条件的天赋要有标记。
+      if (t.condition) expect(rows[i].text()).toContain('有条件')
+    }
+    // 卡片上的天赋胶囊：带星级，且悬浮提示里能读到描述。
+    const chip = wrapper.findAll('.talent-chip')[0]
+    expect(chip.text()).toContain('★')
+    expect(chip.attributes('title')).toContain('星')
+  })
+
+  test('未选名人时不显示天赋详情列表', async () => {
+    // 准备。
+    await readyStore()
+    // 挂载。
+    const { wrapper } = mountView(CharacterView)
+    // 抽但不选。
+    await findButton(wrapper, '抽取名人').trigger('click')
+    // 没有详情列表。
+    expect(wrapper.find('.talent-list').exists()).toBe(false)
+  })
+
   test('无内容：抽之前就提示"无可用名人"，抽取按钮禁用', async () => {
     // 准备：空内容（所有 Mod 关闭）。
     await readyStore(buildEmptyData())

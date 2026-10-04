@@ -206,6 +206,11 @@ describe('PropertyView', () => {
     expect(totals).toHaveLength(4)
     expect(totals[0]).toContain(String(store.finalProperties.CHR))
     expect(totals[0]).toContain(`含名人 ${store.characterBase.CHR}`)
+    // 名人天赋详情也在这一页（额外点数的来源，得能对上账）。
+    const talentList = wrapper.find('.talent-list')
+    expect(talentList.exists()).toBe(true)
+    expect(talentList.find('.heading').text()).toContain(store.character.name)
+    expect(talentList.findAll('.row').length).toBe(store.character.talent.length)
     // 额外点数为 0 时，剩余也是 0 → 「下一步」直接进轨迹页（不需要再分配）。
     expect(store.leftPoints).toBe(0)
     await findButton(wrapper, '下一步').trigger('click')

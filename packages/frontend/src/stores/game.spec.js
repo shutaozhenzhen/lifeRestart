@@ -747,6 +747,9 @@ describe('gameStore 名人模式', () => {
     ])
     // 已选天赋 = 名人自带天赋的 ID。
     expect(store.selectedTalents).toEqual(first.talent.map(t => String(t.id)))
+    // 名人对象里**保留了完整天赋对象**（页面要显示描述/星级/效果，只留 {id,name} 就没得显示）。
+    expect(store.character.talent[0]).toHaveProperty('description')
+    expect(store.character.talent[0]).toHaveProperty('grade')
     // 额外点数 = 天赋带来的加成（默认 20 点已被名人属性取代，不能重复算）。
     expect(store.characterExtraPoints).toBeGreaterThanOrEqual(0)
     // 天赋已确认（begin 不再重复跑替换链）。

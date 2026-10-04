@@ -3,6 +3,8 @@
 // 四个属性（颜值/智力/体质/家境）通过 ± 按钮分配，可随机分配，剩余点数实时显示。
 import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
+// 名人天赋详情（与名人选择页同一个组件，保证两处文案一致）。
+import TalentDetailList from '../components/TalentDetailList.vue'
 
 // 路由。
 const router = useRouter()
@@ -80,6 +82,13 @@ function next() {
       <button class="btn" @click="reset">重置</button>
       <button class="btn primary" @click="next">下一步 →</button>
     </div>
+
+    <!-- 名人模式：这一局带的天赋（决定"额外点数"从哪来，所以放在这一页可见） -->
+    <TalentDetailList
+      v-if="store.character"
+      :talents="store.character.talent"
+      :heading="`${store.character.name} 的天赋（额外点数来源）`"
+    />
   </div>
 </template>
 

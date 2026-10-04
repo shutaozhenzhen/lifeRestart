@@ -11,6 +11,10 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
+// 天赋详情列表（公共组件：与属性分配页显示的是同一份文案）。
+import TalentDetailList from '../components/TalentDetailList.vue'
+// 天赋胶囊的悬浮提示（星级 / 描述 / 效果 / 点数 / 标记）。
+import { talentTooltip } from '../utils/talent-view.js'
 
 // 路由。
 const router = useRouter()
@@ -128,8 +132,11 @@ function next() {
           颜值 {{ c.property?.CHR }} · 智力 {{ c.property?.INT }}<br />
           体质 {{ c.property?.STR }} · 家境 {{ c.property?.MNY }}
         </span>
+        <!-- 自带天赋：显示星级 + 名称，鼠标悬停看描述/效果/点数（下方选定后有完整列表） -->
         <span class="talents">
-          <span v-for="t in c.talent" :key="t.id" class="talent-chip">{{ t.name }}</span>
+          <span v-for="t in c.talent" :key="t.id" class="talent-chip" :title="talentTooltip(t)">
+            <span class="chip-grade">{{ t.grade }}★</span>{{ t.name }}
+          </span>
         </span>
       </button>
 
@@ -146,6 +153,13 @@ function next() {
     </div>
 
     <p v-if="drawn && store.characters.length === 0 && !noContent" class="message">（这一批没有候选人，再点一次「换一批」）</p>
+
+    <!-- 选定名人后：天赋详情（星级 / 描述 / 属性效果 / 额外点数 / 标记） -->
+    <TalentDetailList
+      v-if="store.character"
+      :talents="store.character.talent"
+      :heading="`${store.character.name} 的天赋`"
+    />
   </div>
 </template>
 
@@ -248,5 +262,10 @@ function next() {
   border-radius: 10px;
   background: #0f3460;
   color: #cfe1ff;
+}
+/* 胶囊里的星级（金/紫与 TalentView 一致） */
+.chip-grade {
+  color: #ffd700;
+  margin-right: 3px;
 }
 </style>

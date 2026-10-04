@@ -27,6 +27,11 @@ import { useGameStore } from '../stores/game.js'
 // 测试装置（真实数据 / fixture 降级 / 安装内存 localStorage）。
 import { installLocalStorage, stubFetchOk, stubFetchFail, stubFetchReal } from '../test-utils/setup.js'
 
+// #FLOW_SEED
+// 主流程回归用的**固定种子**：真实数据 + 固定种子 → 同一条人生，结果可复现。
+// 不固定的话，"随机到短命的一局"会让总结页出现「—」、轨迹条数不够 → 偶发失败。
+const FLOW_SEED = 20261004
+
 // #findButton
 // 按可见文本找一个按钮（中文标签稳定，避免给页面加测试专用属性）。
 //
@@ -105,6 +110,10 @@ describe('全流程集成', () => {
 
     // ── 阶段 1：主页开始新人生 ──
     expect(router.currentRoute.value.path).toBe('/')
+    // **固定种子**：这一条是主流程回归，成败不该由"随机到的人生有多长"决定。
+    // 2026-10 实测过一次偶发失败（随机到短命的一局 → 总结页出现「—」、轨迹条数不够）。
+    // 顺便也就把「填旧种子 → 复现」这条入口跑了一遍。
+    await wrapper.find('#seed-input').setValue(String(FLOW_SEED))
     // 点「立即重开」。
     await findButton(wrapper, '立即重开').trigger('click')
     // 等数据加载 + 引擎初始化 + 跳转。
@@ -113,8 +122,8 @@ describe('全流程集成', () => {
     expect(store.isReady).toBe(true)
     // 数据源是原版数据（真实数据文件）。
     expect(store.dataSource).toContain('lifeRestart-data')
-    // 种子已分配（真实数据下同样每局一颗）。
-    expect(Number.isInteger(store.seed)).toBe(true)
+    // 种子就是填进去的那颗（可复现）。
+    expect(store.seed).toBe(FLOW_SEED)
     // 已跳天赋页。
     expect(router.currentRoute.value.path).toBe('/talent')
 
