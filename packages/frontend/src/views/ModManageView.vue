@@ -200,7 +200,7 @@ async function download(mod) {
       return
     }
     // 成功提示（大小按 zip 字节算）。
-    downloadMessage.value = `已下载 ${r.filename}（${r.count} 个文件，${(r.bytes.length / 1024).toFixed(1)} KB）${r.system ? ' · 系统 Mod：这个包可作备份/改造，装回来前请先改 manifest.name（系统名被保留）' : ''}`
+    downloadMessage.value = `已下载 ${r.filename}（${r.count} 个文件，${(r.bytes.length / 1024).toFixed(1)} KB）${r.system ? ' · 系统 Mod：这个包可作备份/改造，也能直接重新上传装回来（会再确认一次）' : ''}`
     // 日志（成功路径）。
     gameStore.pushLog('info', `[UI][mods] 已下载 ${r.filename}（${r.count} 个文件，${r.bytes.length} 字节${r.dataFrom ? `，数据来自 ${r.dataFrom}` : ''}）`)
   } catch (e) {
@@ -585,7 +585,7 @@ function back() {
         <button
           class="btn download"
           :disabled="downloadBusy === (mod.dir || mod.name)"
-          :title="mod.system ? '系统 Mod：zip 可作备份/改造，装回来前先改 manifest.name' : '把这个 Mod 打包成 zip 下载'"
+          :title="mod.system ? '系统 Mod：zip 可作备份/改造，重新上传时二次确认即可装回来' : '把这个 Mod 打包成 zip 下载'"
           @click="download(mod)"
         >{{ downloadBusy === (mod.dir || mod.name) ? '打包中…' : '⬇ 下载 zip' }}</button>
         <button class="btn toggle" :class="{ on: mod.enabled }" @click="mod.name === 'ai-mod' ? toggleAI(mod) : (toggle(mod), requestPermission(mod))">

@@ -249,7 +249,7 @@ async function download() {
       return
     }
     // 成功。
-    downloadMessage.value = `已下载 ${r.filename}（${r.count} 个文件，${(r.bytes.length / 1024).toFixed(1)} KB）${r.system ? ' · 系统 Mod：包可作备份/改造，装回来前请先改 manifest.name（系统名被保留）' : ''}`
+    downloadMessage.value = `已下载 ${r.filename}（${r.count} 个文件，${(r.bytes.length / 1024).toFixed(1)} KB）${r.system ? ' · 系统 Mod：包可作备份/改造，也能直接重新上传装回来（会再确认一次）' : ''}`
     // 日志。
     store.pushLog('info', `[UI][mod-detail] 已下载 ${r.filename}（${r.count} 个文件，${r.bytes.length} 字节${r.dataFrom ? `，数据来自 ${r.dataFrom}` : ''}）`)
   } catch (e) {
@@ -274,7 +274,7 @@ async function download() {
       <button
         class="btn download"
         :disabled="loading || downloadBusy"
-        :title="detail?.manifest?.system ? '系统 Mod：zip 可作备份/改造，装回来前先改 manifest.name' : '把这个 Mod 打包成 zip 下载'"
+        :title="detail?.manifest?.system ? '系统 Mod：zip 可作备份/改造，重新上传时二次确认即可装回来' : '把这个 Mod 打包成 zip 下载'"
         @click="download"
       >{{ downloadBusy ? '打包中…' : '⬇ 下载 zip' }}</button>
     </div>
