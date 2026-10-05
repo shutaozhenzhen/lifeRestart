@@ -1,7 +1,13 @@
 /**
  * 内置 Data Mod（Step 15）
  *
- * 原版 JSON 数据打包为系统 Mod（system: true，不可删除只能禁用）。
+ * 原版 JSON 数据打包为系统 Mod（system: true）。
+ *
+ * `system: true` 的含义（2026-10 明确，别再理解成"不可删"）：
+ *   · **zip 不能未经确认覆盖它**（`SYSTEM_MOD_NAMES` 默认拒绝，用户二次确认后放行）
+ *   · 界面上它属于"系统内置"，但**可以被完全移除**（从本机目录移除、不再加载、本地副本一并删），
+ *     之后能靠 `restore`（恢复预装）或**重新上传 zip**取回 —— 见 `frontend/src/utils/mods-state.js`
+ *     的 `isModRemoved()` 与 `mod-runtime.js` 的 `SYSTEM_MOD_NAMES`
  * 数据源：原版 template/public/data/{zh-cn}/ 的 JSON 产物，
  * 构建期用 convertLegacy 把旧语法条件转为新语法。
  *
@@ -22,7 +28,7 @@ export const DATA_MOD_MANIFEST = {
   name: 'lifeRestart-data',
   version: '1.0.0',
   author: 'lifeRestart',
-  description: '原版数据（系统内置，不可删除）',
+  description: '原版数据（系统内置，可移除/可恢复）',
   system: true,
   permissions: [],
 }

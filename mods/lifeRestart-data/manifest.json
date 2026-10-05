@@ -2,7 +2,7 @@
   "name": "lifeRestart-data",
   "version": "1.0.0",
   "author": "lifeRestart",
-  "description": "原版数据（系统内置，不可删除）",
+  "description": "原版数据（系统内置，可移除/可恢复）",
   "system": true,
   "permissions": []
 }

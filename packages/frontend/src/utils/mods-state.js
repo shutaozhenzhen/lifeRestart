@@ -83,3 +83,50 @@ export function applyModsState(modList, state) {
     // 应用保存的启用状态。
     .map(m => ({ ...m, enabled: (state?.enabled || {})[m.name] !== undefined ? state.enabled[m.name] : m.enabled }))
 }
+
+// #isModRemoved
+// 某个 Mod 是否已被「完全移除」（localStorage 键 `modsState` 的 `removed` 列表）。
+//
+// 为什么需要它（2026-10 补）：`removed` 原先只用来**从界面上过滤**，
+// 游戏路径只看 `enabled` —— 于是"把内容 Mod 完全移除"之后，游戏仍会按默认值把它加载回来：
+// 界面说已移除、实际还在用它的内容。现在**移除即不加载**，由这一个判据统一表达：
+//   · `game-data.js` 的 `loadModState()` 命中 removed 直接返回 false（内容 Mod 被移除 → 空内容）
+//   · Mod 管理页的「已移除的 Mod」面板用它列出可恢复项
+//
+// @param {string} name - Mod 名（目录名/清单名）
+// @param {object} [storage] - storage 适配器（缺省 localStorage）
+// @returns {boolean} 是否已被完全移除
+export function isModRemoved(name, storage) {
+  // 解析失败/无记录都算"没移除"。
+  try {
+    // 读。
+    const parsed = JSON.parse((storage || localStorage).getItem('modsState'))
+    // 命中。
+    return (parsed?.removed || []).includes(name)
+  } catch {
+    // 没移除。
+    return false
+  }
+}
+
+// #addRemoved
+// 追加一条"已移除"记录（去重；返回**新数组**，不改入参）。
+//
+// @param {string[]} removed - 现有列表
+// @param {string} name - Mod 名
+// @returns {string[]} 新列表
+export function addRemoved(removed, name) {
+  // 去重追加。
+  return removed.includes(name) ? [...removed] : [...removed, name]
+}
+
+// #dropRemoved
+// 从"已移除"记录里删掉一条（返回**新数组**，不改入参）——「恢复预装 / 重新上传」用。
+//
+// @param {string[]} removed - 现有列表
+// @param {string} name - Mod 名
+// @returns {string[]} 新列表
+export function dropRemoved(removed, name) {
+  // 过滤。
+  return removed.filter(n => n !== name)
+}

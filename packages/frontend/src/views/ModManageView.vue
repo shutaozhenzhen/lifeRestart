@@ -19,7 +19,7 @@ import { getModStore } from '../utils/mod-store.js'
 // 游戏 store（页面操作行为日志：进入页面/按钮操作都记入日志面板）。
 import { useGameStore } from '../stores/game.js'
 // Mod 启停/删除状态持久化（纯函数，可测试）。
-import { loadModsState, saveModsState, applyModsState } from '../utils/mods-state.js'
+import { loadModsState, saveModsState, applyModsState, addRemoved, dropRemoved } from '../utils/mods-state.js'
 
 // 路由。
 const router = useRouter()
@@ -84,8 +84,24 @@ async function onZipPicked(event) {
   try {
     // 读字节。
     const bytes = new Uint8Array(await file.arrayBuffer())
-    // 解析 + 写入本地存储（解析/校验/安全防护都在引擎 zip 模块里）。
-    const r = await installModFromZip({ bytes, store: modStore.value })
+    // 第一遍：解析 + 写入本地存储（解析/校验/安全防护都在引擎 zip 模块里）。
+    let r = await installModFromZip({ bytes, store: modStore.value })
+    // 系统 Mod 名：默认被拒（防"随手一个 zip 静默顶掉数据源 / AI 通道"）。
+    // 这里问一句再重试 —— 这正是「完全移除 → 重新上传装回来」需要的能力。
+    if (!r.ok && r.system) {
+      // 二次确认（讲清这是在覆盖系统预装）。
+      const yes = confirm(`这个包是系统预装 Mod「${r.name}」。\n\n装回去会用你上传的文件**覆盖**它（数据源 / AI 通道都由它提供）。\n确定要装吗？`)
+      // 用户拒绝。
+      if (!yes) {
+        // 反馈 + 日志。
+        installError.value = `已取消安装系统 Mod ${r.name}`
+        gameStore.pushLog('warn', `[UI][mods] 取消安装系统 Mod ${r.name}（需二次确认）`)
+        // 结束。
+        return
+      }
+      // 确认后重试（显式放行系统名）。
+      r = await installModFromZip({ bytes, store: modStore.value, allowSystem: true })
+    }
     // 失败：把原因显示出来（不合格的 zip 必须有可读反馈）。
     if (!r.ok) {
       // 展示。
@@ -97,8 +113,17 @@ async function onZipPicked(event) {
     }
     // 成功提示 + 日志。
     installError.value = ''
-    installMessage.value = `已安装 ${r.name}（${r.files} 个文件）`
-    gameStore.pushLog('info', `[UI][mods] 已安装 Mod ${r.name}（来自 ${file.name}，${r.files} 个文件）`)
+    installMessage.value = `已安装 ${r.name}（${r.files} 个文件）${r.system ? ' · 覆盖了系统预装 Mod' : ''}`
+    gameStore.pushLog('info', `[UI][mods] 已安装 Mod ${r.name}（来自 ${file.name}，${r.files} 个文件${r.system ? '，覆盖系统预装' : ''}）`)
+    // 它可能正在「已移除」里 —— 上传成功就必须清掉标记，否则装完还是看不见（用户会以为没装上）。
+    if (removedMods.value.includes(r.name)) {
+      // 清标记（纯函数返回新数组）。
+      removedMods.value = dropRemoved(removedMods.value, r.name)
+      // 保存。
+      saveModsState({ mods: mods.value, removed: removedMods.value })
+      // 日志。
+      gameStore.pushLog('info', `[UI][mods] ${r.name} 原在「已移除」列表里，上传后已自动恢复`)
+    }
     // 警告（路径/尺寸/二进制）逐条记。
     for (const w of r.errors) gameStore.pushLog('warn', `[UI][mods] ${w}`)
     // 刷新目录。
@@ -393,7 +418,7 @@ function openDetail(mod) {
 
 // 切换启用状态。
 function toggle(mod) {
-  // 系统 Mod 只可禁用不可删除，原型允许切换。
+  // 启停与"移除"是两件事：移除过的 Mod 不在目录里，这里只管还在目录里的。
   mod.enabled = !mod.enabled
   // 页面日志。
   gameStore.pushLog('info', `[UI][mods] ${mod.name} ${mod.enabled ? '启用' : '禁用'}`)
@@ -401,24 +426,88 @@ function toggle(mod) {
   saveModsState({ mods: mods.value, removed: removedMods.value })
 }
 
-// 删除 Mod（系统 Mod 禁止）。
-function remove(mod) {
-  // 系统 Mod 不可删。
-  if (mod.system) return
-  // 确认删除。
-  if (confirm(`删除 Mod ${mod.name}？`)) {
-    // 移除。
-    mods.value = mods.value.filter(m => m !== mod)
-    // 记录已删除（持久化，刷新后不再出现）。
-    removedMods.value.push(mod.name)
-    // 保存状态（纯函数）。
-    saveModsState({ mods: mods.value, removed: removedMods.value })
-    // 页面日志。
-    gameStore.pushLog('info', `[UI][mods] 已删除 Mod ${mod.name}`)
-  } else {
+// #remove
+// **完全移除**一个 Mod（预装/系统 Mod 一视同仁）：
+//   1. 删掉本地安装的副本（"完全"：浏览器里不留东西）
+//   2. 记入 `removed`（持久化）——**同时表示"不加载"**（`mods-state.isModRemoved` 被
+//      `game-data.loadModState` 用；内容 Mod 被移除后游戏确实是空内容，不是"界面假象"）
+//   3. 从当前目录移除 + 刷新
+//
+// 老实说清边界：**服务器上的预装文件删不掉**（静态站，浏览器没有那个权限），
+// 所以"完全移除"是**本机视角**的彻底移除 —— 而这也正是「已移除的 Mod」面板能「恢复」的原因。
+//
+// @param {object} mod - 目录项
+// @returns {Promise<void>}
+async function remove(mod) {
+  // 后果说明（内容 Mod 要单独讲清楚：移除后游戏没有内容）。
+  const why = mod.name === 'lifeRestart-data'
+    ? '它是内容 Mod：移除后游戏将没有内容（天赋/事件/成就/名人全空），并在主页数据源标出原因。'
+    : mod.system
+      ? '这是系统预装 Mod，移除后相关能力（AI 通道等）失效。'
+      : '移除后它不再出现在目录里、也不会被加载。'
+  // 二次确认（服务器文件不会删，这一点必须让用户知道，否则会以为"删不干净"）。
+  if (!confirm(`完全移除 Mod ${mod.name}？\n\n${why}\n\n（服务器上的文件不会被删，只是这台浏览器不再使用它；随时可在「已移除的 Mod」里恢复，或重新上传 zip）`)) {
     // 页面日志（取消）。
-    gameStore.pushLog('debug', `[UI][mods] 取消删除 ${mod.name}`)
+    gameStore.pushLog('debug', `[UI][mods] 取消完全移除 ${mod.name}`)
+    // 结束。
+    return
   }
+  // 本地安装的副本一并删掉。
+  if (installedNames.value.includes(mod.name)) {
+    // 删（只删浏览器里的副本）。
+    await modStore.value?.remove(mod.name)
+    // 日志。
+    gameStore.pushLog('info', `[UI][mods] 已删除本地安装的 ${mod.name}（随完全移除一并清理）`)
+  }
+  // 记入移除（持久化，去重；纯函数返回新数组）。
+  removedMods.value = addRemoved(removedMods.value, mod.name)
+  // 从当前目录移除（刷新后也会因 removed 被过滤）。
+  mods.value = mods.value.filter(m => m !== mod)
+  // 保存状态（纯函数）。
+  saveModsState({ mods: mods.value, removed: removedMods.value })
+  // 页面日志。
+  gameStore.pushLog('info', `[UI][mods] 已完全移除 Mod ${mod.name}（服务器文件未删，可恢复/重新上传）`)
+  // 刷新目录（本地已安装列表也要跟着更新）。
+  await refreshCatalog()
+}
+
+// #restore
+// 恢复一个被完全移除的 Mod（**预装 Mod 的回头路**：服务器文件从来没被删，清掉标记即可）。
+//
+// @param {string} name - Mod 名
+// @returns {Promise<void>}
+async function restore(name) {
+  // 确认。
+  if (!confirm(`恢复 Mod ${name}？（它只是从这台浏览器的目录里被移除）`)) return
+  // 清标记（纯函数返回新数组）。
+  removedMods.value = dropRemoved(removedMods.value, name)
+  // 保存。
+  saveModsState({ mods: mods.value, removed: removedMods.value })
+  // 日志。
+  gameStore.pushLog('info', `[UI][mods] 已恢复 Mod ${name}`)
+  // 刷新（重新出现在目录里）。
+  await refreshCatalog()
+}
+
+// #restoreAll
+// 一次恢复全部被移除的 Mod。
+//
+// @returns {Promise<void>}
+async function restoreAll() {
+  // 空列表就不问。
+  if (removedMods.value.length === 0) return
+  // 确认。
+  if (!confirm(`恢复全部 ${removedMods.value.length} 个被移除的 Mod？`)) return
+  // 清空标记（新数组）。
+  const names = [...removedMods.value]
+  // 清。
+  removedMods.value = []
+  // 保存。
+  saveModsState({ mods: mods.value, removed: removedMods.value })
+  // 日志。
+  gameStore.pushLog('info', `[UI][mods] 已恢复全部被移除的 Mod：${names.join(', ')}`)
+  // 刷新。
+  await refreshCatalog()
 }
 
 // 授权弹窗：首次加载需授权权限。
@@ -457,13 +546,26 @@ function back() {
       <button class="btn primary" :disabled="installBusy" @click="pickZip">
         {{ installBusy ? '安装中…' : '+ 安装 Mod（.zip）' }}
       </button>
-      <span class="install-hint">zip 里需含 manifest.json（支持包装一层目录）</span>
+      <span class="install-hint">zip 里需含 manifest.json（支持包装一层目录；系统 Mod 名会再问一次）</span>
     </div>
     <p v-if="installError" class="install-error">⚠ {{ installError }}</p>
     <p v-if="installMessage" class="install-ok">{{ installMessage }}</p>
     <!-- 下载（导出 zip）的反馈：与安装提示分开显示，两件事不该互相覆盖 -->
     <p v-if="downloadError" class="download-error">⚠ {{ downloadError }}</p>
     <p v-if="downloadMessage" class="download-ok">{{ downloadMessage }}</p>
+
+    <!-- 已移除的 Mod：完全移除是**本机视角**的（服务器文件从未被删），所以这里给一条回头路 -->
+    <div v-if="removedMods.length" class="removed-panel">
+      <div class="removed-head">
+        <span class="removed-title">已移除的 Mod（{{ removedMods.length }}）</span>
+        <button class="btn restore" @click="restoreAll">全部恢复</button>
+      </div>
+      <p class="removed-hint">完全移除只作用于这台浏览器：不再出现在列表、不再被加载、本地副本也已删除。服务器上的预装文件仍在，点「恢复」即可取回，也可以用上面的「+ 安装 Mod（.zip）」重新上传。</p>
+      <div v-for="n in removedMods" :key="n" class="removed-row">
+        <span class="removed-name">{{ n }}</span>
+        <button class="btn restore" @click="restore(n)">恢复</button>
+      </div>
+    </div>
 
     <!-- Mod 列表 -->
     <div v-for="mod in mods" :key="mod.name" class="mod">
@@ -492,7 +594,8 @@ function back() {
         <button v-if="mod.name === 'ai-mod'" class="btn config" :class="{ active: aiPanelOpen }" @click="togglePanel">
           {{ aiPanelOpen ? '收起配置' : 'AI 配置' }}
         </button>
-        <button v-if="!mod.system" class="btn danger" @click="remove(mod)">删除</button>
+        <!-- 完全移除：预装/系统 Mod 一视同仁（服务器文件不会删，可恢复或重新上传） -->
+        <button class="btn danger" @click="remove(mod)">完全移除</button>
         <!-- 本地安装的 Mod 可以卸载（只删浏览器里的副本） -->
         <button v-if="installedNames.includes(mod.name)" class="btn danger" @click="uninstall(mod)">卸载</button>
         <span v-if="installedNames.includes(mod.name)" class="sys-hint">本地安装</span>
@@ -718,6 +821,54 @@ function back() {
 .sys-hint {
   color: #888;
   font-size: 12px;
+}
+/* 「已移除的 Mod」面板：完全移除后的回头路（恢复预装 / 重新上传的入口提示） */
+.removed-panel {
+  background: #1a2a4e;
+  border: 1px solid #2a3a5e;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.removed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.removed-title {
+  font-size: 14px;
+  font-weight: bold;
+}
+.removed-hint {
+  font-size: 12px;
+  color: #8f9bb3;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+.removed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid #22304f;
+}
+.removed-name {
+  font-size: 13px;
+  color: #cfd8e3;
+}
+.btn.restore {
+  background: #16213e;
+  border: 1px solid #4d9de0;
+  color: #4d9de0;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+.btn.restore:hover {
+  background: #4d9de0;
+  color: #16213e;
 }
 .modal {
   position: fixed;

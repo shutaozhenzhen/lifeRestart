@@ -65,6 +65,21 @@ describe('game-data - loadModState', () => {
     // 坏数据。
     expect(loadModState('x', memStorage({ modsState: '{oops' }))).toBeNull()
   })
+
+  // 为什么这条重要（2026-10）：完全移除如果只影响界面列表，游戏仍会按默认值把内容 Mod
+  // 加载回来 —— 界面说"已移除"、实际还在用它的内容。移除即不加载，判据收敛在这里。
+  test('已完全移除（removed）视为禁用，压过 enabled 里的任何取值', () => {
+    // 只记移除。
+    const storage = memStorage({ modsState: JSON.stringify({ enabled: {}, removed: ['lifeRestart-data'] }) })
+    // 视为禁用。
+    expect(loadModState('lifeRestart-data', storage)).toBe(false)
+    // 即使 enabled 里写着 true（例如移除后又手动启用过），也仍然是不加载。
+    const both = memStorage({ modsState: JSON.stringify({ enabled: { 'lifeRestart-data': true }, removed: ['lifeRestart-data'] }) })
+    // 移除优先。
+    expect(loadModState('lifeRestart-data', both)).toBe(false)
+    // 没被移除的 Mod 不受影响。
+    expect(loadModState('fun-mod', both)).toBeNull()
+  })
 })
 
 describe('game-data - fetchOriginalData', () => {
@@ -154,5 +169,22 @@ describe('game-data - loadGameData', () => {
     // 天赋/事件池为空（玩家看到的是"没有内容 Mod"，而不是测试占位数据）。
     expect(data.talents).toEqual({})
     expect(data.events).toEqual({})
+  })
+
+  test('Mod 被完全移除：空内容，且提示与"禁用"区分开（出路不同）', async () => {
+    // 存储里 lifeRestart-data 被移除（不在 enabled 里）。
+    const storage = memStorage({ modsState: JSON.stringify({ enabled: {}, removed: ['lifeRestart-data'] }) })
+    // 桩：若被调用就说明逻辑错了。
+    const fetchImpl = async () => {
+      throw new Error('should not fetch')
+    }
+    // 加载。
+    const { data, dataSource, degraded } = await loadGameData({ fetchImpl, storage })
+    // 降级 + 说清是"移除"以及去哪儿恢复。
+    expect(degraded).toBe(true)
+    expect(dataSource).toContain('已完全移除')
+    expect(dataSource).toContain('/mods')
+    // 内容为空。
+    expect(data.talents).toEqual({})
   })
 })

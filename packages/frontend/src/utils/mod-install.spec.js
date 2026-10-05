@@ -12,7 +12,7 @@
  */
 
 // vitest DSL。
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 // 被测模块。
 import { createMemoryModStore } from './mod-store.js'
@@ -95,16 +95,42 @@ describe('installModFromZip - 解析与安全', () => {
     expect(await store.readText('sta-mod', 'code.js')).toContain('param.define')
   })
 
-  test('系统 Mod 名不能被 zip 覆盖', async () => {
+  test('系统 Mod 名不能被 zip 覆盖（默认拒绝，且带 system 标记供界面确认）', async () => {
     // 存储。
     const store = createMemoryModStore()
     // 冒充 lifeRestart-data。
     const zip = createModZip({ files: { 'manifest.json': JSON.stringify({ name: 'lifeRestart-data', version: '9.9.9' }) } })
     // 安装。
     const r = await installModFromZip({ bytes: zip, store })
-    // 被拒（避免顶掉数据源）。
+    // 被拒（避免**未经确认**就顶掉数据源）。
     expect(r.ok).toBe(false)
+    expect(r.system).toBe(true)
+    expect(r.name).toBe('lifeRestart-data')
     expect(r.errors[0]).toContain('系统 Mod')
+    // 没写进本地存储。
+    expect(await store.list()).toEqual([])
+  })
+
+  // 「完全移除 → 重新上传」闭环：界面在用户二次确认后显式 allowSystem 放行。
+  test('系统 Mod 名：显式 allowSystem 后可以装上（重新上传回装）', async () => {
+    // 存储。
+    const store = createMemoryModStore()
+    // 包（带数据文件，模拟"导出的 zip 再传回来"）。
+    const zip = createModZip({
+      files: {
+        'manifest.json': JSON.stringify({ name: 'lifeRestart-data', version: '9.9.9', system: true }),
+        'talents.json': JSON.stringify({ t1: { id: 't1', name: '天赋一' } }),
+      },
+    })
+    // 放行安装。
+    const r = await installModFromZip({ bytes: zip, store, allowSystem: true })
+    // 成功 + 标明这是系统 Mod（界面据此提示"覆盖了系统预装"）。
+    expect(r.ok).toBe(true)
+    expect(r.system).toBe(true)
+    expect(r.files).toBe(2)
+    // 真的落地了。
+    expect((await store.list()).map((m) => m.name)).toEqual(['lifeRestart-data'])
+    expect(JSON.parse(await store.readText('lifeRestart-data', 'talents.json')).t1.name).toBe('天赋一')
   })
 
   test('坏 zip（缺 manifest）→ 可读错误，不写入', async () => {
@@ -176,5 +202,56 @@ describe('Mod 管理页 - zip 安装交互', () => {
     expect(wrapper.findAll('.sys-hint').some((n) => n.text().includes('本地安装'))).toBe(true)
     // 有卸载按钮。
     expect(wrapper.findAll('button').some((b) => b.text().includes('卸载'))).toBe(true)
+  })
+
+  // 「完全移除 → 重新上传」闭环的页面侧：预装 Mod 移除后还能靠上传取回，
+  // 而且上传成功后必须**自动清掉 removed 标记**，否则装完仍看不见（用户会以为没装上）。
+  test('重新上传系统 Mod：二次确认 → 装上 + 自动从「已移除」里恢复', async () => {
+    // 先造出"它已被完全移除"的现场。
+    globalThis.localStorage.setItem('modsState', JSON.stringify({ enabled: {}, removed: ['lifeRestart-data'] }))
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 目录里没有它，但在「已移除」面板里。
+    expect(wrapper.findAll('.mod-name').some((n) => n.text().includes('lifeRestart-data'))).toBe(false)
+    expect(wrapper.find('.removed-panel').text()).toContain('lifeRestart-data')
+    // 用户在确认框里点了"确定"。
+    const confirmSpy = vi.fn(() => true)
+    globalThis.confirm = confirmSpy
+    // 上传一个系统名的 zip（= 之前下载/分享出去的那个包）。
+    const zip = createModZip({ files: { 'manifest.json': JSON.stringify({ name: 'lifeRestart-data', version: '1.0.0', system: true }), 'talents.json': '{"t1":{"id":"t1"}}' } })
+    const input = wrapper.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [{ name: 'lifeRestart-data.zip', arrayBuffer: async () => zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) }], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+    // 问过一次（系统 Mod 覆盖确认）。
+    expect(confirmSpy).toHaveBeenCalled()
+    // 成功提示写明"覆盖了系统预装 Mod"。
+    expect(wrapper.find('.install-ok').text()).toContain('覆盖了系统预装 Mod')
+    // 目录里回来了。
+    expect(wrapper.findAll('.mod-name').some((n) => n.text().includes('lifeRestart-data'))).toBe(true)
+    // 「已移除」标记被自动清掉（面板消失 + 持久化里也没了）。
+    expect(wrapper.find('.removed-panel').exists()).toBe(false)
+    expect(JSON.parse(globalThis.localStorage.getItem('modsState')).removed).toEqual([])
+  })
+
+  test('重新上传系统 Mod：确认框拒绝 → 不安装，仍留在「已移除」里', async () => {
+    // 现场。
+    globalThis.localStorage.setItem('modsState', JSON.stringify({ enabled: {}, removed: ['lifeRestart-data'] }))
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 拒绝。
+    globalThis.confirm = vi.fn(() => false)
+    // 上传。
+    const zip = createModZip({ files: { 'manifest.json': JSON.stringify({ name: 'lifeRestart-data', version: '1.0.0' }) } })
+    const input = wrapper.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [{ name: 'x.zip', arrayBuffer: async () => zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) }], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+    // 提示"已取消"，状态不变。
+    expect(wrapper.find('.install-error').text()).toContain('已取消安装系统 Mod')
+    expect(wrapper.find('.removed-panel').text()).toContain('lifeRestart-data')
+    expect(JSON.parse(globalThis.localStorage.getItem('modsState')).removed).toEqual(['lifeRestart-data'])
   })
 })

@@ -22,7 +22,7 @@ import { applyModsState, loadModsState } from './mods-state.js'
 // （见该脚本的 `DATA_FROM_PUBLIC`）—— 所以"查看数据"必须知道去哪儿读。
 export const DEFAULT_MOD_LIST = [
   // 原版数据（Data Mod）：系统内置、默认启用；数据在 <BASE_URL>data/。
-  { name: 'lifeRestart-data', enabled: true, system: true, description: '原版数据（系统内置，不可删除）', permissions: [], dataFrom: 'data' },
+  { name: 'lifeRestart-data', enabled: true, system: true, description: '原版数据（系统内置，可移除/可恢复）', permissions: [], dataFrom: 'data' },
   // 基础 Mod：默认启用（提供 hooks 钩子演示）。
   { name: 'base-mod', enabled: true, system: false, description: '测试基础 Mod', permissions: ['hooks'] },
   // 趣味 Mod：默认禁用。

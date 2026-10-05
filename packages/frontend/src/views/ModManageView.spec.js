@@ -6,12 +6,13 @@
  *   1. 渲染 Mod 列表；系统 Mod 无删除按钮（显示"系统内置"），非系统 Mod 有删除按钮
  *   2. 启停：状态写入 localStorage（modsState），刷新后保留
  *   3. 权限弹窗：启用带权限的 Mod → 弹窗 → 「允许」关闭并记录
- *   4. 删除：confirm 确认后移除并记入 removed（持久化）；系统 Mod 不可删
+ *   4. 完全移除：确认后移除并记入 removed（**预装/系统 Mod 一视同仁**）；确认框取消则不移除；
+ *      「已移除的 Mod」面板可单条恢复 / 全部恢复（服务器文件从未被删）
  *   5. AI 配置：切服务商填充 baseUrl/model；Key 写入 localStorage；未配 Key 启用时提示
  *   6. 连接测试：成功/失败两条分支都在界面上给出结果
  *   7. 「查看数据」进 Mod 数据详情页（用**目录名**寻址）
  *   8. 返回按钮回主页
- *   9. 「下载」导出 zip：成功时触发浏览器下载并给出文件名/文件数；失败时显示原因
+ *   9. 「下载 zip」导出：成功时触发浏览器下载并给出文件名/文件数；失败时显示原因
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
@@ -59,19 +60,18 @@ function savedState() {
 }
 
 describe('ModManageView', () => {
-  test('渲染 Mod 列表：系统 Mod 无删除按钮，非系统有', () => {
+  test('渲染 Mod 列表：每张卡片都能「完全移除」（预装/系统 Mod 一视同仁）', () => {
     // 挂载。
     const { wrapper } = mountView(ModManageView)
     // 四个 Mod。
     expect(wrapper.findAll('.mod').length).toBe(4)
-    // 系统 Mod（lifeRestart-data / ai-mod）显示"系统内置"且无删除按钮。
-    for (const name of ['lifeRestart-data', 'ai-mod']) {
+    // 每张卡片都有「完全移除」（2026-10 起系统 Mod 也能整个移除，不再只有"禁用"）。
+    for (const name of ['lifeRestart-data', 'ai-mod', 'base-mod', 'fun-mod']) {
       const row = modRow(wrapper, name)
-      expect(row.find('.sys-hint').exists()).toBe(true)
-      expect(row.findAll('button').some((b) => b.text().includes('删除'))).toBe(false)
+      expect(row.findAll('button').some((b) => b.text().includes('完全移除')), name).toBe(true)
     }
-    // 非系统 Mod 有删除按钮。
-    expect(modRow(wrapper, 'base-mod').findAll('button').some((b) => b.text().includes('删除'))).toBe(true)
+    // 系统 Mod 标出「系统内置」。
+    expect(modRow(wrapper, 'lifeRestart-data').find('.sys-hint').text()).toContain('系统内置')
     // 权限标签渲染（base-mod 声明 hooks）。
     expect(modRow(wrapper, 'base-mod').find('.perm').exists()).toBe(true)
   })
@@ -100,33 +100,64 @@ describe('ModManageView', () => {
     expect(modRow(second.wrapper, 'fun-mod').find('.btn.toggle').text()).toContain('已启用')
   })
 
-  test('删除：确认后移除并记入 removed（系统 Mod 不可删）', async () => {
+  test('完全移除：系统预装 Mod 也能移除，并可从「已移除」面板恢复', async () => {
     // 挂载。
     const { wrapper } = mountView(ModManageView)
     // 打桩 confirm 为同意。
     globalThis.confirm = vi.fn(() => true)
-    // 删除 base-mod。
-    const delBtn = modRow(wrapper, 'base-mod').findAll('button').find((b) => b.text().includes('删除'))
-    await delBtn.trigger('click')
+    // 完全移除 content Mod（以前这里被 `if (mod.system) return` 挡住）。
+    const btn = modRow(wrapper, 'lifeRestart-data').findAll('button').find((b) => b.text().includes('完全移除'))
+    await btn.trigger('click')
     await flushPromises()
-    // 列表少了一个。
-    expect(wrapper.findAll('.mod').length).toBe(3)
-    expect(wrapper.findAll('.mod-name').some((n) => n.text().includes('base-mod'))).toBe(false)
-    // 已记入 removed（刷新后不再出现）。
-    expect(savedState().removed).toContain('base-mod')
+    // 卡片消失。
+    expect(wrapper.findAll('.mod-name').some((n) => n.text().includes('lifeRestart-data'))).toBe(false)
+    // 「已移除」面板出现并列出它（服务器文件没删，所以能恢复）。
+    expect(wrapper.find('.removed-panel').exists()).toBe(true)
+    expect(wrapper.find('.removed-panel').text()).toContain('lifeRestart-data')
+    // 已持久化（游戏路径据此"不加载"）。
+    expect(savedState().removed).toContain('lifeRestart-data')
+    // 点该行的「恢复」。
+    await wrapper.find('.removed-row .btn.restore').trigger('click')
+    await flushPromises()
+    // 回来了。
+    expect(modRow(wrapper, 'lifeRestart-data')).toBeTruthy()
+    // 标记清掉、面板消失。
+    expect(savedState().removed).toEqual([])
+    expect(wrapper.find('.removed-panel').exists()).toBe(false)
   })
 
-  test('删除：确认框取消则不移除', async () => {
+  test('完全移除：确认框取消则不移除（也不会记进 removed）', async () => {
     // 挂载。
     const { wrapper } = mountView(ModManageView)
     // 打桩 confirm 为拒绝。
     globalThis.confirm = vi.fn(() => false)
-    // 点删除。
-    const delBtn = modRow(wrapper, 'base-mod').findAll('button').find((b) => b.text().includes('删除'))
+    // 点完全移除。
+    const delBtn = modRow(wrapper, 'base-mod').findAll('button').find((b) => b.text().includes('完全移除'))
     await delBtn.trigger('click')
     await flushPromises()
-    // 仍在列表里。
+    // 仍在列表里，且没有「已移除」面板。
     expect(wrapper.findAll('.mod').length).toBe(4)
+    expect(wrapper.find('.removed-panel').exists()).toBe(false)
+    expect(savedState().removed || []).toEqual([])
+  })
+
+  test('已移除面板：全部恢复一次清空', async () => {
+    // 预置两个被移除的 Mod。
+    globalThis.localStorage.setItem('modsState', JSON.stringify({ enabled: {}, removed: ['lifeRestart-data', 'fun-mod'] }))
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 两个都不在目录里，面板列出它们。
+    expect(wrapper.findAll('.mod').length).toBe(2)
+    expect(wrapper.findAll('.removed-row').length).toBe(2)
+    // 全部恢复。
+    globalThis.confirm = vi.fn(() => true)
+    await wrapper.find('.removed-head .btn.restore').trigger('click')
+    await flushPromises()
+    // 都回来了，面板消失。
+    expect(wrapper.findAll('.mod').length).toBe(4)
+    expect(wrapper.find('.removed-panel').exists()).toBe(false)
+    expect(savedState().removed).toEqual([])
   })
 
   test('AI 配置：切服务商填充预设；Key 写入 localStorage；未配 Key 启用时提示', async () => {

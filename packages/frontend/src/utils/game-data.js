@@ -22,7 +22,7 @@
 // Mod 运行时（浏览器侧：发现 + 加载启用的 Mod 数据与代码）与目录/状态。
 import { discoverMods, loadModBundle } from './mod-runtime.js'
 import { buildModCatalog, enabledModNames } from './mod-catalog.js'
-import { loadModsState } from './mods-state.js'
+import { loadModsState, isModRemoved } from './mods-state.js'
 // 已安装 Mod 的浏览器存储（IndexedDB，含内存回退）。
 import { getModStore } from './mod-store.js'
 
@@ -46,6 +46,10 @@ export function buildEmptyData() {
 // #loadModState
 // 读取某个 Mod 的启停状态（localStorage 键 modsState，与 Mod 管理页共用）。
 //
+// ⚠️ **完全移除 = 不加载**（2026-10 补）：命中 `removed` 直接返回 false。
+// 否则"把内容 Mod 完全移除"只影响界面列表，游戏仍按默认值加载它 —— 界面说已移除、
+// 实际还在用它的内容。判据收敛在 `mods-state.isModRemoved()`。
+//
 // @param {string} name - Mod 名
 // @param {object} [storage] - 存储适配器（缺省 localStorage）
 // @returns {boolean|null} 启停；无记录返回 null
@@ -54,6 +58,8 @@ export function loadModState(name, storage) {
   try {
     // 解析。
     const parsed = JSON.parse((storage || localStorage).getItem('modsState'))
+    // 已被完全移除 → 视为禁用（含内容 Mod：移除后游戏为空内容）。
+    if ((parsed?.removed || []).includes(name)) return false
     // 返回该 Mod 启停（缺省 null = 用默认值）。
     return parsed?.enabled?.[name] ?? null
   } catch {
@@ -137,9 +143,12 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
       degraded = true
     }
   } else {
-    // 被禁用：空内容（引擎没有可退的"默认内容"，内容 Mod 就是内容的唯一来源）。
+    // 被禁用 / **被完全移除**：空内容（引擎没有可退的"默认内容"，内容 Mod 就是内容的唯一来源）。
     data = buildEmptyData()
-    dataSource = '空内容（lifeRestart-data 已禁用）'
+    // 说清是"移除"还是"禁用"：两者的出路不同（移除要去 /mods 恢复预装或重新上传 zip）。
+    dataSource = isModRemoved('lifeRestart-data', storage)
+      ? '空内容（lifeRestart-data 已完全移除：到 /mods 恢复预装或重新上传 zip）'
+      : '空内容（lifeRestart-data 已禁用）'
     degraded = true
   }
   // Mod 运行时（失败绝不阻断游戏：Mod 是增强，不是必需）。

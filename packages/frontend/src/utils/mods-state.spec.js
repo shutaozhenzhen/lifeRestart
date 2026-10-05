@@ -8,7 +8,7 @@
 // 导入 vitest 测试 DSL。
 import { describe, test, expect } from 'vitest'
 // 被测函数。
-import { loadModsState, saveModsState, applyModsState } from './mods-state.js'
+import { loadModsState, saveModsState, applyModsState, isModRemoved, addRemoved, dropRemoved } from './mods-state.js'
 
 // #memStorage
 // 内存 storage 适配器（Node 环境模拟 localStorage）。
@@ -122,8 +122,42 @@ describe('mods-state 持久化（刷新保留回归）', () => {
     expect(mods.some(m => m.name === 'fun-mod')).toBe(false)
     // 其余保留。
     expect(mods.some(m => m.name === 'base-mod')).toBe(true)
-    // 系统 Mod 仍在列表（不可删语义由 UI 层保证，持久化不丢）。
+    // 系统 Mod 仍在列表（**没**记进 removed 就不会被过滤）。
     expect(mods.some(m => m.name === 'lifeRestart-data')).toBe(true)
+  })
+
+  // 2026-10：预装/系统 Mod 也支持「完全移除」——纯函数层面它与第三方 Mod 走同一条路。
+  test('系统 Mod 记进 removed 后同样被过滤（预装也能完全移除）', () => {
+    // storage。
+    const s = memStorage()
+    // 保存：移除 lifeRestart-data（系统内置的内容 Mod）。
+    saveModsState({ mods: MOD_LIST.filter(m => m.name !== 'lifeRestart-data'), removed: ['lifeRestart-data'] }, s)
+    // 加载应用。
+    const mods = applyModsState(MOD_LIST, loadModsState(s))
+    // 不在目录里了。
+    expect(mods.some(m => m.name === 'lifeRestart-data')).toBe(false)
+    // 且**不加载**（移除即不加载：判据在 mods-state，被 game-data.loadModState 使用）。
+    expect(isModRemoved('lifeRestart-data', s)).toBe(true)
+    // 恢复（清标记，纯函数返回新数组）。
+    const restored = dropRemoved(loadModsState(s).removed, 'lifeRestart-data')
+    // 恢复后又能出现。
+    saveModsState({ mods: MOD_LIST, removed: restored }, s)
+    expect(applyModsState(MOD_LIST, loadModsState(s)).some(m => m.name === 'lifeRestart-data')).toBe(true)
+    expect(isModRemoved('lifeRestart-data', s)).toBe(false)
+  })
+
+  test('addRemoved / dropRemoved 是纯函数（不改入参、自动去重）', () => {
+    // 原数组。
+    const before = ['a']
+    // 追加（去重）。
+    expect(addRemoved(before, 'b')).toEqual(['a', 'b'])
+    expect(addRemoved(before, 'a')).toEqual(['a'])
+    // 入参没被动过。
+    expect(before).toEqual(['a'])
+    // 移除项。
+    expect(dropRemoved(['a', 'b'], 'a')).toEqual(['b'])
+    // 不存在也不报错。
+    expect(dropRemoved(['a'], 'z')).toEqual(['a'])
   })
 
   test('损坏数据 → 回退默认（不抛错）', () => {

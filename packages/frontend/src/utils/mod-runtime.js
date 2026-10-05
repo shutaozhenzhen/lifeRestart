@@ -319,20 +319,28 @@ export const SYSTEM_MOD_NAMES = ['lifeRestart-data', 'ai-mod']
 // 从 zip 安装 Mod 到本地存储（**前端 zip 安装的入口**）。
 // 解析/校验/安全防护都在引擎的 zip 模块里（与 CLI 的 manager.importZip 同一实现）。
 //
+// 系统 Mod 名（`SYSTEM_MOD_NAMES`）默认**拒绝**：防"随手一个 zip 静默顶掉数据源 / AI 通道"。
+// 但调用方可以显式 `allowSystem: true` 放行 —— Mod 管理页在**用户二次确认后**才这么传，
+// 支撑「完全移除 → 重新上传 zip 装回来」这条闭环（这不是访问控制，见 `_准则_Mod设计.md` B3：
+// 挡的是误操作，不是权限）。
+//
 // @param {object} params
 // @param {Uint8Array|ArrayBuffer} params.bytes - zip 内容
 // @param {object} params.store - mod-store 实例
 // @param {object} [params.log] - 日志器
-// @returns {Promise<{ok: boolean, name?: string, manifest?: object, errors: string[], files?: number, binaries?: string[]}>} 结果
-export async function installModFromZip({ bytes, store, log } = {}) {
+// @param {boolean} [params.allowSystem] - 是否允许安装系统 Mod 名（缺省 false）
+// @returns {Promise<{ok: boolean, name?: string, manifest?: object, system?: boolean, errors: string[], files?: number, binaries?: string[]}>} 结果
+export async function installModFromZip({ bytes, store, log, allowSystem = false } = {}) {
   // 解析（共用的 zip 模块）。
   const parsed = readModPackage(bytes, { log })
   // 失败。
   if (!parsed.ok) return { ok: false, errors: parsed.errors }
-  // 系统 Mod 名保留：不允许用 zip 覆盖内置/系统 Mod（避免把数据源或 ai-mod 顶掉）。
-  if (SYSTEM_MOD_NAMES.includes(parsed.name)) {
-    // 拒绝。
-    return { ok: false, errors: [`${parsed.name} 是系统 Mod，不能被 zip 覆盖（要装请先改 manifest.name）`] }
+  // 是不是系统 Mod 名（供调用方决定要不要问用户）。
+  const system = SYSTEM_MOD_NAMES.includes(parsed.name)
+  // 系统 Mod 名保留：不允许**未经确认**用 zip 覆盖内置/系统 Mod（避免把数据源或 ai-mod 顶掉）。
+  if (system && !allowSystem) {
+    // 拒绝（带上 system 标记，界面据此弹"确认后重试"）。
+    return { ok: false, system: true, name: parsed.name, errors: [`${parsed.name} 是系统 Mod，不能被 zip 覆盖（要装请二次确认，或先改 manifest.name）`] }
   }
   // 写入本地存储。
   await store.install({ name: parsed.name, manifest: parsed.manifest, files: parsed.files })
@@ -344,6 +352,8 @@ export async function installModFromZip({ bytes, store, log } = {}) {
     name: parsed.name,
     // manifest（界面展示权限用）。
     manifest: parsed.manifest,
+    // 系统 Mod 名（界面据此提示"这是覆盖了系统预装"）。
+    system,
     // 警告。
     errors: [...parsed.errors, ...(parsed.skipped || []).map((s) => `已跳过：${s}`)],
     // 文件数。
