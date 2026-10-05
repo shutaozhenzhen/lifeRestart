@@ -13,6 +13,10 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
 import { loadModDetail, summarizeModData } from '../utils/mod-detail.js'
+// 导出这个 Mod 为 zip（「下载」按钮；数据不在自己目录的系统 Data Mod 也会把数据打进去）。
+import { exportModZip } from '../utils/mod-export.js'
+// 触发浏览器下载（与日志导出共用同一个实现）。
+import { downloadBytes } from '../utils/log-export.js'
 // 已安装 Mod 的本地存储（zip 装进来的 Mod 也要能看数据 —— 与发现/加载同一优先级）。
 import { getModStore } from '../utils/mod-store.js'
 
@@ -45,6 +49,13 @@ const detail = ref(null)
 const tab = ref('talents')
 // 搜索关键字。
 const keyword = ref('')
+// 本地已安装 Mod 的存储（读取与导出都要用；读一次缓存，别每次重开 IndexedDB）。
+const modStore = ref(null)
+// 打包下载中（防重复点击）。
+const downloadBusy = ref(false)
+// 下载反馈（成功/失败各一条，界面必须看得见）。
+const downloadMessage = ref('')
+const downloadError = ref('')
 
 // 统计（纯函数，见 utils/mod-detail.js）。
 const stats = computed(() => summarizeModData(detail.value?.data || {}))
@@ -87,17 +98,19 @@ async function load() {
   // 加载态。
   loading.value = true
   // 本地已安装的 Mod（IndexedDB／内存回退）——读不到数据源不影响服务器上的 Mod。
-  let modStore = null
+  let localStore = null
   // 容错（本地存储不可用时只读服务器）。
   try {
     // 取存储。
-    modStore = await getModStore()
+    localStore = await getModStore()
   } catch (e) {
     // 记日志（不阻断）。
     store.pushLog('debug', `[UI][mod-detail] 本地 Mod 存储不可用：${e.message}`)
   }
+  // 记住（下载按钮要用同一个源：本地已装的 Mod 也要能导出）。
+  modStore.value = localStore
   // 读（不抛：错误在返回值里）。
-  const result = await loadModDetail({ name: name.value, store: modStore })
+  const result = await loadModDetail({ name: name.value, store: localStore })
   // 记录。
   detail.value = result
   // 加载完成。
@@ -193,6 +206,62 @@ function back() {
   // 返回。
   router.push('/mods')
 }
+
+// #download
+// 把当前 Mod 打包成 zip 下载（备份 / 分享 / 改造后装回来）。
+//
+// 打包逻辑在 utils/mod-export.js：与「查看数据」用**同一套**清单与数据目录兜底规则，
+// 所以下载下来的包就是引擎实际会加载的东西（系统 Data Mod 的 4MB 数据也会打进去）。
+//
+// @returns {Promise<void>}
+async function download() {
+  // 名字还没就绪。
+  if (!name.value) return
+  // 忙状态。
+  downloadBusy.value = true
+  // 清反馈。
+  downloadError.value = ''
+  downloadMessage.value = ''
+  // 日志。
+  store.pushLog('info', `[UI][mod-detail] 打包下载 ${name.value}…`)
+  // 打包。
+  try {
+    // 导出（不抛：错误在返回值里）。
+    const r = await exportModZip({ name: name.value, store: modStore.value })
+    // 致命错误。
+    if (!r.ok) {
+      // 展示 + 日志。
+      downloadError.value = `打包失败：${r.errors.join('；')}`
+      store.pushLog('warn', `[UI][mod-detail] 打包 ${name.value} 失败：${r.errors.join('；')}`)
+      // 结束。
+      return
+    }
+    // 非致命问题逐条记。
+    for (const w of r.warnings) store.pushLog('warn', `[UI][mod-detail] ${w}`)
+    // 触发下载。
+    const started = downloadBytes(r.bytes, r.filename, { mime: 'application/zip' })
+    // 环境不支持。
+    if (!started) {
+      // 提示。
+      downloadError.value = `当前环境不支持文件下载（${r.filename}，${r.count} 个文件已打包好）`
+      store.pushLog('warn', `[UI][mod-detail] 下载 ${r.filename} 失败：浏览器不支持 Blob/URL API`)
+      // 结束。
+      return
+    }
+    // 成功。
+    downloadMessage.value = `已下载 ${r.filename}（${r.count} 个文件，${(r.bytes.length / 1024).toFixed(1)} KB）${r.system ? ' · 系统 Mod：包可作备份/改造，装回来前请先改 manifest.name（系统名被保留）' : ''}`
+    // 日志。
+    store.pushLog('info', `[UI][mod-detail] 已下载 ${r.filename}（${r.count} 个文件，${r.bytes.length} 字节${r.dataFrom ? `，数据来自 ${r.dataFrom}` : ''}）`)
+  } catch (e) {
+    // 异常。
+    downloadError.value = `打包失败：${e.message}`
+    // 日志。
+    store.pushLog('warn', `[UI][mod-detail] 打包失败：${e.message}`)
+  } finally {
+    // 解除忙状态。
+    downloadBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -201,7 +270,17 @@ function back() {
     <div class="actions">
       <button class="btn back" @click="back">← 返回 Mod 管理</button>
       <button class="btn" :disabled="loading" @click="load">↻ 重新读取</button>
+      <!-- 下载：把这个 Mod 打包成 zip（含数据目录里的数据；系统 Mod 的包要改名才能装回来） -->
+      <button
+        class="btn download"
+        :disabled="loading || downloadBusy"
+        :title="detail?.manifest?.system ? '系统 Mod：zip 可作备份/改造，装回来前先改 manifest.name' : '把这个 Mod 打包成 zip 下载'"
+        @click="download"
+      >{{ downloadBusy ? '打包中…' : '⬇ 下载 zip' }}</button>
     </div>
+    <!-- 下载反馈（成功/失败都要看得见） -->
+    <p v-if="downloadError" class="download-error">⚠ {{ downloadError }}</p>
+    <p v-if="downloadMessage" class="download-ok">{{ downloadMessage }}</p>
 
     <!-- 加载中 -->
     <p v-if="loading" class="hint">读取中…</p>
@@ -416,6 +495,32 @@ function back() {
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+/* 下载（导出 zip）：蓝色描边，与其它操作按钮区分开 */
+.btn.download {
+  background: #16213e;
+  border: 1px solid #4d9de0;
+  color: #4d9de0;
+}
+.btn.download:hover:not(:disabled) {
+  background: #4d9de0;
+  color: #16213e;
+  filter: none;
+}
+/* 下载反馈 */
+.download-error {
+  text-align: center;
+  font-size: 12px;
+  color: #ffb84d;
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+.download-ok {
+  text-align: center;
+  font-size: 12px;
+  color: #4d9de0;
+  line-height: 1.6;
+  margin-bottom: 10px;
 }
 .section {
   background: #16213e;

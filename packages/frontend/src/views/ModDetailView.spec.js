@@ -9,12 +9,12 @@
  *   4. 条目浏览：页签切换、搜索过滤、截断渲染（>50 条时提示）
  *   5. 错误不静默：坏 JSON / manifest 非法都在页面上显示
  *   6. 未找到：给出可读说明，不白屏
- *   7. 交互：重新读取、返回 Mod 管理页
+ *   7. 交互：重新读取、返回 Mod 管理页、**下载 zip（导出）**
  *
  * fetch 桩注意：引擎的 HTTP 源只认 `text()`（见 game-engine/src/mod/source-fetch.js），
  * 返回 `{ok, json}` 的桩在这里**不管用**。
  */
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import ModDetailView from './ModDetailView.vue'
 import { resetApp, mountView, createTestRouter, waitFor } from '../test-utils/setup.js'
@@ -323,5 +323,41 @@ describe('ModDetailView - 交互', () => {
     await waitFor(() => wrapper.findAll('.overview .cell')[0]?.find('.num')?.text() === '2')
     // 计数更新。
     expect(wrapper.findAll('.overview .cell')[0].find('.num').text()).toBe('2')
+  })
+
+  test('下载 zip：打包当前 Mod 并触发浏览器下载', async () => {
+    // 打桩（demo 有 manifest + 5 张表 + code.js = 7 个文件；vendor 依赖没提供 → 静默跳过）。
+    stubModsFetch(demoFiles())
+    // 浏览器下载 API 打桩。
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => 'blob:mod')
+    // 挂载。
+    const { wrapper } = await mountDetail()
+    // 按钮在（与"重新读取"同一排）。
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('下载 zip'))
+    expect(btn).toBeTruthy()
+    // 点它。
+    await btn.trigger('click')
+    await flushPromises()
+    // 触发下载。
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    // 反馈：文件名（含版本）+ 文件数。
+    const ok = wrapper.find('.download-ok').text()
+    expect(ok).toContain('liferestart-mod-demo-2.1.0.zip')
+    expect(ok).toContain('7 个文件')
+    // 清理。
+    createObjectURL.mockRestore()
+  })
+
+  test('下载失败：未找到的 Mod 给出可读原因（不静默）', async () => {
+    // 全 404。
+    stubModsFetch({})
+    // 挂载（页面显示"未找到"）。
+    const { wrapper } = await mountDetail()
+    // 点下载。
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('下载 zip'))
+    await btn.trigger('click')
+    await flushPromises()
+    // 原因可见。
+    expect(wrapper.find('.download-error').text()).toContain('找不到 Mod')
   })
 })

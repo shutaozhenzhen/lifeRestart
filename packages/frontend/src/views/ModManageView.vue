@@ -10,6 +10,10 @@ import { PERMISSION_LABELS } from 'game-engine/src/mod/permissions.js'
 // Mod 目录（原型清单 ↔ 服务器上发现的真实 Mod 合并）与发现接口。
 import { loadModCatalog } from '../utils/mod-catalog.js'
 import { discoverMods, installModFromZip } from '../utils/mod-runtime.js'
+// 导出 Mod 为 zip（下载按钮；与引擎读 Mod 同一套清单/兜底规则）。
+import { exportModZip } from '../utils/mod-export.js'
+// 触发浏览器下载（文本与 zip 共用；注入式，取不到浏览器 API 时返回 false）。
+import { downloadBytes } from '../utils/log-export.js'
 // 已安装 Mod 的本地存储（IndexedDB，含内存回退）。
 import { getModStore } from '../utils/mod-store.js'
 // 游戏 store（页面操作行为日志：进入页面/按钮操作都记入日志面板）。
@@ -126,6 +130,65 @@ async function uninstall(mod) {
   await refreshCatalog()
 }
 
+// #download
+// 下载某个 Mod：把它打包成 zip 存到本地（备份 / 分享 / 改造后装回来）。
+//
+// 打包逻辑全在 utils/mod-export.js（与引擎读 Mod 同一套规则：清单 + 数据目录兜底），
+// 这里只负责"忙状态 / 反馈 / 触发浏览器下载"。
+//
+// 为什么用 `dir` 而不是 `name`：文件源是按**目录名**寻址的（与「查看数据」页同一个键）。
+//
+// @param {object} mod - 目录项
+// @returns {Promise<void>}
+async function download(mod) {
+  // 目录名（老数据没有 dir 时退回 name）。
+  const dir = mod.dir || mod.name
+  // 忙状态（同一时刻只打一个包）。
+  downloadBusy.value = dir
+  // 清上一次的反馈。
+  downloadError.value = ''
+  downloadMessage.value = ''
+  // 行为日志（打包可能要点时间：系统 Data Mod 有 4MB）。
+  gameStore.pushLog('info', `[UI][mods] 打包下载 ${mod.name}（目录 ${dir}）…`)
+  // 打包。
+  try {
+    // 导出（不抛：错误在返回值里）。
+    const r = await exportModZip({ name: dir, store: modStore.value })
+    // 致命错误：把原因显示出来（不许静默失败）。
+    if (!r.ok) {
+      // 展示 + 日志。
+      downloadError.value = `打包 ${mod.name} 失败：${r.errors.join('；')}`
+      gameStore.pushLog('warn', `[UI][mods] 打包 ${mod.name} 失败：${r.errors.join('；')}`)
+      // 结束。
+      return
+    }
+    // 非致命问题逐条记（缺文件 / manifest 校验问题）。
+    for (const w of r.warnings) gameStore.pushLog('warn', `[UI][mods] ${mod.name}：${w}`)
+    // 触发下载（浏览器对象 URL + 隐藏锚点；取不到浏览器 API 时返回 false）。
+    const started = downloadBytes(r.bytes, r.filename, { mime: 'application/zip' })
+    // 环境不支持。
+    if (!started) {
+      // 提示（把文件信息也说清楚：能手动救）。
+      downloadError.value = `当前环境不支持文件下载（${r.filename}，${r.count} 个文件已打包好）`
+      gameStore.pushLog('warn', `[UI][mods] 下载 ${r.filename} 失败：浏览器不支持 Blob/URL API`)
+      // 结束。
+      return
+    }
+    // 成功提示（大小按 zip 字节算）。
+    downloadMessage.value = `已下载 ${r.filename}（${r.count} 个文件，${(r.bytes.length / 1024).toFixed(1)} KB）${r.system ? ' · 系统 Mod：这个包可作备份/改造，装回来前请先改 manifest.name（系统名被保留）' : ''}`
+    // 日志（成功路径）。
+    gameStore.pushLog('info', `[UI][mods] 已下载 ${r.filename}（${r.count} 个文件，${r.bytes.length} 字节${r.dataFrom ? `，数据来自 ${r.dataFrom}` : ''}）`)
+  } catch (e) {
+    // 打包/下载异常。
+    downloadError.value = `打包 ${mod.name} 失败：${e.message}`
+    // 日志。
+    gameStore.pushLog('warn', `[UI][mods] 打包 ${mod.name} 失败：${e.message}`)
+  } finally {
+    // 解除忙状态。
+    downloadBusy.value = ''
+  }
+}
+
 // （loadModsState/saveModsState/applyModsState 已抽到 utils/mods-state.js，可单元测试）
 
 // #MOD_LIST
@@ -183,6 +246,11 @@ const installBusy = ref(false)
 // 安装错误 / 成功提示。
 const installError = ref('')
 const installMessage = ref('')
+// 正在打包下载的 Mod（目录名；空 = 没有在打包，防重复点击）。
+const downloadBusy = ref('')
+// 下载错误 / 成功提示（与安装提示分开：两件事的反馈不该互相覆盖）。
+const downloadError = ref('')
+const downloadMessage = ref('')
 
 // AI 配置（localStorage 持久化，与 ai-mod 开关解耦：配置仅保存，启用才生效）。
 const aiConfig = ref(loadAIConfig())
@@ -393,6 +461,9 @@ function back() {
     </div>
     <p v-if="installError" class="install-error">⚠ {{ installError }}</p>
     <p v-if="installMessage" class="install-ok">{{ installMessage }}</p>
+    <!-- 下载（导出 zip）的反馈：与安装提示分开显示，两件事不该互相覆盖 -->
+    <p v-if="downloadError" class="download-error">⚠ {{ downloadError }}</p>
+    <p v-if="downloadMessage" class="download-ok">{{ downloadMessage }}</p>
 
     <!-- Mod 列表 -->
     <div v-for="mod in mods" :key="mod.name" class="mod">
@@ -408,6 +479,13 @@ function back() {
       <div class="mod-actions">
         <!-- 查看数据：进该 Mod 的数据详情页（可视化它装了什么） -->
         <button class="btn detail" @click="openDetail(mod)">查看数据 →</button>
+        <!-- 下载：把该 Mod 打包成 zip 存到本地（备份/分享；系统 Mod 的包要改名才能装回来） -->
+        <button
+          class="btn download"
+          :disabled="downloadBusy === (mod.dir || mod.name)"
+          :title="mod.system ? '系统 Mod：zip 可作备份/改造，装回来前先改 manifest.name' : '把这个 Mod 打包成 zip 下载'"
+          @click="download(mod)"
+        >{{ downloadBusy === (mod.dir || mod.name) ? '打包中…' : '⬇ 下载' }}</button>
         <button class="btn toggle" :class="{ on: mod.enabled }" @click="mod.name === 'ai-mod' ? toggleAI(mod) : (toggle(mod), requestPermission(mod))">
           {{ mod.enabled ? '已启用' : '已禁用' }}
         </button>
@@ -609,6 +687,33 @@ function back() {
 .btn.detail:hover {
   background: #ffd700;
   color: #16213e;
+}
+/* 下载（导出 zip）：蓝色描边，与「查看数据」（金色）区分开 */
+.btn.download {
+  background: #16213e;
+  border: 1px solid #4d9de0;
+  color: #4d9de0;
+}
+.btn.download:hover:not(:disabled) {
+  background: #4d9de0;
+  color: #16213e;
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* 下载反馈（与安装反馈同形，颜色区分：错误用橙、成功用蓝） */
+.download-error {
+  font-size: 12px;
+  color: #ffb84d;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+.download-ok {
+  font-size: 12px;
+  color: #4d9de0;
+  line-height: 1.6;
+  margin-bottom: 8px;
 }
 .sys-hint {
   color: #888;

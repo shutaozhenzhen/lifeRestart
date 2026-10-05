@@ -11,6 +11,7 @@
  *   6. 连接测试：成功/失败两条分支都在界面上给出结果
  *   7. 「查看数据」进 Mod 数据详情页（用**目录名**寻址）
  *   8. 返回按钮回主页
+ *   9. 「下载」导出 zip：成功时触发浏览器下载并给出文件名/文件数；失败时显示原因
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
@@ -205,5 +206,60 @@ describe('ModManageView', () => {
     await flushPromises()
     // 跳转。
     expect(router.currentRoute.value.path).toBe('/')
+  })
+
+  test('下载：打包成 zip 触发浏览器下载，并给出文件名/文件数', async () => {
+    // 只给 base-mod 的真实文件（其余一律 404 → 目录退回内置清单，界面仍有卡片）。
+    globalThis.fetch = async (url) => {
+      // 归一化（Mod 根 = /mods/）。
+      const key = String(url).replace(/^\/?mods\//, '')
+      // 文件表。
+      const files = {
+        'base-mod/manifest.json': JSON.stringify({ name: 'base-mod', version: '1.0.0', permissions: [] }),
+        'base-mod/files.json': JSON.stringify(['manifest.json', 'talents.json']),
+        'base-mod/talents.json': JSON.stringify({ t1: { id: 't1', name: '天赋一', grade: 1 } }),
+      }
+      // 命中。
+      if (key in files) return { ok: true, status: 200, text: async () => files[key] }
+      // 404。
+      return { ok: false, status: 404, text: async () => '' }
+    }
+    // 浏览器下载 API 打桩（happy-dom 有 URL/Blob，但我们要断言"确实触发了下载"）。
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => 'blob:mod')
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 每张卡片都有「下载」按钮。
+    expect(modRow(wrapper, 'base-mod').find('.btn.download').exists()).toBe(true)
+    // 点它。
+    await modRow(wrapper, 'base-mod').find('.btn.download').trigger('click')
+    await flushPromises()
+    // 触发了下载（Blob + 对象 URL）。
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    // 反馈：文件名 + 文件数（用户要能确认"下到的是什么"）。
+    const ok = wrapper.find('.download-ok').text()
+    expect(ok).toContain('liferestart-mod-base-mod-1.0.0.zip')
+    expect(ok).toContain('2 个文件')
+    // 没有错误块。
+    expect(wrapper.find('.download-error').exists()).toBe(false)
+    // 忙状态已解除（按钮可再点）。
+    expect(modRow(wrapper, 'base-mod').find('.btn.download').attributes('disabled')).toBeUndefined()
+    // 清理。
+    createObjectURL.mockRestore()
+  })
+
+  test('下载失败：把原因显示出来（不静默失败）', async () => {
+    // 全 404：这个 Mod 在服务器上没有、本地也没装。
+    globalThis.fetch = async () => ({ ok: false, status: 404, text: async () => '' })
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 点下载。
+    await modRow(wrapper, 'lifeRestart-data').find('.btn.download').trigger('click')
+    await flushPromises()
+    // 错误可见，且说明了原因。
+    expect(wrapper.find('.download-error').text()).toContain('找不到 Mod')
+    // 没有成功提示。
+    expect(wrapper.find('.download-ok').exists()).toBe(false)
   })
 })

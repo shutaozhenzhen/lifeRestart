@@ -1,5 +1,8 @@
 /**
- * log-export — 日志「复制到剪贴板 / 下载为文件」（注入式，可测试）
+ * log-export — 「复制到剪贴板 / 下载为文件」（注入式，可测试）
+ *
+ * 谁在用：日志悬浮窗（复制/下载日志报告）、模拟统计页（导出 CSV/JSON/MD）、
+ * Mod 管理页与 Mod 数据详情页（导出 Mod 为 zip → `downloadBytes` + application/zip）。
  *
  * 背景：
  *   悬浮窗要支持「一键复制」和「下载 txt」，但浏览器 API
@@ -66,17 +69,18 @@ export async function copyText(text, { clipboard, doc } = {}) {
   }
 }
 
-// #downloadText
-// 把文本下载为文件（Blob + <a download>）。
+// #downloadBytes
+// 把字节下载为文件（Blob + `<a download>`）—— 文本与 zip 共用的唯一实现。
 //
-// @param {string} text - 文件内容
+// @param {Uint8Array|ArrayBuffer|Array|string} bytes - 文件内容
 // @param {string} fileName - 文件名
 // @param {object} [deps]
+// @param {string} [deps.mime] - MIME 类型（缺省 text/plain;charset=utf-8）
 // @param {object} [deps.doc] - document
 // @param {object} [deps.urlApi] - URL（createObjectURL/revokeObjectURL）
 // @param {Function} [deps.BlobCtor] - Blob 构造函数
 // @returns {boolean} 是否触发下载
-export function downloadText(text, fileName, { doc, urlApi, BlobCtor } = {}) {
+export function downloadBytes(bytes, fileName, { mime = 'text/plain;charset=utf-8', doc, urlApi, BlobCtor } = {}) {
   // 取依赖（缺省回退全局）。
   const d = doc || (typeof document !== 'undefined' ? document : null)
   const url = urlApi || (typeof URL !== 'undefined' ? URL : null)
@@ -89,8 +93,8 @@ export function downloadText(text, fileName, { doc, urlApi, BlobCtor } = {}) {
   let objectUrl = null
   // 尝试。
   try {
-    // 文本 Blob（带 charset，Windows 记事本打开不乱码）。
-    const blob = new BlobImpl([text], { type: 'text/plain;charset=utf-8' })
+    // Blob（文本带 charset，Windows 记事本打开不乱码；zip 用 application/zip）。
+    const blob = new BlobImpl([bytes], { type: mime })
     // 生成对象 URL。
     objectUrl = url.createObjectURL(blob)
     // 隐藏锚点。
@@ -121,4 +125,16 @@ export function downloadText(text, fileName, { doc, urlApi, BlobCtor } = {}) {
     // 失败。
     return false
   }
+}
+
+// #downloadText
+// 把文本下载为文件（Blob + <a download>）。
+//
+// @param {string} text - 文件内容
+// @param {string} fileName - 文件名
+// @param {object} [deps] - 同 downloadBytes（doc / urlApi / BlobCtor）
+// @returns {boolean} 是否触发下载
+export function downloadText(text, fileName, deps) {
+  // 走字节版（唯一实现）：字符串按 UTF-8 文本处理。
+  return downloadBytes(text, fileName, { ...(deps || {}), mime: 'text/plain;charset=utf-8' })
 }

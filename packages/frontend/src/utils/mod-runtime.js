@@ -307,6 +307,14 @@ export function createBrowserModSource({ baseUrl = MODS_BASE_URL, fetchImpl, sto
   return store ? createCompositeSource([createStoreSource(store), http]) : http
 }
 
+// #SYSTEM_MOD_NAMES
+// 系统 Mod 的名字（保留名）：**不允许被 zip 覆盖**，否则会把数据源（lifeRestart-data）
+// 或 AI 通道（ai-mod）顶掉。
+//
+// 为什么做成常量而不是写在函数里：导出（`mod-export.js` 的「下载」按钮）也要用它来
+// 告诉用户"系统 Mod 的包装回来前得改 manifest.name" —— 两份清单迟早会分叉。
+export const SYSTEM_MOD_NAMES = ['lifeRestart-data', 'ai-mod']
+
 // #installModFromZip
 // 从 zip 安装 Mod 到本地存储（**前端 zip 安装的入口**）。
 // 解析/校验/安全防护都在引擎的 zip 模块里（与 CLI 的 manager.importZip 同一实现）。
@@ -322,9 +330,9 @@ export async function installModFromZip({ bytes, store, log } = {}) {
   // 失败。
   if (!parsed.ok) return { ok: false, errors: parsed.errors }
   // 系统 Mod 名保留：不允许用 zip 覆盖内置/系统 Mod（避免把数据源或 ai-mod 顶掉）。
-  if (['lifeRestart-data', 'ai-mod'].includes(parsed.name)) {
+  if (SYSTEM_MOD_NAMES.includes(parsed.name)) {
     // 拒绝。
-    return { ok: false, errors: [`${parsed.name} 是系统 Mod，不能被 zip 覆盖`] }
+    return { ok: false, errors: [`${parsed.name} 是系统 Mod，不能被 zip 覆盖（要装请先改 manifest.name）`] }
   }
   // 写入本地存储。
   await store.install({ name: parsed.name, manifest: parsed.manifest, files: parsed.files })
