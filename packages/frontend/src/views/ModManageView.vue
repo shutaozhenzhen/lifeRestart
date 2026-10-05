@@ -485,7 +485,7 @@ function back() {
           :disabled="downloadBusy === (mod.dir || mod.name)"
           :title="mod.system ? '系统 Mod：zip 可作备份/改造，装回来前先改 manifest.name' : '把这个 Mod 打包成 zip 下载'"
           @click="download(mod)"
-        >{{ downloadBusy === (mod.dir || mod.name) ? '打包中…' : '⬇ 下载' }}</button>
+        >{{ downloadBusy === (mod.dir || mod.name) ? '打包中…' : '⬇ 下载 zip' }}</button>
         <button class="btn toggle" :class="{ on: mod.enabled }" @click="mod.name === 'ai-mod' ? toggleAI(mod) : (toggle(mod), requestPermission(mod))">
           {{ mod.enabled ? '已启用' : '已禁用' }}
         </button>
