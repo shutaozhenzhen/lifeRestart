@@ -15,7 +15,7 @@
 // vitest DSL。
 import { describe, test, expect } from 'vitest'
 // node 文件（真实数据用例：把磁盘上的 mods/ 当作"服务器"）。
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 // 被测模块。
@@ -241,6 +241,73 @@ describe('mod-detail - 数据目录（Data Mod 的数据不在自己目录里）
     expect(await fallback.readText('lifeRestart-data', 'talents.json')).toBe('{"t1":{}}')
     // 两边都没有 → null。
     expect(await fallback.readText('lifeRestart-data', 'nope.json')).toBeNull()
+  })
+
+  // 为什么单测"清单"这件事：线上每打开一次「查看数据」页，控制台曾出现 8 条红色 404
+  // （全部是"注定失败、再兜底成功"的探测请求，见 createDataFallbackSource 的注释）。
+  // 这里把"按清单读、不探测"钉成不变量 —— 它同时也是"清单完整性"的守卫。
+  test('createDataFallbackSource：清单里没有的文件，不再对 Mod 目录发请求', async () => {
+    // 记录每一次请求（mod: 前缀=走 Mod 目录源，http: 前缀=走数据目录）。
+    const asked = []
+    // Mod 源：只有 manifest.json（与线上 Data Mod 同形）。
+    const source = {
+      // 清单。
+      async listFiles() { return ['manifest.json'] },
+      // 读文本。
+      async readText(mod, rel) { asked.push(`mod:${rel}`); return rel === 'manifest.json' ? '{}' : null },
+    }
+    // 数据目录：有清单 + 两张表。
+    const fetchImpl = async (url) => {
+      // 记录。
+      asked.push(`http:${url}`)
+      // 清单。
+      if (String(url) === '/data/files.json') return { ok: true, status: 200, text: async () => JSON.stringify(['age.json', 'talents.json']) }
+      // 表。
+      if (String(url) === '/data/age.json') return { ok: true, status: 200, text: async () => '{"0":{}}' }
+      // 其它 404。
+      return { ok: false, status: 404, text: async () => '' }
+    }
+    // 造源。
+    const fallback = createDataFallbackSource({ source, dataBase: '/data/', fetchImpl })
+    // 清单 = Mod 目录 ∪ 数据目录。
+    expect(await fallback.listFiles('lifeRestart-data')).toEqual(['manifest.json', 'age.json', 'talents.json'])
+    // 数据表：直接去数据目录，**没有**对 Mod 目录发请求。
+    expect(await fallback.readText('lifeRestart-data', 'age.json')).toBe('{"0":{}}')
+    expect(asked).toContain('http:/data/age.json')
+    expect(asked.filter((a) => a === 'mod:age.json')).toEqual([])
+    // 清单里有的文件仍然 Mod 目录优先（并集不破坏优先级）。
+    expect(await fallback.readText('lifeRestart-data', 'manifest.json')).toBe('{}')
+  })
+
+  test('createDataFallbackSource：数据目录没有清单 → 回到探测模式；Mod 目录没有清单 → 照旧先试 Mod 目录', async () => {
+    // Mod 源：**没有** files.json（listFiles → null，例如 Node 侧才知道的目录）。
+    const source = { async listFiles() { return null }, async readText(mod, rel) { return rel === 'characters.json' ? '{"c1":{}}' : null } }
+    // 数据目录：什么都没有。
+    const fetchImpl = async () => ({ ok: false, status: 404, text: async () => '' })
+    // 造源。
+    const fallback = createDataFallbackSource({ source, dataBase: '/data/', fetchImpl })
+    // 没有清单 → null（引擎按约定清单探测，不会少读）。
+    expect(await fallback.listFiles('lifeRestart-data')).toBeNull()
+    // 这时清单里没列的文件也照样先试 Mod 目录（老行为不变）。
+    expect(await fallback.readText('lifeRestart-data', 'characters.json')).toBe('{"c1":{}}')
+  })
+
+  test('createDataFallbackSource：Mod 目录没有清单时，约定清单进并集（code.js 不被静默丢掉）', async () => {
+    // Mod 源：不知道有哪些文件。
+    const source = { async listFiles() { return null }, async readText() { return null } }
+    // 数据目录：只有 age.json 的清单。
+    const fetchImpl = async (url) => (String(url) === '/data/files.json'
+      ? { ok: true, status: 200, text: async () => JSON.stringify(['age.json']) }
+      : { ok: false, status: 404, text: async () => '' })
+    // 造源。
+    const fallback = createDataFallbackSource({ source, dataBase: '/data/', fetchImpl })
+    // 清单。
+    const files = await fallback.listFiles('lifeRestart-data')
+    // 数据表来自数据目录的清单。
+    expect(files).toContain('age.json')
+    // 未知的 Mod 目录：按引擎约定清单去试（含 code.js），不猜。
+    expect(files).toContain('code.js')
+    expect(files).toContain('talents.json')
   })
 
   test('声明了数据目录：即使 files.json 只列 manifest，5 张表也能读到', async () => {
@@ -537,4 +604,82 @@ describe('mod-detail - 真实数据（仓库里的 mods/）', () => {
     // 无错误。
     expect(detail.errors).toEqual([])
   }, 60000)
+
+  // ── 线上部署形态：**0 条注定失败的请求** ─────────────────────────────────────
+  //
+  // 背景（2026-10 线上实测）：Mod 目录里只有 manifest.json + files.json（sync-mods
+  // 刻意不复制那 4MB 数据），数据全在 data/。清单缺失时引擎只能"按约定清单探测"，
+  // 于是每打开一次「查看数据」页，玩家控制台就多 8 条红色 404：
+  //   data/files.json · mods/lifeRestart-data/{5 张表 + code.js} · data/code.js
+  // 功能一直是好的（最终全部兜底成功、页面日志"无错误"），但这既是噪声也是清单缺失，
+  // 所以补了 `public/data/files.json` 并让兜底源**按清单读**。
+  //
+  // 这条用例把"一个 Mod 详情页最多发几次请求、其中几次失败"钉死：失败数必须是 0。
+  test('线上形态：一次「查看数据」的请求全部命中（失败请求 0 条）', async () => {
+    // 仓库里真实存在的 Mod 目录（manifest 从这里读）。
+    const modsRoot = REPO_ROOT
+    // 数据目录（入库产物）。
+    const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public', 'data')
+    // 线上形态的 Mod 目录：**只有** manifest.json + files.json（数据不在自己目录里）。
+    const modDir = join(modsRoot, 'mods', 'lifeRestart-data')
+    const site = {
+      // manifest（真实文件）。
+      'mods/lifeRestart-data/manifest.json': readFileSync(join(modDir, 'manifest.json'), 'utf8'),
+      // 清单（sync-mods 生成的就是这个内容：数据文件不在 Mod 目录，所以没有它们）。
+      'mods/lifeRestart-data/files.json': JSON.stringify(['manifest.json']),
+    }
+    // 数据目录：按磁盘实际内容（含 files.json 清单）。
+    for (const f of readdirSync(dataDir)) site[`data/${f}`] = readFileSync(join(dataDir, f), 'utf8')
+    // 请求记录（命中 / 失败）。
+    const hits = []
+    const misses = []
+    // 假服务器。
+    const fetchImpl = async (url) => {
+      // 归一化（Pages 形态的相对前缀）。
+      const rel = String(url).replace(/^\.?\//, '').replace(/^\.\//, '')
+      // 命中。
+      if (site[rel] !== undefined) {
+        hits.push(rel)
+        return { ok: true, status: 200, text: async () => site[rel] }
+      }
+      // 失败（**线上就是这 8 条里的某几条**）。
+      misses.push(rel)
+      return { ok: false, status: 404, text: async () => '' }
+    }
+    // 读详情（调用形态与浏览器里一致）。
+    const detail = await loadModDetail({
+      // 目录名。
+      name: 'lifeRestart-data',
+      // Pages 形态的 Mod 根。
+      baseUrl: './mods/',
+      // 假服务器。
+      fetchImpl,
+      // 数据目录。
+      dataFrom: 'data',
+      // 站点根。
+      siteBaseUrl: './',
+    })
+    // 数据读全了（这是本用例的前提，否则"0 失败"没意义）。
+    expect(detail.present).toEqual(['age', 'talents', 'events', 'achievements', 'characters'])
+    expect(Object.keys(detail.data.events).length).toBe(1720)
+    expect(detail.errors).toEqual([])
+    // 请求都命中了：没有一条注定失败的探测。
+    expect(misses).toEqual([])
+    // 读的确实是**数据目录**（Mod 目录里没有数据文件）—— 别让用例变成"什么都没读"。
+    expect(hits).toContain('data/age.json')
+    expect(hits).toContain('data/files.json')
+  }, 60000)
+
+  test('数据目录清单与实际文件一致（漏一个文件就会少读一份数据）', () => {
+    // 数据目录。
+    const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public', 'data')
+    // 清单。
+    const listed = JSON.parse(readFileSync(join(dataDir, 'files.json'), 'utf8'))
+    // 目录里实际的 JSON（清单自己不算数据文件）。
+    const actual = readdirSync(dataDir).filter((f) => f.endsWith('.json') && f !== 'files.json').sort()
+    // 双向一致（多列了会多几条 404，少列了会静默少读数据 —— 后者更危险）。
+    expect([...listed].sort()).toEqual(actual)
+    // 数据目录不提供代码：清单里出现 code.js 就说明有人把两个目录搞混了。
+    expect(listed).not.toContain('code.js')
+  })
 })

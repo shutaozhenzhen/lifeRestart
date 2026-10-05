@@ -49,8 +49,20 @@ export function resolveDataBase(dataFrom, baseUrl) {
 // 为什么不直接用组合源：`loadMod()` 会用 `files.json` 过滤数据文件，
 // 而 Data Mod 的 `files.json` 里只有 `manifest.json`（数据不在 Mod 目录）——
 // 直接用组合源的话，5 张数据表会被"清单里没有"直接跳过，兜底永远轮不到。
-// 所以这里把清单交给**数据目录**（通常没有 files.json → null → 引擎按约定探测 5 张表），
-// 读文本时先试 Mod 自己的目录，再落到数据目录。
+// 所以清单取**两边并集**（Mod 目录有 `code.js` 之类也照样读），读文本时先试 Mod 自己的
+// 目录，再落到数据目录。
+//
+// ⚠️ 为什么要看清单再决定"要不要探测"（2026-10 线上实测）：
+//   数据目录原本**没有** `files.json` → 本源的清单只能是 null → 引擎只能按约定清单
+//   逐个试（`loadMod` 的注释写着"避免浏览器里一堆 404"，但探测模式下没有清单可用），
+//   于是每打开一次「查看数据」页就在控制台留下 8 条红色 404：
+//     data/files.json（没有清单）· mods/<mod>/{5 张表 + code.js}（数据不在 Mod 目录，
+//     sync-mods 刻意不复制那 4MB）· data/code.js（数据目录没有代码）
+//   功能一直是好的（全部**成功兜底**到 `data/*.json`，页面日志"无错误"），但"注定失败
+//   的请求"就是噪声，也说明**清单缺失**。修法两条，都在本文件与数据目录里：
+//     1. 数据目录补上自己的清单 `public/data/files.json`（有它就不必再试 data/code.js）；
+//     2. 这里**按清单读**：Mod 目录的清单明说没有的文件，不再对它发请求。
+//   判据与"清单即权威"的引擎语义一致（`loader.js` 有清单时同样按清单过滤/跳过 code.js）。
 //
 // @param {object} params
 // @param {object} params.source - 原 Mod 源
@@ -61,21 +73,59 @@ export function resolveDataBase(dataFrom, baseUrl) {
 export function createDataFallbackSource({ source, dataBase, fetchImpl, log } = {}) {
   // 数据目录源（**扁平**：忽略 Mod 名，`<dataBase><file>`）。
   const flat = createFetchSource({ baseUrl: dataBase, fetchImpl, log })
+  // Mod 目录自己的文件清单（读一次就缓存；null = 源不支持/没有清单）。
+  let ownFiles = null
+  // 是否已经读过（`null` 也要缓存，否则每次 readText 都会再请求一遍 files.json）。
+  let ownRead = false
+  // #ownIndex：读 Mod 目录的 `files.json`（失败按"没有清单"处理，与引擎一致）。
+  async function ownIndex(mod) {
+    // 读过就直接给。
+    if (ownRead) return ownFiles
+    // 标记（只读一次）。
+    ownRead = true
+    // 读。
+    try {
+      // 清单（非数组按"没有"处理）。
+      const listed = await source.listFiles(mod)
+      // 规范化。
+      ownFiles = Array.isArray(listed) ? listed.map(String) : null
+    } catch {
+      // 没有清单。
+      ownFiles = null
+    }
+    // 返回。
+    return ownFiles
+  }
   // 返回源。
   return {
     // 类型（排查用）。
     kind: 'data-fallback',
-    // 清单：以数据目录为准（没有 files.json 时返回 null → 引擎按约定探测）。
-    async listFiles() {
-      // 读数据目录的 files.json（通常不存在）。
-      return flat.listFiles('')
+    // 清单：**Mod 目录 ∪ 数据目录**。
+    //
+    // 数据目录没有清单时返回 null —— 保持老行为（引擎按约定清单探测 + 逐文件兜底），
+    // 这样即使站点上少了 `data/files.json` 也只是"多几条 404"，不会少读数据。
+    async listFiles(mod) {
+      // 数据目录的清单（缺失 → 探测模式）。
+      const dataFiles = await flat.listFiles('')
+      // 没有清单 → 交回引擎探测。
+      if (!Array.isArray(dataFiles)) return null
+      // Mod 目录的清单。
+      const own = await ownIndex(mod)
+      // Mod 目录没有清单 → 它的文件**未知**，用引擎的约定清单去试（不知道就不猜）。
+      const ownList = own || [...DATA_FILES, CODE_FILE]
+      // 并集（Mod 目录里声明的文件也要读，例如它自己的 code.js）。
+      return [...new Set([...ownList, ...dataFiles.map(String)])]
     },
     // 读文本：Mod 目录优先 → 数据目录兜底。
     async readText(mod, rel) {
+      // Mod 目录的清单。
+      const own = await ownIndex(mod)
+      // 清单**明说没有**这个文件 → 直接走数据目录，别发注定 404 的请求。
+      if (own && !own.includes(rel)) return flat.readText('', rel)
       // 先试 Mod 自己的目录。
-      const own = await source.readText(mod, rel)
+      const text = await source.readText(mod, rel)
       // 命中。
-      if (own !== null && own !== undefined) return own
+      if (text !== null && text !== undefined) return text
       // 兜底：数据目录。
       return flat.readText('', rel)
     },
