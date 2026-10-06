@@ -13,11 +13,13 @@
  *   7. 「查看数据」进 Mod 数据详情页（用**目录名**寻址）
  *   8. 返回按钮回主页
  *   9. 「下载 zip」导出：成功时触发浏览器下载并给出文件名/文件数；失败时显示原因
+ *  10. 「从 GitHub 安装」：链接 → 安装并显示来源（分支/commit）；多 Mod 仓库 → 候选目录选择；
+ *      系统 Mod 名二次确认（取消则不再拉一次 / 同意则覆盖）；失败原因可见；拉取中可取消
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import ModManageView from './ModManageView.vue'
-import { resetApp, mountView, stubFetchOk } from '../test-utils/setup.js'
+import { resetApp, mountView, stubFetchOk, waitFor } from '../test-utils/setup.js'
 
 // 每个用例前重置。
 beforeEach(() => {
@@ -293,4 +295,229 @@ describe('ModManageView', () => {
     // 没有成功提示。
     expect(wrapper.find('.download-ok').exists()).toBe(false)
   })
+
+  test('从 GitHub 安装：输入链接 → 装上并显示来源分支/commit', async () => {
+    // GitHub 替身：仓库里就一个 Mod。
+    const gh = ghStub({
+      files: {
+        'mods/a/manifest.json': JSON.stringify({ name: 'gh-mod', version: '1.0.0', permissions: [] }),
+        'mods/a/code.js': 'export default () => {}',
+      },
+    })
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 输入链接并回车（与点按钮同一条路径）。
+    await wrapper.find('.gh-input').setValue('https://github.com/o/r/tree/main/mods/a')
+    await wrapper.find('.gh-input').trigger('keyup.enter')
+    await flushPromises()
+    // 成功提示里带来源（用户要能知道"装的是哪一版"）。
+    const ok = wrapper.find('.install-ok').text()
+    expect(ok).toContain('o/r')
+    expect(ok).toContain('gh-mod')
+    expect(ok).toContain(COMMIT.slice(0, 7))
+    expect(ok).toContain('目录 mods/a')
+    // 真的装上了：列表里出现它，并标为「本地安装」（可卸载）。
+    expect(wrapper.findAll('.mod-name').some((n) => n.text().includes('gh-mod'))).toBe(true)
+    expect(wrapper.findAll('.sys-hint').some((n) => n.text().includes('本地安装'))).toBe(true)
+    // 请求确实走的是 api.github.com + raw（而不是 zipball）。
+    expect(gh.calls.some((u) => u.startsWith('https://api.github.com/'))).toBe(true)
+    expect(gh.calls.filter((u) => u.startsWith('https://raw.githubusercontent.com/')).length).toBeGreaterThan(0)
+    // 没有错误块。
+    expect(wrapper.find('.gh-bar').exists()).toBe(true)
+  })
+
+  test('从 GitHub 安装：仓库里有多个 Mod → 渲染候选目录，点候选才装', async () => {
+    // 两个 Mod（名字不同，便于断言"装的是哪一个"）。
+    const gh = ghStub({
+      files: {
+        'mods/a/manifest.json': JSON.stringify({ name: 'mod-a', version: '1.0.0', permissions: [] }),
+        'mods/b/manifest.json': JSON.stringify({ name: 'mod-b', version: '1.0.0', permissions: [] }),
+      },
+    })
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 只给到仓库（不给目录）。
+    await wrapper.find('.gh-input').setValue('https://github.com/o/r')
+    await findButton(wrapper, '从 GitHub 安装').trigger('click')
+    await flushPromises()
+    // 没有直接安装，而是列出候选。
+    expect(wrapper.find('.install-ok').exists()).toBe(false)
+    expect(wrapper.find('.gh-candidates').text()).toContain('mods/a')
+    expect(wrapper.find('.gh-candidates').text()).toContain('mods/b')
+    // 此时不该下载任何文件（还没定目录）。
+    expect(gh.calls.some((u) => u.startsWith('https://raw.githubusercontent.com/'))).toBe(false)
+    // 选第二个。
+    await findButton(wrapper, 'mods/b').trigger('click')
+    await flushPromises()
+    // 装的是 b（不是 a）。
+    expect(wrapper.find('.install-ok').text()).toContain('mod-b')
+    expect(wrapper.findAll('.mod-name').some((n) => n.text().includes('mod-b'))).toBe(true)
+    expect(wrapper.findAll('.mod-name').some((n) => n.text().includes('mod-a'))).toBe(false)
+    // 候选收起。
+    expect(wrapper.find('.gh-candidates').exists()).toBe(false)
+  })
+
+  test('从 GitHub 安装：系统 Mod 名 → 取消确认则不安装、也不再拉一次', async () => {
+    // 仓库里是系统预装 Mod。
+    const gh = ghStub({ files: { 'mods/d/manifest.json': JSON.stringify({ name: 'lifeRestart-data', version: '1.0.0' }) } })
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 用户拒绝二次确认。
+    globalThis.confirm = vi.fn(() => false)
+    // 安装。
+    await wrapper.find('.gh-input').setValue('https://github.com/o/r/tree/main/mods/d')
+    await findButton(wrapper, '从 GitHub 安装').trigger('click')
+    // 等拒绝的反馈出现（此时这一次拉取已经彻底结束）。
+    await waitFor(() => wrapper.find('.install-error').exists())
+    // 反馈。
+    expect(wrapper.find('.install-error').text()).toContain('已取消安装系统 Mod lifeRestart-data')
+    // 拒绝之后没有任何新的 GitHub 请求（一个"确定/取消"不该再花配额）。
+    // 只数 GitHub 的 https 请求：挂载时的 Mod 发现请求是相对路径，不该混进来。
+    const ghCalls = () => gh.calls.filter((u) => u.startsWith('https://')).length
+    const after = ghCalls()
+    await flushPromises()
+    expect(ghCalls()).toBe(after)
+    // 没有被装成"本地安装"。
+    expect(wrapper.findAll('.sys-hint').some((n) => n.text().includes('本地安装'))).toBe(false)
+  })
+
+  test('从 GitHub 安装：确认后覆盖系统 Mod，且**不再补拉一次**', async () => {
+    // 替身：单 Mod 仓库。
+    const gh = ghStub({ files: { 'mods/d/manifest.json': JSON.stringify({ name: 'lifeRestart-data', version: '9.9.9' }) } })
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 同意二次确认。
+    globalThis.confirm = vi.fn(() => true)
+    // 安装。
+    await wrapper.find('.gh-input').setValue('https://github.com/o/r/tree/main/mods/d')
+    await findButton(wrapper, '从 GitHub 安装').trigger('click')
+    // 等装成。
+    await waitFor(() => wrapper.find('.install-ok').exists())
+    // 提示里明说覆盖了系统预装。
+    expect(wrapper.find('.install-ok').text()).toContain('覆盖了系统预装 Mod')
+    // **这条钉住 prefetched 契约**：GitHub 请求正好 3 次（commit + 树 + 1 个 raw 文件）；
+    // 若"确定"后重新拉一遍，这里会是 6 次 —— 用户的确认不该再花掉一次配额。
+    expect(gh.calls.filter((u) => u.startsWith('https://')).length).toBe(3)
+  })
+
+  test('从 GitHub 安装：失败把原因显示出来（不静默）', async () => {
+    // 一切 404。
+    globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({ message: 'Not Found' }), text: async () => '' })
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 安装。
+    await wrapper.find('.gh-input').setValue('https://github.com/o/r')
+    await findButton(wrapper, '从 GitHub 安装').trigger('click')
+    await flushPromises()
+    // 原因可见（404 → 点名"私有仓库也不支持"）。
+    expect(wrapper.find('.install-error').text()).toContain('404')
+    // 没有成功提示。
+    expect(wrapper.find('.install-ok').exists()).toBe(false)
+  })
+
+  test('从 GitHub 安装：空输入给提示；拉取中可以取消', async () => {
+    // 替身：API 立即返回，raw 挂起（模拟网络卡住），直到被取消。
+    const files = { 'mods/a/manifest.json': JSON.stringify({ name: 'gh-mod', version: '1.0.0' }) }
+    const tree = [{ path: 'mods/a/manifest.json', type: 'blob', size: Buffer.byteLength(files['mods/a/manifest.json']), sha: 'sha1' }]
+    globalThis.fetch = async (url, init) => {
+      // 发现请求 → 404（退回内置清单）。
+      if (!String(url).startsWith('http')) return { ok: false, status: 404, text: async () => '' }
+      // 树/commit。
+      if (String(url).includes('/commits/')) return jsonRes({ sha: COMMIT, commit: { tree: { sha: 'tree1' } } })
+      if (String(url).includes('/git/trees/')) return jsonRes({ tree, truncated: false })
+      // raw：挂到被取消为止。
+      return new Promise((_, reject) => {
+        // 没有 signal 就直接失败（不该发生）。
+        if (!init?.signal) return reject(new Error('没有 signal'))
+        // 取消时抛 AbortError（与浏览器 fetch 一致）。
+        init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+      })
+    }
+    // 挂载。
+    const { wrapper } = mountView(ModManageView)
+    await flushPromises()
+    // 空输入 → 提示。
+    await findButton(wrapper, '从 GitHub 安装').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.install-error').text()).toContain('请输入 GitHub 链接')
+    // 正式安装（会卡在 raw）。
+    await wrapper.find('.gh-input').setValue('https://github.com/o/r/tree/main/mods/a')
+    await findButton(wrapper, '从 GitHub 安装').trigger('click')
+    // 等它走到下载阶段。
+    await flushPromises()
+    // 出现取消按钮。
+    const cancel = findButton(wrapper, '取消')
+    await cancel.trigger('click')
+    await flushPromises()
+    // 报的是"已取消"，不是"下载失败"（这两种情况用户看到的应该不一样）。
+    expect(wrapper.find('.install-error').text()).toContain('已取消拉取')
+    // 忙状态解除（按钮文案回到常态）。
+    expect(findButton(wrapper, '从 GitHub 安装').text()).toContain('从 GitHub 安装')
+  })
 })
+
+// 固定的 commit / tree sha（与 mod-github.spec.js 同形；替身断言要用）。
+const COMMIT = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+
+// #jsonRes
+// 造一个 JSON 响应。
+function jsonRes(body) {
+  return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) }
+}
+
+// #ghStub
+// 让页面的 fetch 既能满足"Mod 发现"（相对路径 → 404，退回内置清单），又能满足 GitHub 拉取。
+//
+// @param {object} [params]
+// @param {object} [params.files] - 仓库内路径 → 文本
+// @returns {{calls: string[]}} 请求记录
+function ghStub({ files = {} } = {}) {
+  // 树 + blob sha 映射。
+  const tree = []
+  const shaOf = {}
+  // 逐个文件。
+  for (const [path, text] of Object.entries(files)) {
+    // 假 sha。
+    const sha = `sha_${path.replace(/[^a-zA-Z0-9]/g, '_')}`
+    // 记录。
+    shaOf[sha] = path
+    // 树条目（size 必须是**字节数**，否则会触发"大小不一致"警告）。
+    tree.push({ path, type: 'blob', size: Buffer.byteLength(text, 'utf8'), sha })
+  }
+  // 请求记录。
+  const calls = []
+  // 替身。
+  globalThis.fetch = async (url, init) => {
+    // 记录。
+    calls.push(String(url))
+    // 发现请求（相对路径 / 站点路径）→ 404。
+    if (!String(url).startsWith('http')) return { ok: false, status: 404, text: async () => '' }
+    // 仓库元数据（链接没带分支时会问默认分支）。
+    if (/\/repos\/[^/]+\/[^/]+$/.test(String(url))) return jsonRes({ default_branch: 'main', private: false })
+    // commit。
+    if (String(url).includes('/commits/')) return jsonRes({ sha: COMMIT, commit: { tree: { sha: 'tree1' } } })
+    // 树。
+    if (String(url).includes('/git/trees/')) return jsonRes({ tree, truncated: false })
+    // blob 兜底。
+    if (String(url).includes('/git/blobs/')) {
+      const sha = String(url).split('/').pop()
+      return jsonRes({ content: Buffer.from(files[shaOf[sha]] ?? '', 'utf8').toString('base64'), encoding: 'base64' })
+    }
+    // raw。
+    if (String(url).startsWith('https://raw.githubusercontent.com/')) {
+      const rel = String(url).split(`/${COMMIT}/`)[1]
+      if (!(rel in files)) return { ok: false, status: 404, text: async () => '' }
+      return { ok: true, status: 200, text: async () => files[rel] }
+    }
+    // 其它 → 404。
+    void init
+    return { ok: false, status: 404, text: async () => '' }
+  }
+  // 返回。
+  return { calls }
+}

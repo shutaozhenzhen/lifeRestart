@@ -1,7 +1,8 @@
 <script setup>
 // Mod 管理页（对应设计文档 6.5）。
-// 展示 Mod 列表、启用/禁用开关、权限声明、删除（系统 Mod 不可删）。
-// 启停/删除状态经 localStorage 持久化（键 modsState），刷新后保留用户选择。
+// 展示 Mod 列表、启用/禁用开关、权限声明、安装（zip / 从 GitHub 拉源码）、导出 zip、
+// 以及**完全移除**（预装/系统 Mod 一视同仁；移除后可恢复或重新安装）。
+// 启停/移除状态经 localStorage 持久化（键 modsState），刷新后保留用户选择。
 // 真实文件系统操作在引擎侧（mod/manager.js），浏览器侧为 UI 层（未接 API）。
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
@@ -12,6 +13,8 @@ import { loadModCatalog } from '../utils/mod-catalog.js'
 import { discoverMods, installModFromZip } from '../utils/mod-runtime.js'
 // 导出 Mod 为 zip（下载按钮；与引擎读 Mod 同一套清单/兜底规则）。
 import { exportModZip } from '../utils/mod-export.js'
+// 从 GitHub 链接拉源码安装（api.github.com + raw；zipball 端点被 CORS 挡，走不通）。
+import { installModFromGitHub } from '../utils/mod-github.js'
 // 触发浏览器下载（文本与 zip 共用；注入式，取不到浏览器 API 时返回 false）。
 import { downloadBytes } from '../utils/log-export.js'
 // 已安装 Mod 的本地存储（IndexedDB，含内存回退）。
@@ -111,23 +114,9 @@ async function onZipPicked(event) {
       // 结束。
       return
     }
-    // 成功提示 + 日志。
+    // 成功提示 + 日志 + 清「已移除」标记 + 刷新（zip 与 GitHub 两条安装路径共用一份收尾）。
     installError.value = ''
-    installMessage.value = `已安装 ${r.name}（${r.files} 个文件）${r.system ? ' · 覆盖了系统预装 Mod' : ''}`
-    gameStore.pushLog('info', `[UI][mods] 已安装 Mod ${r.name}（来自 ${file.name}，${r.files} 个文件${r.system ? '，覆盖系统预装' : ''}）`)
-    // 它可能正在「已移除」里 —— 上传成功就必须清掉标记，否则装完还是看不见（用户会以为没装上）。
-    if (removedMods.value.includes(r.name)) {
-      // 清标记（纯函数返回新数组）。
-      removedMods.value = dropRemoved(removedMods.value, r.name)
-      // 保存。
-      saveModsState({ mods: mods.value, removed: removedMods.value })
-      // 日志。
-      gameStore.pushLog('info', `[UI][mods] ${r.name} 原在「已移除」列表里，上传后已自动恢复`)
-    }
-    // 警告（路径/尺寸/二进制）逐条记。
-    for (const w of r.errors) gameStore.pushLog('warn', `[UI][mods] ${w}`)
-    // 刷新目录。
-    await refreshCatalog()
+    await afterInstall(r, `来自 ${file.name}`)
   } catch (e) {
     // 读文件/解压异常。
     installError.value = `安装失败：${e.message}`
@@ -137,6 +126,167 @@ async function onZipPicked(event) {
     // 解除忙状态。
     installBusy.value = false
   }
+}
+
+// #afterInstall
+// 安装成功后的统一收尾（**zip 与 GitHub 两条路共用**）。
+//
+// 抽出来的理由：这里有两件"漏了就会看起来像 bug"的事 ——
+//   1. 装上的 Mod 可能正躺在「已移除」列表里（用户先移除、又装回来）：
+//      不清掉标记，装完它还是不出现、不加载，用户只会以为"没装上"。
+//   2. 关闭确认过的警告（路径/尺寸/非文本）必须逐条进日志，不许静默。
+// 两份复制迟早会分叉，所以只留一份。
+//
+// @param {object} r - 安装结果（installModFromZip / installModFromGitHub）
+// @param {string} from - 来源描述（文件名 / owner/repo@commit），仅用于提示与日志
+// @param {object} [opts]
+// @param {boolean} [opts.setMessage] - 是否写「安装成功」提示（GitHub 路径自己在输入框下面显示来源更细）
+// @returns {Promise<void>}
+async function afterInstall(r, from, { setMessage = true } = {}) {
+  // 来源后缀（GitHub 会在后面追一句它是哪一版）。
+  const origin = r.source ? `${from}（${r.source.owner}/${r.source.repo}@${String(r.source.commit).slice(0, 7)}）` : from
+  // 成功提示。
+  if (setMessage) installMessage.value = `已安装 ${r.name}（${r.files} 个文件）${r.system ? ' · 覆盖了系统预装 Mod' : ''}`
+  // 日志。
+  gameStore.pushLog('info', `[UI][mods] 已安装 Mod ${r.name}（${origin}，${r.files} 个文件${r.system ? '，覆盖系统预装' : ''}）`)
+  // 它可能正在「已移除」里 —— 上传成功就必须清掉标记，否则装完还是看不见（用户会以为没装上）。
+  if (removedMods.value.includes(r.name)) {
+    // 清标记（纯函数返回新数组）。
+    removedMods.value = dropRemoved(removedMods.value, r.name)
+    // 保存。
+    saveModsState({ mods: mods.value, removed: removedMods.value })
+    // 日志。
+    gameStore.pushLog('info', `[UI][mods] ${r.name} 原在「已移除」列表里，安装后已自动恢复`)
+  }
+  // 警告（路径/尺寸/二进制）逐条记。
+  for (const w of r.errors) gameStore.pushLog('warn', `[UI][mods] ${w}`)
+  // 刷新目录。
+  await refreshCatalog()
+}
+
+// #installFromGitHub
+// 从 GitHub 链接安装 Mod（输入框回车、按钮点击、候选目录点击都走这里）。
+//
+// 流程与 zip 安装**完全一致**（同一套落地链路），只有"包从哪来"不同：
+//   拉取 → 若仓库里有多个 Mod 则让用户选目录 → 系统 Mod 名二次确认 → 复用 afterInstall。
+//
+// @param {string} [url] - 链接（缺省用输入框里的值；候选目录点击时传候选自带的链接）
+// @returns {Promise<void>}
+async function installFromGitHub(url) {
+  // 链接。
+  const link = String(url ?? ghUrl.value ?? '').trim()
+  // 空输入。
+  if (!link) {
+    // 提示。
+    ghError.value = '请输入 GitHub 链接'
+    // 结束。
+    return
+  }
+  // 忙状态（防重复点击：一次安装要花 API 配额，重复点很亏）。
+  ghBusy.value = true
+  // 清反馈。
+  ghError.value = ''
+  ghMessage.value = ''
+  ghProgress.value = ''
+  ghCandidates.value = []
+  // 取消控制器。
+  ghAbort = new AbortController()
+  // 执行。
+  try {
+    // 日志（把用户输入的链接记下来，出问题可复现）。
+    gameStore.pushLog('info', `[UI][mods] 从 GitHub 安装：${link}`)
+    // 拉取 + 安装（第一遍：系统 Mod 名会被拒，但包已经拉好了）。
+    let r = await installModFromGitHub({
+      // 链接。
+      input: link,
+      // 落地到本地存储。
+      store: modStore.value,
+      // 取消。
+      signal: ghAbort.signal,
+      // 进度（多文件时让用户看到在动）。
+      onProgress: (p) => {
+        // 文本。
+        ghProgress.value = `已拉取 ${p.done}/${p.total} 个文件…`
+      },
+    })
+    // 需要选目录：把候选渲染出来（每个候选都钉在同一个 commit 上，点谁就是谁）。
+    if (!r.ok && r.needsChoice) {
+      // 候选。
+      ghCandidates.value = r.candidates
+      // 原因。
+      ghError.value = r.errors.join('；')
+      // 日志。
+      gameStore.pushLog('warn', `[UI][mods] 该仓库有多个 Mod，等待选择目录：${r.candidates.map((c) => c.path).join('、')}`)
+      // 结束。
+      return
+    }
+    // 系统 Mod 名：默认被拒（防"随手一个链接静默顶掉数据源 / AI 通道"）。
+    if (!r.ok && r.system) {
+      // 二次确认（讲清这是在覆盖系统预装）。
+      const yes = confirm(`这个仓库里是系统预装 Mod「${r.name}」。\n\n装上去会用仓库里的文件**覆盖**它（数据源 / AI 通道都由它提供）。\n确定要装吗？`)
+      // 用户拒绝。
+      if (!yes) {
+        // 反馈 + 日志。
+        ghError.value = `已取消安装系统 Mod ${r.name}`
+        gameStore.pushLog('warn', `[UI][mods] 取消安装系统 Mod ${r.name}（需二次确认）`)
+        // 结束。
+        return
+      }
+      // 确认后重试：用已经拉好的包（**不再拉一次**，否则用户的"确定"要再花掉 2~3 次配额）。
+      r = await installModFromGitHub({ prefetched: r.prefetched, store: modStore.value, allowSystem: true })
+    }
+    // 失败：把原因显示出来。
+    if (!r.ok) {
+      // 取消：单独一句话（别把它报成"下载失败"）。
+      if (r.aborted) {
+        // 提示。
+        ghError.value = '已取消拉取'
+        // 日志。
+        gameStore.pushLog('warn', '[UI][mods] 已取消从 GitHub 安装')
+        // 结束。
+        return
+      }
+      // 展示原因。
+      ghError.value = r.errors.join('；')
+      // 日志。
+      gameStore.pushLog('warn', `[UI][mods] 从 GitHub 安装失败：${r.errors.join('；')}`)
+      // 结束。
+      return
+    }
+    // 成功：走与 zip 安装同一份收尾（提示由下面这行自己写，带上"哪一版"）。
+    await afterInstall(r, '来自 GitHub', { setMessage: false })
+    // 成功提示补上来源（哪一版）——用户之后想复现/汇报时全靠它。
+    if (r.source) {
+      // 提示（覆盖系统预装时也要明说，与 zip 路径的措辞一致）。
+      ghMessage.value = `已从 ${r.source.owner}/${r.source.repo} 安装 ${r.name}（${r.files} 个文件 · 分支 ${r.source.ref} · commit ${String(r.source.commit).slice(0, 7)}${r.source.path ? ` · 目录 ${r.source.path}` : ''}${r.system ? ' · 覆盖了系统预装 Mod' : ''}）`
+    } else {
+      // 没有来源信息（理论上不会）也要给一句。
+      ghMessage.value = `已安装 ${r.name}（${r.files} 个文件）`
+    }
+    // 进度收起。
+    ghProgress.value = ''
+  } catch (e) {
+    // 异常兜底（不该发生：模块内部全捕获，但界面不能因此卡住）。
+    ghError.value = `安装失败：${e.message}`
+    // 日志。
+    gameStore.pushLog('warn', `[UI][mods] 从 GitHub 安装异常：${e.message}`)
+  } finally {
+    // 解除忙状态。
+    ghBusy.value = false
+    // 释放控制器。
+    ghAbort = null
+  }
+}
+
+// #cancelGitHub
+// 取消正在进行的 GitHub 拉取（多文件 + raw 连不上时会等一会儿，必须能取消）。
+//
+// @returns {void}
+function cancelGitHub() {
+  // 触发。
+  ghAbort?.abort()
+  // 日志。
+  gameStore.pushLog('info', '[UI][mods] 请求取消 GitHub 拉取')
 }
 
 // #uninstall
@@ -271,6 +421,15 @@ const installBusy = ref(false)
 // 安装错误 / 成功提示。
 const installError = ref('')
 const installMessage = ref('')
+// 从 GitHub 安装：输入的链接 / 忙状态 / 反馈 / 进度 / 候选目录 / 取消控制器。
+const ghUrl = ref('')
+const ghBusy = ref(false)
+const ghError = ref('')
+const ghMessage = ref('')
+const ghProgress = ref('')
+const ghCandidates = ref([])
+// 取消用（非响应式：只用来 abort，界面不需要 watch 它）。
+let ghAbort = null
 // 正在打包下载的 Mod（目录名；空 = 没有在打包，防重复点击）。
 const downloadBusy = ref('')
 // 下载错误 / 成功提示（与安装提示分开：两件事的反馈不该互相覆盖）。
@@ -550,6 +709,33 @@ function back() {
     </div>
     <p v-if="installError" class="install-error">⚠ {{ installError }}</p>
     <p v-if="installMessage" class="install-ok">{{ installMessage }}</p>
+
+    <!-- 从 GitHub 安装（浏览器侧只能走 api.github.com + raw：zipball 端点不允许跨域） -->
+    <div class="gh-bar">
+      <input
+        v-model="ghUrl"
+        class="gh-input"
+        placeholder="https://github.com/owner/repo（可带 /tree/分支/目录）"
+        :disabled="ghBusy"
+        @keyup.enter="installFromGitHub()"
+      />
+      <button class="btn primary" :disabled="ghBusy" @click="installFromGitHub()">
+        {{ ghBusy ? '拉取中…' : '⬇ 从 GitHub 安装' }}
+      </button>
+      <button v-if="ghBusy" class="btn" @click="cancelGitHub">取消</button>
+    </div>
+    <p class="gh-hint">
+      走 api.github.com + raw（GitHub 的 zipball 下载不允许跨域，浏览器里用不了）：匿名限流 60 次/小时，装一个约 3 次；
+      链接不给分支就用仓库默认分支，仓库里有多个 Mod 会让你选目录。
+    </p>
+    <p v-if="ghProgress" class="gh-progress">{{ ghProgress }}</p>
+    <p v-if="ghError" class="install-error">⚠ {{ ghError }}</p>
+    <p v-if="ghMessage" class="install-ok">{{ ghMessage }}</p>
+    <!-- 候选目录：仓库里有多个 Mod 时让用户选（每个候选都钉在同一个 commit 上） -->
+    <div v-if="ghCandidates.length" class="gh-candidates">
+      <span class="gh-candidates-title">选一个目录安装：</span>
+      <button v-for="c in ghCandidates" :key="c.path" class="btn gh-candidate" @click="installFromGitHub(c.url)">{{ c.path }}</button>
+    </div>
     <!-- 下载（导出 zip）的反馈：与安装提示分开显示，两件事不该互相覆盖 -->
     <p v-if="downloadError" class="download-error">⚠ {{ downloadError }}</p>
     <p v-if="downloadMessage" class="download-ok">{{ downloadMessage }}</p>
@@ -560,7 +746,7 @@ function back() {
         <span class="removed-title">已移除的 Mod（{{ removedMods.length }}）</span>
         <button class="btn restore" @click="restoreAll">全部恢复</button>
       </div>
-      <p class="removed-hint">完全移除只作用于这台浏览器：不再出现在列表、不再被加载、本地副本也已删除。服务器上的预装文件仍在，点「恢复」即可取回，也可以用上面的「+ 安装 Mod（.zip）」重新上传。</p>
+      <p class="removed-hint">完全移除只作用于这台浏览器：不再出现在列表、不再被加载、本地副本也已删除。服务器上的预装文件仍在，点「恢复」即可取回，也可以用上面的「+ 安装 Mod（.zip）」上传包、或「⬇ 从 GitHub 安装」从仓库装回来。</p>
       <div v-for="n in removedMods" :key="n" class="removed-row">
         <span class="removed-name">{{ n }}</span>
         <button class="btn restore" @click="restore(n)">恢复</button>
@@ -690,6 +876,56 @@ function back() {
 .install-hint {
   font-size: 12px;
   color: #8f9bb3;
+}
+/* 从 GitHub 安装：输入框 + 按钮 + 说明 + 候选目录 */
+.gh-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 14px 0 6px;
+}
+.gh-input {
+  flex: 1;
+  min-width: 240px;
+  background: #0f3460;
+  border: 1px solid #1a4a7a;
+  border-radius: 6px;
+  color: #e8e8e8;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.gh-input:disabled {
+  opacity: 0.6;
+}
+.gh-hint {
+  font-size: 12px;
+  color: #8f9bb3;
+  line-height: 1.7;
+  margin-bottom: 8px;
+}
+.gh-progress {
+  font-size: 12px;
+  color: #8f9bb3;
+  margin-bottom: 8px;
+}
+.gh-candidates {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: #16213e;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.gh-candidates-title {
+  font-size: 12px;
+  color: #8f9bb3;
+}
+.gh-candidate {
+  font-size: 12px;
+  padding: 4px 10px;
 }
 .hidden-file {
   display: none;

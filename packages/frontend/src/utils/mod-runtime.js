@@ -312,7 +312,7 @@ export function createBrowserModSource({ baseUrl = MODS_BASE_URL, fetchImpl, sto
 // 或 AI 通道（ai-mod）顶掉。
 //
 // 为什么做成常量而不是写在函数里：导出（`mod-export.js` 的「下载」按钮）也要用它来
-// 告诉用户"系统 Mod 的包装回来前得改 manifest.name" —— 两份清单迟早会分叉。
+// 告诉用户"这是系统预装 Mod（会被二次确认保护）" —— 两份清单迟早会分叉。
 export const SYSTEM_MOD_NAMES = ['lifeRestart-data', 'ai-mod']
 
 // #installModFromZip
@@ -340,7 +340,7 @@ export async function installModFromZip({ bytes, store, log, allowSystem = false
   // 系统 Mod 名保留：不允许**未经确认**用 zip 覆盖内置/系统 Mod（避免把数据源或 ai-mod 顶掉）。
   if (system && !allowSystem) {
     // 拒绝（带上 system 标记，界面据此弹"确认后重试"）。
-    return { ok: false, system: true, name: parsed.name, errors: [`${parsed.name} 是系统 Mod，不能被 zip 覆盖（要装请二次确认，或先改 manifest.name）`] }
+    return { ok: false, system: true, name: parsed.name, errors: [`${parsed.name} 是系统 Mod，不能被未经确认的包覆盖（装回来请二次确认）`] }
   }
   // 写入本地存储。
   await store.install({ name: parsed.name, manifest: parsed.manifest, files: parsed.files })

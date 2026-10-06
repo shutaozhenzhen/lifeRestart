@@ -27,7 +27,9 @@ export const MAX_FILE_BYTES = 8 * 1024 * 1024
 // 总解压上限（32MB）。
 export const MAX_TOTAL_BYTES = 32 * 1024 * 1024
 // 视为文本的文件后缀（Mod 包约定只有 JSON/JS；其它后缀按二进制处理并提示）。
-const TEXT_EXT = ['.json', '.js', '.mjs', '.txt', '.md']
+// 导出给"从 GitHub 拉源码当 Mod"的源用（frontend/src/utils/mod-github.js）——两边必须同一张表，
+// 否则会出现"上传 zip 收 .md、从 GitHub 装不收"这种随来源而变的行为分叉。
+export const TEXT_EXT = ['.json', '.js', '.mjs', '.txt', '.md']
 
 // #isSafeEntryPath
 // 判断 zip 内条目路径是否安全（防路径穿越）。

@@ -19,8 +19,9 @@
  *   · **不打包 `files.json`**：那是站点为了"HTTP 列不了目录"生成的索引（sync-mods 产物），
  *     不是 Mod 的内容；带上它既会把生成物当内容分发，也会在 Mod 内容变化后变成过期清单。
  *   · **系统 Mod 也允许下载**：它的数据就是用户的价值所在（4MB 原版数据）。
- *     但 zip 安装会拒绝系统 Mod 名（`SYSTEM_MOD_NAMES`，防止顶掉数据源与 AI 通道），
- *     所以返回值里带 `system` 标记，界面据此明说"装回来前要改 manifest.name"。
+ *     但 zip 安装默认拒绝系统 Mod 名（`SYSTEM_MOD_NAMES`，防止静默顶掉数据源与 AI 通道），
+ *     所以返回值里带 `system` 标记，界面据此明说"这是系统预装，装回来会再问一次"
+ *     （用户确认后走 `installModFromZip({ allowSystem: true })`，不需要改 manifest.name）。
  *
  * 本模块**不碰 DOM**（返回 zip 字节，浏览器侧由 log-export 的 `downloadBytes` 落地）。
  */
