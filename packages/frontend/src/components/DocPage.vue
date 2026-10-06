@@ -185,6 +185,22 @@ function colCount(b) {
   color: #8f9bb3;
   margin-bottom: 14px;
 }
+/* 按钮基础样式。
+   本项目的 `.btn` **不是全局样式**：每个页面/组件都在自己的 <style scoped> 里各定义一份
+   （HomeView / GameView / ModManageView / LogDock… 都是这么做的）。这里以前漏了，
+   于是文档页的「← 返回」是浏览器默认按钮样式（白底凸起），与全站深色风格不一致 ——
+   2026-10 由界面线框核对时发现，`views/ModDocsView.spec.js` 现在有一条源码守卫钉住这件事。 */
+.btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #0f3460;
+  color: #fff;
+  cursor: pointer;
+}
+.btn:hover {
+  background: #16457a;
+}
 .back {
   margin-bottom: 16px;
 }

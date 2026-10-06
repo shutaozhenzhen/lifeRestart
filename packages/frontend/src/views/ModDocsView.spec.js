@@ -134,3 +134,41 @@ describe('Mod 文档路由（顺序回归）', () => {
     expect(r.currentRoute.value.params.name).toBe('lifeRestart-data')
   })
 })
+
+// 源码守卫：用了 `class="btn…"` 的组件必须自己定义 `.btn`。
+//
+// 为什么需要它（2026-10 真踩过）：本项目的 `.btn` **不是全局样式**，每个页面/组件都在自己的
+// `<style scoped>` 里各定义一份。给文档页写新组件时漏了这 8 行，页面本身照常"能跑"、测试也全绿，
+// 只有肉眼看界面（或对着线框稿核对）才会发现「← 返回」变成了浏览器默认按钮 —— 是那种
+// "测试挡不住、只能靠人眼"的缺陷。这条守卫把它变成机器能挡的。
+describe('Mod 文档页 - 样式守卫', () => {
+  test('用了 class="btn" 的组件都必须定义 .btn（scoped 样式不是全局的）', async () => {
+    // 需要读文件（node 环境能力，vitest 里可用）。
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const { join, dirname } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    // 组件目录（相对本 spec）。
+    const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'components')
+    // 违规文件。
+    const bad = []
+    // 用到了 btn 的文件数（**防呆**：判据写错时这条守卫会"空过"，所以要断言它真的检查到了东西）。
+    let using = 0
+    // 逐个 .vue。
+    for (const f of readdirSync(dir).filter((f) => f.endsWith('.vue'))) {
+      // 源码。
+      const text = readFileSync(join(dir, f), 'utf8')
+      // 用了 btn 类。
+      const usesBtn = /class="btn(\s|"|\b)/.test(text)
+      // 计数。
+      if (usesBtn) using++
+      // 没定义 .btn（允许 `.btn,` 这种组合选择器写法）。
+      const definesBtn = /^\.btn\s*[,{]/m.test(text)
+      // 记录违规。
+      if (usesBtn && !definesBtn) bad.push(f)
+    }
+    // 至少要有两个（DocPage 与 LogDock）—— 否则说明这条守卫根本没在看东西。
+    expect(using, '这条守卫没检查到任何用了 .btn 的组件，判据疑似失效').toBeGreaterThanOrEqual(2)
+    // 一个都不许有。
+    expect(bad, `这些组件用了 class="btn" 却没定义 .btn（会退化成浏览器默认按钮样式）：${bad.join(', ')}`).toEqual([])
+  })
+})
