@@ -34,7 +34,7 @@ lifeRestart/
 │   │   └── server.js           # AI 代理服务（零依赖 Node http）
 │   └── frontend/               # Vue 3 + Pinia + Hash 路由（页面流转 + Mod 管理页 + 设置页）
 │       └── public/data/        # 运行期数据（原版 JSON，Data Mod 转换产物）
-├── mods/                       # 内置 Mod：base-mod / fun-mod / ai-mod / lifeRestart-data（均已入库）
+├── mods/                       # 内置 Mod：base-mod / fun-mod / ai-mod / lifeRestart-data + **example-mod（教学样板，默认禁用）**（均已入库）
 ├── platforms/
 │   ├── electron/               # 桌面版：主进程起代理 + 窗口 + electron-builder 打包
 │   ├── web/                    # 单进程静态站 + 内嵌代理（产出解压即运行的 zip）
@@ -128,7 +128,7 @@ cd packages/game-engine && node server.js [--mock] [--port <n>]
 cd lifeRestart && pnpm --filter frontend dev
 ```
 
-页面流转：`/` → `/talent` → `/property` → `/game` → `/summary`，另有 `/mods`（Mod 管理；顶部有 `+ 安装 Mod（.zip）` 与 **`⬇ 从 GitHub 安装`（粘 GitHub 链接直接拉源码装成 Mod）**，每张卡片有 `查看数据 →`、`⬇ 下载 zip`、启停、**`完全移除`（预装/系统 Mod 也适用）**，移除项进「已移除的 Mod」面板可恢复、重新上传 zip 或从 GitHub 装回来）、`/mods/:name`（**Mod 数据详情**：点 Mod 卡片上的 `查看数据 →`，可视化该 Mod 的天赋/事件/成就/名人/年龄表，也能 `⬇ 下载 zip`）、`/settings`（日志等级 + 实时日志面板）。
+页面流转：`/` → `/talent` → `/property` → `/game` → `/summary`，另有 `/mods`（Mod 管理；顶部有 **`📖 Mod 制作文档` / `📘 gameAPI 参考`** 两个入口、`+ 安装 Mod（.zip）` 与 **`⬇ 从 GitHub 安装`（粘 GitHub 链接直接拉源码装成 Mod）**，每张卡片有 `查看数据 →`、`⬇ 下载 zip`、启停、**`完全移除`（预装/系统 Mod 也适用）**，移除项进「已移除的 Mod」面板可恢复、重新上传 zip 或从 GitHub 装回来）、**`/mods/docs`（Mod 制作文档：目录结构 / manifest 每个字段 / 5 张数据表 / code.js 与钩子 / 调试 / 打包分发）**、**`/mods/api`（gameAPI 参考：逐条签名 + 参数 + 返回 + 副作用 + 权限 + 平台 + 示例，以及"没有的东西"清单）**、`/mods/:name`（**Mod 数据详情**：点 Mod 卡片上的 `查看数据 →`，可视化该 Mod 的天赋/事件/成就/名人/年龄表，也能 `⬇ 下载 zip`）、`/settings`（日志等级 + 实时日志面板）。
 
 **名人模式**（主页第二张模式卡）：`/` → `/character` → `/property` → `/game` → `/summary`。
 在 `/character` 抽一批候选名人（默认 3 位，按权重 + 保底），选一位后用 TA 的
@@ -292,12 +292,12 @@ node scripts/collect-apk.js       # 可选：把 APK 收集到 out/liferestart-m
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 716 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**、**HTTP 文件源**与 **Mod 架构 v2 宿主桥：`host.js` + `host-node.js` + `manifest` 的 targets/entry/deterministic**）/ ai / cli（含**无数据源即报错**的回归）/ data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 375 | 纯逻辑（日志/自动播放/storage/mods-state（含**完全移除·恢复**）/ **Mod 运行时与 zip 安装（含系统名二次确认）**/**Mod 导出为 zip（含真实数据整包往返）**/**从 GitHub 拉源码安装（URL 解析 / 限流 / 候选目录 / 取消 / raw 失败走 git-blobs 兜底 / 系统名不重复拉取）**/**数据加载（含空内容 / 已完全移除）**/**单个 Mod 数据读取与统计**/**重置数据清单**/**模拟驱动器**/**统计展示**）+ **10 个页面 + 3 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
+| `packages/game-engine` | 730 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**、**HTTP 文件源**、**Mod 架构 v2 宿主桥：`host.js` + `host-node.js` + `manifest` 的 targets/entry/deterministic**、**依赖排序回归**、**教学样板 `mods/example-mod` 的真跑一局回归**）/ ai / cli（含**无数据源即报错**的回归）/ data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
+| `packages/frontend` | 396 | 纯逻辑（日志/自动播放/storage/mods-state（含**完全移除·恢复**）/ **Mod 运行时与 zip 安装（含系统名二次确认）**/**Mod 导出为 zip（含真实数据整包往返）**/**从 GitHub 拉源码安装（URL 解析 / 限流 / 候选目录 / 取消 / raw 失败走 git-blobs 兜底 / 系统名不重复拉取）**/**Mod 文档的内容+覆盖性守卫（gameAPI 真实键 ↔ 文档条目双向核对）**/**数据加载（含空内容 / 已完全移除）**/**单个 Mod 数据读取与统计**/**重置数据清单**/**模拟驱动器**/**统计展示**）+ **12 个页面 + 4 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
 | `platforms/mobile` | 67 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
-| **合计** | **1170** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
+| **合计** | **1205** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
 
 ### 前端测试分层（2026-10 补齐）
 

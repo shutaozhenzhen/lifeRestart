@@ -1,0 +1,8 @@
+{
+  "name": "example-mod",
+  "version": "1.0.0",
+  "author": "lifeRestart 示例",
+  "description": "示例 Mod（教学）：演示 5 张数据表、三个钩子、参数注册与 gameAPI 的用法",
+  "permissions": ["hooks", "storage"],
+  "dependencies": ["lifeRestart-data"]
+}

@@ -107,8 +107,11 @@ export function createTestRouter(initial = '/') {
 // @param {object} [options.router] - 指定路由（缺省新建内存路由）
 // @param {string} [options.route] - 初始路由路径
 // @param {object} [options.global] - 追加的 global 配置（stubs 等）
+// @param {boolean} [options.attachToBody] - 是否挂到 document.body
+//   （**默认不挂**：多数页面测试只关心渲染结果。但涉及 `document.getElementById`
+//     或 `scrollIntoView` 的行为必须真挂上，否则查不到元素 —— 例如 Mod 文档页的目录跳转。）
 // @returns {{wrapper: object, router: object, pinia: object}} 挂载结果
-export function mountView(component, { pinia, router, route = '/', global = {} } = {}) {
+export function mountView(component, { pinia, router, route = '/', global = {}, attachToBody = false } = {}) {
   // 复用当前激活的 pinia（resetApp 建好的那个），否则组件与测试会各持一份 store。
   const p = pinia || getActivePinia() || createPinia()
   // 确保组件外的 useGameStore() 与组件内一致。
@@ -119,6 +122,8 @@ export function mountView(component, { pinia, router, route = '/', global = {} }
   const wrapper = mount(component, {
     // 注入插件（pinia + router 是组件 useStore/useRouter 的来源）。
     global: { plugins: [p, r], ...global },
+    // 需要真 DOM 时挂到 body（缺省不挂）。
+    ...(attachToBody ? { attachTo: document.body } : {}),
   })
   // 返回。
   return { wrapper, router: r, pinia: p }

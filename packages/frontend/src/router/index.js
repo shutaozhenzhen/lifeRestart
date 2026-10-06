@@ -34,6 +34,9 @@ import SummaryView from '../views/SummaryView.vue'
 import ModManageView from '../views/ModManageView.vue'
 // Mod 数据详情页（点 Mod 卡片上的「查看数据」进来；可视化该 Mod 装了什么）。
 import ModDetailView from '../views/ModDetailView.vue'
+// Mod 文档页（制作文档 / gameAPI 参考）：给写 Mod 的人看的，与引擎无关，可深链。
+import ModDocsView from '../views/ModDocsView.vue'
+import ModApiView from '../views/ModApiView.vue'
 // 设置页（日志等级等全局配置）。
 import SettingsView from '../views/SettingsView.vue'
 // 模拟统计页（批量模拟：随机天赋 + 随机属性）。
@@ -56,6 +59,10 @@ export const routes = [
   { path: '/summary', name: 'summary', component: SummaryView },
   // Mod 管理页。
   { path: '/mods', name: 'mods', component: ModManageView },
+  // Mod 文档页（**必须排在 `/mods/:name` 前面**：否则 `docs` / `api` 会被当成 Mod 的目录名，
+  // 落到详情页去"查看数据"，表现为"文档页打开是空的/报未找到 Mod"）。
+  { path: '/mods/docs', name: 'mod-docs', component: ModDocsView },
+  { path: '/mods/api', name: 'mod-api', component: ModApiView },
   // Mod 数据详情页（:name = Mod 的**目录名**；不需要引擎，可深链）。
   // 注意不加 `props: true`：页面自己用 useRoute() 取参数（避免多出一个落到根元素上的属性）。
   { path: '/mods/:name', name: 'mod-detail', component: ModDetailView },

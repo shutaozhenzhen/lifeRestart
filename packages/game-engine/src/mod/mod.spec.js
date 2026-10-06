@@ -128,6 +128,33 @@ describe('mod - resolveOrder', () => {
     expect(order).toEqual(['x', 'y'])
   })
 
+  // --- loader 实际传进来的形态：{ name, manifest }（2026-10 修的真实 bug）---
+  // 以前 resolveOrder 只读 `byName[name].dependencies`，而 loader.js:85 推的是
+  // `{ name, manifest }` → 依赖永远读不到 → "依赖先加载"在加载链路上等于没生效，
+  // 顺序退化成文件源的列表顺序（fun-mod→base-mod 恰好字母序正确，所以一直没暴露）。
+  test('manifest 形态也要按 manifest.dependencies 排序（不能只看扫描顺序）', () => {
+    // 目录名故意让"依赖方"排在前面（a-dependent 在 b-base 之前）。
+    const mods = [
+      { name: 'a-dependent', manifest: { name: 'a-dependent', version: '1.0.0', dependencies: ['b-base'] } },
+      { name: 'b-base', manifest: { name: 'b-base', version: '1.0.0' } },
+    ]
+    // 排序。
+    const { order, errors } = resolveOrder(mods)
+    // 无错。
+    expect(errors).toEqual([])
+    // 被依赖的先加载（后加载者覆盖先加载者 → 依赖方的数据才不会被覆盖回去）。
+    expect(order).toEqual(['b-base', 'a-dependent'])
+  })
+
+  test('manifest 形态的缺失依赖同样要报出来', () => {
+    // 依赖不存在。
+    const mods = [{ name: 'a', manifest: { name: 'a', version: '1.0.0', dependencies: ['ghost'] } }]
+    // 排序。
+    const { errors } = resolveOrder(mods)
+    // 报缺失。
+    expect(errors).toEqual(['缺失依赖: ghost'])
+  })
+
   test('chain dependency sorts transitively', async () => {
     // 链：c→b→a。
     const mods = [

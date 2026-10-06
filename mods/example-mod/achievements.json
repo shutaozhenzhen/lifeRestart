@@ -1,0 +1,11 @@
+{
+  "90001": {
+    "id": "90001",
+    "name": "示例·活到十岁",
+    "description": "示例成就：启用示例 Mod 并活到 10 岁（演示 opportunity/condition）",
+    "grade": 1,
+    "condition": "params.AGE >= 10",
+    "hide": 0,
+    "opportunity": "END"
+  }
+}

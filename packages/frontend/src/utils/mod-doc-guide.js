@@ -1,0 +1,654 @@
+/**
+ * mod-doc-guide — 「Mod 制作文档」的**内容数据**（页面由 components/DocPage.vue 渲染）
+ *
+ * 事实来源（2026-10 逐行核对）：`mod/manifest.js`（字段与校验原文）、`mod/loader.js`（加载/合并/
+ * code.js 执行）、`modules/{talent,event,achievement,character,property}.js`（各表字段的真实消费点）、
+ * `params/param-registry.js`、`mod/modules.js`（运行时依赖）、`mod/zip.js`（包限制）。
+ *
+ * 这份文档的样板是仓库里的 `mods/example-mod/` —— 文中每段都能在它里面找到对应文件，
+ * 并且有 `packages/game-engine/src/mod/example-mod.spec.js` 真跑一局钉住"样板没坏"。
+ */
+
+// #MOD_GUIDE
+// 制作文档。
+export const MOD_GUIDE = {
+  // 文档 id（锚点前缀）。
+  id: 'mod-guide',
+  // 标题。
+  title: 'Mod 制作文档',
+  // 副标题。
+  subtitle: '从零做一个 Mod：目录结构 · manifest 每个字段 · 5 张数据表 · code.js 与钩子 · 调试 · 打包分发',
+  // 章节。
+  sections: [
+    // ---------- 五分钟 ----------
+    {
+      id: 'quickstart',
+      title: '1. 五分钟做出第一个 Mod',
+      blocks: [
+        {
+          t: 'p',
+          text: '一个最小可用的 Mod 只有两个文件：`manifest.json`（它是什么）+ 若干数据文件或 `code.js`（它做什么）。',
+        },
+        {
+          t: 'code',
+          lang: 'text',
+          label: '目录结构',
+          code: `my-mod/
+├── manifest.json      # 必需：name + version
+├── talents.json       # 可选：天赋表（想加天赋就写）
+├── events.json        # 可选：事件表
+├── achievements.json  # 可选：成就表
+├── characters.json    # 可选：名人表
+├── age.json           # 可选：年龄表（"哪一岁可能发生哪些事件"）
+├── code.js            # 可选：代码入口（钩子 / 参数 / 运行时改数据）
+├── vendor/            # 可选：随包分发的依赖（自包含单文件）
+└── README.md          # 可选但强烈建议
+`,
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          label: 'manifest.json（最小）',
+          code: `{
+  "name": "my-mod",
+  "version": "1.0.0"
+}`,
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          label: 'talents.json（加一个天赋）',
+          code: `{
+  "my-t1": {
+    "id": "my-t1",
+    "name": "锦鲤",
+    "description": "运气不错（魅力+1）",
+    "grade": 1,
+    "effect": { "CHR": 1 }
+  }
+}`,
+        },
+        {
+          t: 'sub',
+          text: '三种装上它的方式',
+        },
+        {
+          t: 'list',
+          ordered: true,
+          items: [
+            '**上传 zip**：把整个目录打成 zip（里面要有 `manifest.json`，支持外面多包一层目录）→ Mod 管理页的「+ 安装 Mod（.zip）」',
+            '**从 GitHub 装**：把目录推到公开仓库 → Mod 管理页粘链接 → 「⬇ 从 GitHub 安装」（详细规则见第 12 节）',
+            '**放进仓库的 `mods/` 目录**：`mods/my-mod/…` → 跑 `node packages/frontend/scripts/sync-mods.mjs`（dev/build 会自动跑）→ 页面即可发现',
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'tip',
+          text: '装好后点卡片上的「查看数据 →」就能看到它到底装进去了什么（表计数 / 分布 / 逐条浏览）。数据页用的是**引擎同一套读取实现**，所以"页面显示什么"就是"引擎会加载什么"。',
+        },
+      ],
+    },
+
+    // ---------- 边界 ----------
+    {
+      id: 'what',
+      title: '2. Mod 能做什么、不能做什么',
+      blocks: [
+        {
+          t: 'table',
+          head: ['能做', '不能做'],
+          rows: [
+            ['加/改**数据**：天赋、事件、成就、名人、年龄表（后加载覆盖先加载）', '**加界面**：没有页面/组件/路由/面板注册 API'],
+            ['挂**钩子**：抽卡池、每一年、事件文本渲染、属性自定义区变化', '**改游戏属性**：`property.set` 不是游戏属性系统（见 API 文档 §5）'],
+            ['**注册新参数**：条件里立刻能用的 `params.XXX`', '**异步介入逐岁流程**：`life.next()` 是同步的'],
+            ['**运行期改数据**：`addTalent` / `addEvent` / `addAchievement` 等', '**带资源文件**：包只收文本（`.json/.js/.mjs/.txt/.md`）'],
+            ['**调用 AI**（需用户配 Key）与**本 Mod 的后端**（需 `server.js`）', '**发布到应用商店/被审核**：没有中心化分发，也没有访问控制'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'info',
+          text: '一条贯穿全项目的硬约束：**引擎不内置任何游戏内容**。天赋/事件/成就/名人都只能来自 Mod 或数据目录 —— 所以"你没装任何内容 Mod"时游戏就是空内容，这不是 bug（见 `_准则_Mod设计.md` B4）。',
+        },
+      ],
+    },
+
+    // ---------- manifest ----------
+    {
+      id: 'manifest',
+      title: '3. manifest.json：每个字段都讲一遍',
+      blocks: [
+        {
+          t: 'table',
+          head: ['字段', '类型', '必填', '缺省', '作用与校验'],
+          rows: [
+            ['`name`', 'string', '**是**', '—', 'Mod 名。校验 `/^[a-zA-Z0-9_-]+$/`（只能字母数字连字符下划线），不合法报 `name 只能包含字母数字连字符`。**建议与目录名一致**（页面按目录名寻址，两者允许不同但容易绕晕自己）'],
+            ['`version`', 'string', '**是**', '—', '版本号。**没有格式校验**（写 `abc` 也合法），只用于显示与导出 zip 的文件名'],
+            ['`author`', 'string', '否', '—', '作者。完全不校验，仅显示'],
+            ['`description`', 'string', '否', '—', '一句话说明。显示在 Mod 卡片上；不写就显示"（该 Mod 未提供描述）"'],
+            ['`permissions`', 'string[]', '否', '`[]`', '合法值只有 `ai` / `network` / `storage` / `hooks`，写别的报 `未知权限: x`。**目前不强制**（见 API 文档 §12），是给用户看的声明'],
+            ['`dependencies`', 'string[]', '否', '`[]`', '依赖的 Mod 名（**写目录名/源里的名字**）。决定加载顺序：被依赖的先加载。缺失报 `缺失依赖: x`，成环报 `循环依赖: a → b → a`'],
+            ['`system`', 'boolean', '否', '—', '标记"系统内置"。**与能否删除无关**（预装 Mod 也能完全移除），也**不**参与安装侧的名字保护（那份名单是硬编码的 `lifeRestart-data` / `ai-mod`）'],
+            ['`targets`', 'string[]', '否', '`["browser"]`', '运行目标：`browser`（执行 code.js）/ `node`（加载 server.js）。空数组、重复项、未知值都会被拒绝'],
+            ['`entry`', 'object', '否', '`{browser:"code.js"}`', '入口文件名。**只有 `entry.node` 生效**（宿主入口）；浏览器入口固定读 `code.js`，写 `entry.browser` 只影响界面显示'],
+            ['`deterministic`', 'boolean', '否', '由 targets 推导', '声明"行为可复现"。**目前只有界面/文档在用**（consistency 尚未消费）'],
+            ['`modules`', 'object', '否', '`{}`', '运行时依赖：`{ 模块名: 包内相对路径 }`，见第 10 节'],
+            ['`ai`', 'object', '否', '—', '**引擎从不读取**（历史字段）。AI 配置实际来自用户设置页 / CLI 环境变量'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'info',
+          text: '**未知字段会被忽略，不会拒绝**（校验器只逐个检查白名单字段）。所以写错字段名不会报错，只是不生效 —— 这是最容易查半天的地方。',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          label: '示例 Mod 的 manifest（仓库里真实存在）',
+          code: `{
+  "name": "example-mod",
+  "version": "1.0.0",
+  "author": "lifeRestart 示例",
+  "description": "示例 Mod（教学）：演示 5 张数据表、三个钩子、参数注册与 gameAPI 的用法",
+  "permissions": ["hooks", "storage"],
+  "dependencies": ["lifeRestart-data"]
+}`,
+        },
+        {
+          t: 'sub',
+          text: 'manifest 校验失败的错误原文（照它改就行）',
+        },
+        {
+          t: 'code',
+          lang: 'text',
+          code: `manifest 必须是对象
+缺少必填字段: name / 缺少必填字段: version
+name 只能包含字母数字连字符
+permissions 必须是数组 / 未知权限: hack
+dependencies 必须是数组
+targets 必须是数组 / targets 不能是空数组（缺省为 ["browser"]） / 未知 target: server（合法值：browser / node） / targets 不能有重复项
+entry 必须是对象 / entry 含未知目标键: web（合法键：browser / node） / entry.node 必须是不含路径穿越的相对文件名
+deterministic 必须是布尔值
+modules 必须是对象（{ 模块名: 相对路径 }） / modules.fflate 必须是不含路径穿越的相对路径
+
+（外层还会包一层：Mod X manifest 非法: <上面若干条用 "; " 连接>）`,
+        },
+      ],
+    },
+
+    // ---------- 数据表 ----------
+    {
+      id: 'data',
+      title: '4. 五张数据表：字段的真实含义',
+      blocks: [
+        {
+          t: 'p',
+          text: '数据文件的**文件名就是表名**（`talents.json` → `data.talents`）。每张表都是 `{ "id": { …条目… } }`，合并规则是**按 ID 整键替换**的一层浅合并（不是数组追加）。',
+        },
+        {
+          t: 'sub',
+          text: 'talents.json —— 天赋',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          code: `{
+  "my-t1": {
+    "id": "my-t1",
+    "name": "锦鲤",
+    "description": "运气不错",
+    "grade": 1,
+    "effect": { "CHR": 1, "SPR": 1 },
+    "condition": "params.AGE >= 30",
+    "exclude": ["my-t2"],
+    "maxTriggers": 1,
+    "status": 2,
+    "exclusive": false
+  }
+}`,
+        },
+        {
+          t: 'table',
+          head: ['字段', '含义'],
+          rows: [
+            ['`grade`', '**实质必填且必须是数字**（引擎会 `Number(grade)`）。抽卡按等级分池，缺失/非数字 → 分池对不上 → **永远抽不到**'],
+            ['`effect`', '属性效果对象（`{ CHR: 1 }`）。不写就是"只出一句文本、不改属性"'],
+            ['`condition`', '**触发时**才判定的门槛（不是"能不能进池"）：条件不满足时这次触发直接不生效'],
+            ['`exclude`', '与这些天赋**互斥**（数组）。抽卡时会检查，不能同时拥有'],
+            ['`maxTriggers`', '最多触发几次，缺省 1。**运行期用 `addTalent` 注入时必须显式写**（见第 6 节）'],
+            ['`status`', '数字：带给玩家的**额外属性分配点**'],
+            ['`exclusive`', 'truthy → **不进抽卡池**（只能被替换链换出来）'],
+            ['`replacement`', '替换链：`{ grade: { "2": 权重 } }` 或 `{ talent: { "某ID": 权重 } }`；写成数组时用 `"ID*权重"` 的 DSL（引擎会在初始化时解析成映射）'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '真实数据里有 184 条天赋，其中 86 条有 `effect`、52 条有 `condition`、36 条 `exclusive`、25 条 `exclude`、15 条 `replacement`、10 条 `status`。**`grade` 的分布是 0/1/2/3 四档**（101/52/23/8 条）—— 新天赋选哪一档决定了它多容易被抽到。',
+        },
+        {
+          t: 'sub',
+          text: 'events.json —— 事件（注意正文的字段名）',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          code: `{
+  "my-e1": {
+    "id": "my-e1",
+    "event": "【示例事件】你在路边捡到一枚硬币。",
+    "effect": { "MNY": 1 },
+    "include": "params.AGE > 0",
+    "exclude": "params.MNY > 100",
+    "postEvent": "你把它收进了口袋。",
+    "branch": ["params.MNY > 8:my-e2", "true:my-e3"],
+    "grade": 1,
+    "NoRandom": 0
+  }
+}`,
+        },
+        {
+          t: 'table',
+          head: ['字段', '含义'],
+          rows: [
+            ['`event`', '**正文文本**。字段名就叫 `event`（**不是** description）—— 写成 description 不会报错，只是事件里一个字都没有'],
+            ['`effect`', '属性效果'],
+            ['`include`', '条件：**必须满足**才能被随机触发'],
+            ['`exclude`', '条件：**满足则禁止**随机触发'],
+            ['`NoRandom`', 'truthy → 禁止随机触发（只能被 `branch` 链到）。真实数据里 152 条是这种'],
+            ['`branch`', '`["条件:目标事件id", …]`，**按顺序取第一条满足的** → 递归执行目标事件。命中时本条事件的 `effect` 照常生效、但 `postEvent` 不会返回'],
+            ['`postEvent`', '附加的一句后续文本（无分支命中时返回）'],
+            ['`grade`', '事件等级（会带进轨迹条目，用于展示分级）'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '**光有事件定义不会触发**：事件必须被 `age.json` 某个年龄的 `event` 列表引用（带权重）才会被抽到。这是新手最常卡住的地方。',
+        },
+        {
+          t: 'sub',
+          text: 'achievements.json —— 成就',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          code: `{
+  "my-a1": {
+    "id": "my-a1",
+    "name": "活到十岁",
+    "description": "第一次活到 10 岁",
+    "grade": 1,
+    "condition": "params.AGE >= 10",
+    "hide": 0,
+    "opportunity": "END"
+  }
+}`,
+        },
+        {
+          t: 'table',
+          head: ['字段', '含义'],
+          rows: [
+            ['`opportunity`', '**在哪个时机判定**，必须精确等于 `START` / `TRAJECTORY` / `SUMMARY` / `END` 之一。写错 → 永远不会达成（而且不报错）'],
+            ['`condition`', '达成条件（省略 = 该时机一到就达成）'],
+            ['`hide`', '1 = 隐藏（不显示在成就列表里）'],
+            ['`id`', '**必须自带且与键一致**：引擎判定达成时用对象里的 `id` 记账'],
+            ['`grade` / `name` / `description`', '展示用'],
+          ],
+        },
+        {
+          t: 'sub',
+          text: 'characters.json —— 名人（名人模式的候选）',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          code: `{
+  "my-c1": {
+    "id": "my-c1",
+    "name": "我自己",
+    "property": { "CHR": "5", "INT": "7", "STR": "4", "MNY": "7" },
+    "talent": ["my-t1"]
+  }
+}`,
+        },
+        {
+          t: 'table',
+          head: ['字段', '含义'],
+          rows: [
+            ['`property`', '基础属性。真实数据里值是**字符串**（前端会 `Number()` 兜 0）；只用 CHR/INT/STR/MNY 四项'],
+            ['`talent`', '自带天赋的 ID 数组 —— **必须是数组**（引擎直接 `.map`，写成字符串会抛 TypeError）'],
+            ['`id`', '**必须自带**（前端按 `c.id` 匹配选中项）'],
+          ],
+        },
+        {
+          t: 'sub',
+          text: 'age.json —— 年龄表（最容易踩的一张）',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          code: `{
+  "1": {
+    "age": "1",
+    "event": [
+      ["my-e1", 20],
+      ["10009", 10],
+      ["10010", 10],
+      ["10011", 1]
+    ]
+  }
+}`,
+        },
+        {
+          t: 'table',
+          head: ['字段', '含义'],
+          rows: [
+            ['键（`"1"`）', '年龄。真实数据覆盖 0~500 岁，共 501 个键'],
+            ['`event`', '`[事件id, 权重]` 的数组。引擎按权重随机抽一个；**不在这个列表里的事件永远不会发生**'],
+            ['`age`', '条目里的这个字段引擎**不读**（真实数据里带着它，无害）'],
+            ['`talent`', '（可选）该年龄自动获得的天赋 id 数组'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '**age 是"整键替换"，不是追加**：你写 `"1": {…}` 会把第 1 岁**整张列表**换掉。想"加一条"必须把原来的 id 一起抄进来（示例 Mod 就抄了 `10009/10010/10011`，否则"你从小生活在农村/城市/美国国籍"这三句会消失）。抄了 id 但没提供事件定义也不会崩：引擎对找不到的事件是 `try/catch + warn 跳过`（日志里出现 `doEvent: 事件缺失或异常（[ERROR] No Event[10009]），跳过`），但那一岁会少几句。',
+        },
+      ],
+    },
+
+    // ---------- code.js ----------
+    {
+      id: 'codejs',
+      title: '5. code.js：脚本体，不是模块',
+      blocks: [
+        {
+          t: 'p',
+          text: '引擎执行 code.js 的方式是 `new Function(\'gameAPI\', \'require\', \'"use strict";\\n\' + 你的代码)(gameAPI, requireFn)` —— 所以：',
+        },
+        {
+          t: 'list',
+          items: [
+            '**不要写 `export` / `import`**（直接语法错误 `Unexpected token \'export\'`）',
+            '**不能用顶层 `await`**（不是 async 函数）。需要异步就写在钩子/回调里',
+            '作用域里只有 `gameAPI` 与 `require`（还有 `console` 这类全局对象）',
+            '`return` 合法但返回值没人接',
+            '`"use strict"` 生效（函数体里的 `this` 是 `undefined`）',
+            '执行是**同步**的；单个 Mod 抛错只影响它自己（记成 `执行 X/code.js 失败: <原因>`）',
+          ],
+        },
+        {
+          t: 'code',
+          lang: 'js',
+          label: 'code.js 的完整结构（示例 Mod 的骨架）',
+          code: `// 1) 先探能力，再使用（能力不是"一定都有"）
+console.log('[my-mod] param:', gameAPI.param ? '可用' : '不可用')
+
+// 2) 注册参数（浏览器侧有；CLI 里 gameAPI.param 是 null，所以要判断）
+if (gameAPI.param) gameAPI.param.define('MY_LUCK', { type: 'local' })
+
+// 3) 挂钩子（同步回调；异步回调会被丢弃）
+gameAPI.on('onYearAdvance', (payload) => {
+  if (gameAPI.param) gameAPI.param.change('MY_LUCK', 1)
+  if (payload.age % 10 === 0) payload.content.push({ type: 'EVT', description: '整十岁' })
+})
+
+// 4) 运行期改数据（注意 maxTriggers，见下）
+gameAPI.addTalent({ id: 'my-t9', name: '运行时天赋', description: '…', grade: 0, maxTriggers: 1, effect: { SPR: 1 } })
+
+// 5) 用随包依赖（manifest.modules 声明过才 require 得到）
+// const fflate = require('fflate')
+`,
+        },
+        {
+          t: 'sub',
+          text: '一个真陷阱：code.js 在两端的执行时机不同',
+        },
+        {
+          t: 'table',
+          head: ['路径', '执行时机', '后果'],
+          rows: [
+            ['Node CLI', '在 Life 构造与 `life.initial()` **之前**', '`addTalent` 注入的天赋**会**被引擎规范化（补 id/grade/maxTriggers）'],
+            ['浏览器', '在 `await life.initial()` **之后**（因为要拿 Life 的参数注册表）', '注入的天赋**绕过**规范化 → `grade` 必须是数字、`maxTriggers` 必须显式写，否则**效果永不生效**（触发判定 `0 < undefined` 为假）'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'tip',
+          text: '写**数据文件**里的天赋没这个问题（初始化时会补齐）。只有"运行期用 addTalent 注入"才要注意。',
+        },
+      ],
+    },
+
+    // ---------- 钩子 ----------
+    {
+      id: 'hooks',
+      title: '6. 钩子：三个逐岁 + 一个观察',
+      blocks: [
+        {
+          t: 'table',
+          head: ['钩子', '什么时候触发', '你怎么影响它'],
+          rows: [
+            ['`onTalentPoolGenerate`', '抽卡时', '往 `payload.pool` 里 push 天赋对象（注意别重复塞）'],
+            ['`onYearAdvance`', '每翻一年', '往 `payload.content` 里 push 条目（会进当年轨迹、被轨迹页与总结页渲染）'],
+            ['`onEventRender`', '渲染每段事件文本时', '**返回字符串**即替换文本（唯一返回值生效的钩子）'],
+            ['`propertyChange`', '只有 `gameAPI.property.set` 调用时', '不能改，纯观察'],
+          ],
+        },
+        {
+          t: 'code',
+          lang: 'js',
+          label: '三个钩子的可运行写法',
+          code: `// 抽卡池：只塞一次
+gameAPI.on('onTalentPoolGenerate', (payload) => {
+  if (!payload.pool.some((t) => t.id === 'my-t1')) {
+    payload.pool.push({ id: 'my-t1', name: '锦鲤', description: '魅力+1', grade: 1 })
+  }
+})
+
+// 每一年：追加一条轨迹
+gameAPI.on('onYearAdvance', (payload) => {
+  if (payload.age === 18) payload.content.push({ type: 'EVT', description: '成年了' })
+})
+
+// 渲染：加前缀（返回 undefined = 不改）
+gameAPI.on('onEventRender', (payload) => {
+  if (payload.text.includes('示例事件')) return '✨ ' + payload.text
+  return undefined
+})`,
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '**别在逐岁钩子里写异步逻辑再改数据**：三个钩子走的是同步广播，async 回调返回的 Promise 会被丢弃；`life.next()` 返回后引擎/store 立刻做轨迹快照，晚到的改动不会进当年。要"每年调后端"得先把 `next()` 改成 async（那是引擎级改动，见 API 文档 §11）。',
+        },
+      ],
+    },
+
+    // ---------- 参数 ----------
+    {
+      id: 'param',
+      title: '7. 注册新参数，并在条件里用',
+      blocks: [
+        {
+          t: 'code',
+          lang: 'js',
+          code: `if (gameAPI.param) {
+  gameAPI.param.define('MY_LUCK', { type: 'local' })                       // 本局标量
+  gameAPI.param.define('MY_POWER', { type: 'derived', formula: 'CHR + STR + INT' })  // 派生
+}
+// 之后任何条件里都能用：
+//   events.json 的 include/exclude/branch 条件
+//   talents.json 的 condition
+//   achievements.json 的 condition
+// 例： "include": "params.MY_POWER > 20"`,
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '`def.label`（中文标签）**引擎不读**，而且没有界面注册 API —— 所以 Mod 自定义的参数**不会**出现在属性面板上，它只在条件里可用。这是能力边界，不是配置问题。',
+        },
+      ],
+    },
+
+    // ---------- 依赖与顺序 ----------
+    {
+      id: 'order',
+      title: '8. 加载顺序、依赖与"覆盖"的真实语义',
+      blocks: [
+        {
+          t: 'list',
+          ordered: true,
+          items: [
+            '引擎先扫描所有 Mod（浏览器看 `public/mods/index.json`，Node 看目录），校验 manifest',
+            '按 `dependencies` 做拓扑排序（**被依赖的先加载**），无依赖的按文件源顺序',
+            '按顺序逐个**先合并数据、再执行 `code.js`**',
+            '合并规则：`merged[表] = { ...已有, ...本 Mod 的 }` —— **按 ID 整键替换**（`age` 表在"年龄"这一层替换）',
+            '所以"后加载者覆盖先加载者"。**想补充原版内容的 Mod 必须声明 `dependencies: ["lifeRestart-data"]`**，否则它可能排在数据 Mod 前面、改动被整键覆盖回去 —— 表现是"我的事件从来不触发"，而日志里什么都看不出来',
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'info',
+          text: '依赖被用户**禁用**时不会报"缺失依赖"（那是"关掉了"不是"缺失"）；只有源里**根本没有**那个名字才报 `缺失依赖: X`。成环会报 `循环依赖: a → b → a` 但仍然继续加载（顺序按遍历结果）。',
+        },
+      ],
+    },
+
+    // ---------- 运行时依赖 ----------
+    {
+      id: 'modules',
+      title: '9. 用外部 npm 依赖（随包分发，零构建）',
+      blocks: [
+        {
+          t: 'p',
+          text: 'Mod 侧**没有构建步骤**：依赖要以**自包含单文件**放进包里（约定 `vendor/`），在 manifest 里登记，运行期用 `require()` 同步取用。',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          label: 'manifest.json',
+          code: `{ "name": "my-mod", "version": "1.0.0", "modules": { "fflate": "vendor/fflate.mjs" } }`,
+        },
+        {
+          t: 'code',
+          lang: 'js',
+          label: 'code.js',
+          code: `const { strToU8, zipSync } = require('fflate')`,
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '**必须是单文件**：zip 装出来的 Mod 在浏览器里只有 `blob:` URL，没有目录基准 → 依赖内部的相对导入必断。也不要带 `node_modules/` 目录（安装时会被忽略并提示撞条目上限）。Node 侧 `server.js` 没这个限制（原生 ESM，相对路径可用）。',
+        },
+      ],
+    },
+
+    // ---------- 调试 ----------
+    {
+      id: 'debug',
+      title: '10. 调试与排错',
+      blocks: [
+        {
+          t: 'list',
+          ordered: true,
+          items: [
+            '页面右下角**日志悬浮窗**常显；设置页把级别调到 `debug`（看加载/合并/钩子）或 `trace`（看每个引擎函数的参数）',
+            'Mod 管理页点「查看数据 →」确认表真的进来了（条数、分布、逐条内容）',
+            '游戏里跑一局，看轨迹里有没有你的条目（`onYearAdvance` 的效果）与事件（`age` 表的效果）',
+            'CLI 侧：`node src/cli/mod.cli.js ../../mods` 打印依赖图 / 加载顺序 / 合并数据条数 / 钩子表',
+            'CLI 侧真跑一局：`node src/cli/ai-game.cli.js --mods ../../mods --mock-ai --seed 42`（不需要 API Key）',
+          ],
+        },
+        {
+          t: 'sub',
+          text: '静默失败清单（不报错，只是没效果）',
+        },
+        {
+          t: 'table',
+          head: ['现象', '多半是'],
+          rows: [
+            ['钩子从不触发', '钩子名拼错（引擎不校验名字）'],
+            ['天赋永远抽不到', '`grade` 不是数字 / 写了 `exclusive`（不进池）'],
+            ['事件从不出现', 'id 没写进 `age.json` 的 `event` 列表 / `include` 条件太严 / 被 `exclude` 挡住'],
+            ['age 表的改动"没生效"', '加载顺序在数据 Mod **之前**（补 `dependencies`）'],
+            ['成就永远不达成', '`opportunity` 写错（必须精确四选一）'],
+            ['运行期加的天赋没效果', '缺 `maxTriggers`（见第 5 节）'],
+            ['条件里的新参数总是 undefined', '参数名拼错，或 `gameAPI.param` 在这个宿主里是 null'],
+          ],
+        },
+        {
+          t: 'link',
+          to: '/mods/api',
+          text: '完整错误原文与 API 明细看 gameAPI 参考',
+        },
+      ],
+    },
+
+    // ---------- 打包分发 ----------
+    {
+      id: 'ship',
+      title: '11. 打包与分发',
+      blocks: [
+        {
+          t: 'table',
+          head: ['方式', '怎么做'],
+          rows: [
+            ['**导出 zip**', 'Mod 管理页每张卡片的「⬇ 下载 zip」把任意 Mod 打包下载（可作为你自己的起点/备份）'],
+            ['**上传 zip**', '把目录打成 zip（含 `manifest.json`，可多包一层）→「+ 安装 Mod（.zip）」'],
+            ['**从 GitHub 安装**', '粘 GitHub 链接 →「⬇ 从 GitHub 安装」：走 `api.github.com` + `raw`（zipball 端点受 CORS 限制，浏览器用不了）；仓库里有多个 Mod 会让你选目录'],
+            ['**放进仓库 `mods/`**', '`mods/my-mod/…` + 跑 `sync-mods`（dev/build 自动跑）'],
+          ],
+        },
+        {
+          t: 'sub',
+          text: 'zip 的限制（超了会跳过或失败）',
+        },
+        {
+          t: 'table',
+          head: ['限制', '值', '行为'],
+          rows: [
+            ['条目数', '≤ 512', '超过 → 安装失败'],
+            ['单文件', '≤ 8 MB', '超限条目跳过 + 警告（安装继续）'],
+            ['累计解压', '≤ 32 MB', '同上'],
+            ['路径安全', '拒绝 `../` / 绝对路径', '越界条目跳过'],
+            ['文件类型', '只收 `.json/.js/.mjs/.txt/.md`', '其它（png/ogg/woff…）丢弃并提示'],
+            ['`node_modules/`', '—', '忽略并提示改用 `vendor/` + `manifest.modules`'],
+            ['系统名', '`lifeRestart-data` / `ai-mod`', '**默认拒绝**被包覆盖；用户二次确认后可放行（挡误操作，不是权限）'],
+          ],
+        },
+      ],
+    },
+
+    // ---------- 自检清单 ----------
+    {
+      id: 'checklist',
+      title: '12. 提交前自检清单',
+      blocks: [
+        {
+          t: 'list',
+          items: [
+            '`manifest.json` 有 `name` + `version`，`name` 只含字母数字连字符下划线',
+            '**目录名与 `name` 一致**（页面按目录名寻址，省得自己绕）',
+            '想补充原版内容 → 写了 `dependencies: ["lifeRestart-data"]`',
+            '`code.js` 里没有 `export` / `import` / 顶层 `await`',
+            '运行期注入的天赋显式写了 `maxTriggers`，`grade` 是数字',
+            '新事件都写进了某个 `age.json` 的 `event` 列表（否则永远不会触发）',
+            '改了 `age.json` 的某一岁 → **把原来那一岁的 id 抄回来了**',
+            '成就的 `opportunity` 精确是 `START`/`TRAJECTORY`/`SUMMARY`/`END` 之一',
+            '成就与名人条目自带 `id`；名人的 `talent` 是数组',
+            '依赖放 `vendor/` 单文件并在 `manifest.modules` 登记（没带 `node_modules/`）',
+            '在页面里真跑了一局，确认数据与轨迹都对（不是只看"能加载"）',
+            '有条件就加一条测试：跑一局断言你的数据/钩子真的生效（例：`example-mod.spec.js`）',
+          ],
+        },
+        {
+          t: 'link',
+          to: '/mods/example-mod',
+          text: '打开示例 Mod 的数据页，对照它的 5 张表与 code.js',
+        },
+      ],
+    },
+  ],
+}

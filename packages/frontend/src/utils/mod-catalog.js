@@ -27,6 +27,9 @@ export const DEFAULT_MOD_LIST = [
   { name: 'base-mod', enabled: true, system: false, description: '测试基础 Mod', permissions: ['hooks'] },
   // 趣味 Mod：默认禁用。
   { name: 'fun-mod', enabled: false, system: false, description: '测试趣味 Mod', permissions: ['hooks', 'storage'] },
+  // 示例 Mod（教学）：默认禁用 —— 它是给人读代码/照抄用的样板，不该悄悄改变所有人的游戏数据。
+  // 想试就在「Mod 管理」页启用它（或点「查看数据」看它装了什么）。
+  { name: 'example-mod', enabled: false, system: false, description: '示例 Mod（教学）：演示 5 张数据表、三个钩子与 gameAPI 的用法', permissions: ['hooks', 'storage'] },
   // AI Mod：系统内置、默认禁用（需配置 API Key）。
   { name: 'ai-mod', enabled: false, system: true, description: 'AI 增强 Mod（系统内置，可通过 gameAPI.ai 调用生成天赋/事件）', permissions: ['ai', 'network', 'storage', 'hooks'] },
 ]

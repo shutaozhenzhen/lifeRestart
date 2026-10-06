@@ -164,8 +164,20 @@ export async function createModLoader({ source, log, only, moduleLoader } = {}) 
   const mods = enabledFilter ? scanned.filter((m) => enabledFilter.has(m.name)) : scanned
   // 被过滤掉的（信息性）。
   const disabled = enabledFilter ? scanned.filter((m) => !enabledFilter.has(m.name)).map((m) => m.name) : []
+  // 依赖解析用的元信息：**把"存在但被用户禁用"的依赖名摘掉**。
+  // 为什么要单独做这一步（2026-10）：
+  //   · 修掉"`dependencies` 在加载链路上没生效"之后，被禁用的依赖会开始报"缺失依赖"——
+  //     但那不是缺失，是用户关掉了（loader 的既定语义：禁用的 Mod 不参与依赖解析）。
+  //   · 源里**根本没有**的依赖名必须保留 → resolveOrder 照旧如实报"缺失依赖: X"。
+  const disabledSet = new Set(disabled)
+  const forOrder = mods.map((m) => {
+    // 声明的依赖（元信息直挂 `dependencies` 或写在 manifest 里，两种形态都认）。
+    const declared = m.dependencies || m.manifest?.dependencies || []
+    // 摘掉被禁用的那一部分。
+    return { ...m, dependencies: declared.filter((d) => !disabledSet.has(d)) }
+  })
   // 依赖拓扑排序。
-  const { order, errors: orderErrors } = resolveOrder(mods)
+  const { order, errors: orderErrors } = resolveOrder(forOrder)
   // 全部错误（过滤掉被禁用 Mod 的 manifest 错误？错误照样报——非法 manifest 是事实）。
   const errors = [...scanErrors, ...orderErrors]
   // 返回加载器。

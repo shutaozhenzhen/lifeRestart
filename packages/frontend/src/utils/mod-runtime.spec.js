@@ -298,8 +298,9 @@ describe('sync-mods - 同步计划与写盘', () => {
   test('计划正确：Data Mod 不重复同步数据，其它 Mod 带数据/代码', () => {
     // 计划。
     const plan = buildSyncPlan({ modsDir: MODS_DIR })
-    // 四个 Mod，无错误。
-    expect(plan.index.sort()).toEqual(['ai-mod', 'base-mod', 'fun-mod', 'lifeRestart-data'])
+    // 仓库里的 Mod 全部在计划里，无错误（新加 Mod 时这里要跟着加，**别把断言写成数量**：
+    // 数量断言只会报"5 !== 4"，看不出是谁没进计划）。
+    expect(plan.index.sort()).toEqual(['ai-mod', 'base-mod', 'example-mod', 'fun-mod', 'lifeRestart-data'])
     expect(plan.errors).toEqual([])
     // Data Mod：跳过数据（其数据已在 public/data）。
     const dataMod = plan.mods.find((m) => m.name === 'lifeRestart-data')
@@ -308,6 +309,11 @@ describe('sync-mods - 同步计划与写盘', () => {
     // ai-mod 带代码；base-mod 带数据。
     expect(plan.mods.find((m) => m.name === 'ai-mod').files).toContain('code.js')
     expect(plan.mods.find((m) => m.name === 'base-mod').files.some((f) => f.endsWith('.json') && f !== 'manifest.json')).toBe(true)
+    // 示例 Mod（教学样板）必须同时带代码与数据 —— 否则"照抄它"的人会拿到一个空壳。
+    const example = plan.mods.find((m) => m.name === 'example-mod')
+    expect(example.files).toContain('code.js')
+    expect(example.files).toContain('manifest.json')
+    expect(example.files).toContain('age.json')
   })
 
   test('writeSync：写出 index.json 与各 Mod 的 files.json', () => {
@@ -331,7 +337,7 @@ describe('sync-mods - 同步计划与写盘', () => {
       expect(existsSync(join(outDir, 'lifeRestart-data', 'age.json'))).toBe(false)
       // 二次同步不残留（清掉已删除的 Mod 目录）。
       const again = syncMods({ modsDir: MODS_DIR, outDir })
-      expect(again.mods.length).toBe(4)
+      expect(again.mods.length).toBe(plan.index.length)
     } finally {
       // 清理。
       rmSync(outDir, { recursive: true, force: true })
@@ -385,11 +391,18 @@ describe('Mod 根路径必须跟着 BASE_URL（子路径部署的坑）', () => 
     //   · 不只匹配整串 `/mods/`：`'/mods/index.json'` 才是真实写法（第一版漏过它）
     //   · 含 `:` 的跳过（路由路径 `/mods/:name` 是合法的，不是 fetch 前缀）
     //   · 反引号不看（`router.push(\`/mods/${x}\`)` 也是路由，不是请求）
+    //   · **路由目标**跳过（`to:` / `path:` / `push(` / `replace(` 后面的字面量是导航，
+    //     不是请求 —— 2026-10 加 Mod 文档页时误报过：`path: '/mods/docs'` 与文档里的
+    //     `to: '/mods/example-mod'` 都是合法路由。这一条只放宽"导航语境"，不放过 fetch 语境）
     for (const { file, text } of readSourceFiles()) {
       // 逐个候选。
       for (const m of text.matchAll(/['"](\/mods\/[^'"]*)['"]/g)) {
         // 路由参数（`/mods/:name`）跳过。
         if (m[1].includes(':')) continue
+        // 前文（判断是不是导航语境）。
+        const before = text.slice(Math.max(0, m.index - 16), m.index)
+        // 导航语境跳过。
+        if (/(to:|path:|push\(|replace\(|redirect:)\s*$/.test(before)) continue
         // 记下（带文件与原文，失败信息可读）。
         hits.push(`${file}: ${m[0]}`)
       }

@@ -1,0 +1,17 @@
+{
+  "90001": {
+    "id": "90001",
+    "name": "示例·锦鲤",
+    "description": "示例天赋：CHR+1、SPR+1（演示 effect 字段）",
+    "grade": 1,
+    "effect": { "CHR": 1, "SPR": 1 }
+  },
+  "90002": {
+    "id": "90002",
+    "name": "示例·大器晚成",
+    "description": "示例天赋：30 岁之后才生效（演示 condition 字段）",
+    "grade": 2,
+    "condition": "params.AGE >= 30",
+    "effect": { "INT": 2, "MNY": 1 }
+  }
+}

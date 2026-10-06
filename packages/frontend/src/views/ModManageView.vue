@@ -289,6 +289,25 @@ function cancelGitHub() {
   gameStore.pushLog('info', '[UI][mods] 请求取消 GitHub 拉取')
 }
 
+// #openDocs / #openApi
+// 打开两份文档页（写在页面里而不是直接 router-link：与其它按钮一致，并且顺手记日志）。
+//
+// @returns {void}
+function openDocs() {
+  // 日志。
+  gameStore.pushLog('info', '[UI][mods] 打开 Mod 制作文档')
+  // 跳转。
+  router.push('/mods/docs')
+}
+
+// 打开 gameAPI 参考。
+function openApi() {
+  // 日志。
+  gameStore.pushLog('info', '[UI][mods] 打开 gameAPI 参考')
+  // 跳转。
+  router.push('/mods/api')
+}
+
 // #uninstall
 // 卸载本地安装的 Mod（只删本地存储里的副本；服务器上的 Mod 不受影响）。
 //
@@ -699,6 +718,13 @@ function back() {
     <h2 class="title">Mod 管理</h2>
     <button class="btn back" @click="back">← 返回</button>
 
+    <!-- 文档入口：写 Mod 的人先看这里（两份文档都是纯前端页面，可深链） -->
+    <div class="doc-bar">
+      <button class="btn doc" @click="openDocs">📖 Mod 制作文档</button>
+      <button class="btn doc" @click="openApi">📘 gameAPI 参考</button>
+      <span class="doc-hint">从零做一个 Mod：目录结构 · manifest 字段 · 5 张数据表 · 钩子 · 调试 · 打包分发</span>
+    </div>
+
     <!-- zip 安装（纯前端：解析与校验走引擎共用 zip 模块，装进浏览器本地存储） -->
     <div class="install-bar">
       <input ref="fileInput" class="hidden-file" type="file" accept=".zip,application/zip" @change="onZipPicked" />
@@ -947,6 +973,30 @@ function back() {
 }
 .back {
   margin-bottom: 16px;
+}
+/* 文档入口（写 Mod 的人的第一站） */
+.doc-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.btn.doc {
+  background: #16213e;
+  border: 1px solid #ffd700;
+  color: #ffd700;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.btn.doc:hover {
+  background: #22304f;
+}
+.doc-hint {
+  font-size: 12px;
+  color: #8f9bb3;
 }
 .mod {
   display: flex;

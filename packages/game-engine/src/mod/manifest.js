@@ -303,8 +303,15 @@ export function resolveOrder(mods) {
     }
     // 标记访问中。
     state[name] = 1
+    // 依赖列表。两种形态都要认：
+    //   · `{ name, dependencies }`   —— 测试与 CLI 里的直接用法；
+    //   · `{ name, manifest }`       —— **loader 实际传进来的形态**（loader.js:85）。
+    // 后者以前读不到依赖，于是"依赖先加载"在加载链路上**等于没生效**：顺序退化成文件源的
+    // 列表顺序，而 `dependencies` 只是白写在 manifest 里（2026-10 由 example-mod 的
+    // "示例 Mod 必须排在数据 Mod 之后"回归暴露出来）。
+    const deps = byName[name].dependencies || byName[name].manifest?.dependencies || []
     // 递归依赖。
-    for (const dep of byName[name].dependencies || []) {
+    for (const dep of deps) {
       // 深度优先。
       visit(dep, [...stack, name])
     }

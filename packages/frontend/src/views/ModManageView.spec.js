@@ -20,6 +20,8 @@ import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import ModManageView from './ModManageView.vue'
 import { resetApp, mountView, stubFetchOk, waitFor } from '../test-utils/setup.js'
+// 内置 Mod 清单（用例按它推导数量/名字，别写死数字）。
+import { DEFAULT_MOD_LIST } from '../utils/mod-catalog.js'
 
 // 每个用例前重置。
 beforeEach(() => {
@@ -65,10 +67,12 @@ describe('ModManageView', () => {
   test('渲染 Mod 列表：每张卡片都能「完全移除」（预装/系统 Mod 一视同仁）', () => {
     // 挂载。
     const { wrapper } = mountView(ModManageView)
-    // 四个 Mod。
-    expect(wrapper.findAll('.mod').length).toBe(4)
+    // 内置清单里的每个 Mod 都在（**用清单推导，不写死数字** —— 加一个 Mod 就红的话
+    // 只会看到"5 !== 4"，看不出是谁漏了）。
+    const names = DEFAULT_MOD_LIST.map((m) => m.name)
+    expect(wrapper.findAll('.mod').length).toBe(names.length)
     // 每张卡片都有「完全移除」（2026-10 起系统 Mod 也能整个移除，不再只有"禁用"）。
-    for (const name of ['lifeRestart-data', 'ai-mod', 'base-mod', 'fun-mod']) {
+    for (const name of names) {
       const row = modRow(wrapper, name)
       expect(row.findAll('button').some((b) => b.text().includes('完全移除')), name).toBe(true)
     }
@@ -76,6 +80,8 @@ describe('ModManageView', () => {
     expect(modRow(wrapper, 'lifeRestart-data').find('.sys-hint').text()).toContain('系统内置')
     // 权限标签渲染（base-mod 声明 hooks）。
     expect(modRow(wrapper, 'base-mod').find('.perm').exists()).toBe(true)
+    // 示例 Mod（教学）默认禁用：不该悄悄改变所有人的游戏数据。
+    expect(modRow(wrapper, 'example-mod').find('.btn.toggle').text()).toContain('已禁用')
   })
 
   test('启停：写入 localStorage 且刷新后保留（applyModsState）', async () => {
@@ -138,7 +144,7 @@ describe('ModManageView', () => {
     await delBtn.trigger('click')
     await flushPromises()
     // 仍在列表里，且没有「已移除」面板。
-    expect(wrapper.findAll('.mod').length).toBe(4)
+    expect(wrapper.findAll('.mod').length).toBe(DEFAULT_MOD_LIST.length)
     expect(wrapper.find('.removed-panel').exists()).toBe(false)
     expect(savedState().removed || []).toEqual([])
   })
@@ -149,15 +155,15 @@ describe('ModManageView', () => {
     // 挂载。
     const { wrapper } = mountView(ModManageView)
     await flushPromises()
-    // 两个都不在目录里，面板列出它们。
-    expect(wrapper.findAll('.mod').length).toBe(2)
+    // 两个都不在目录里，面板列出它们（剩余数量按内置清单推导）。
+    expect(wrapper.findAll('.mod').length).toBe(DEFAULT_MOD_LIST.length - 2)
     expect(wrapper.findAll('.removed-row').length).toBe(2)
     // 全部恢复。
     globalThis.confirm = vi.fn(() => true)
     await wrapper.find('.removed-head .btn.restore').trigger('click')
     await flushPromises()
-    // 都回来了，面板消失。
-    expect(wrapper.findAll('.mod').length).toBe(4)
+    // 都回来了，面板消失（数量按内置清单算）。
+    expect(wrapper.findAll('.mod').length).toBe(DEFAULT_MOD_LIST.length)
     expect(wrapper.find('.removed-panel').exists()).toBe(false)
     expect(savedState().removed).toEqual([])
   })
@@ -239,6 +245,28 @@ describe('ModManageView', () => {
     await flushPromises()
     // 跳转。
     expect(router.currentRoute.value.path).toBe('/')
+  })
+
+  test('文档入口：两个按钮分别进制作文档与 gameAPI 参考', async () => {
+    // 挂载。
+    const { wrapper, router } = mountView(ModManageView)
+    await flushPromises()
+    // 两个入口都在（写 Mod 的人的第一站）。
+    expect(findButton(wrapper, 'Mod 制作文档').exists()).toBe(true)
+    expect(findButton(wrapper, 'gameAPI 参考').exists()).toBe(true)
+    // 点制作文档。
+    await findButton(wrapper, 'Mod 制作文档').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/mods/docs')
+    expect(router.currentRoute.value.name).toBe('mod-docs')
+    // 回到管理页再点 API 参考。
+    await router.push('/mods')
+    await flushPromises()
+    await findButton(wrapper, 'gameAPI 参考').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/mods/api')
+    // **关键**：落到的是文档路由，不是被 `/mods/:name` 当成 Mod 目录名吃掉的详情页。
+    expect(router.currentRoute.value.name).toBe('mod-api')
   })
 
   test('下载：打包成 zip 触发浏览器下载，并给出文件名/文件数', async () => {
