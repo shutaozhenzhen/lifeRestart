@@ -99,9 +99,10 @@ export const MOD_GUIDE = {
           head: ['能做', '不能做'],
           rows: [
             ['加/改**数据**：天赋、事件、成就、名人、年龄表（后加载覆盖先加载）', '**加界面**：没有页面/组件/路由/面板注册 API'],
-            ['挂**钩子**：抽卡池、每一年、事件文本渲染、属性自定义区变化', '**改游戏属性**：`property.set` 不是游戏属性系统（见 API 文档 §5）'],
-            ['**注册新参数**：条件里立刻能用的 `params.XXX`', '**异步介入逐岁流程**：`life.next()` 是同步的'],
-            ['**运行期改数据**：`addTalent` / `addEvent` / `addAchievement` 等', '**带资源文件**：包只收文本（`.json/.js/.mjs/.txt/.md`）'],
+            ['挂**钩子**：抽卡池、每一年、事件文本渲染，以及**观察任何属性变化**（`propertyChange`，带 `source` 区分来源）', '**异步介入逐岁流程**：`life.next()` 是同步的'],
+            ['**注册新参数**：条件里立刻能用的 `params.XXX`', '**带资源文件**：包只收文本（`.json/.js/.mjs/.txt/.md`）'],
+            ['**运行期改数据**：`addTalent` / `addEvent` / `addAchievement` 等', '**Mod 之间没有正式 API**：只能自定义钩子名互发消息，或共享 `gameAPI.data`'],
+            ['**改游戏属性**：`gameAPI.property.change/set/effect` 直接读写真实属性（2026-10 起）', '**私有仓库 / 任意 URL 安装**：只支持 zip 与 GitHub 公开仓库'],
             ['**调用 AI**（需用户配 Key）与**本 Mod 的后端**（需 `server.js`）', '**发布到应用商店/被审核**：没有中心化分发，也没有访问控制'],
           ],
         },
@@ -433,7 +434,7 @@ gameAPI.addTalent({ id: 'my-t9', name: '运行时天赋', description: '…', gr
             ['`onTalentPoolGenerate`', '抽卡时', '往 `payload.pool` 里 push 天赋对象（注意别重复塞）'],
             ['`onYearAdvance`', '每翻一年', '往 `payload.content` 里 push 条目（会进当年轨迹、被轨迹页与总结页渲染）'],
             ['`onEventRender`', '渲染每段事件文本时', '**返回字符串**即替换文本（唯一返回值生效的钩子）'],
-            ['`propertyChange`', '只有 `gameAPI.property.set` 调用时', '不能改，纯观察'],
+            ['`propertyChange`', '**任何**属性变化：事件/天赋效果、年龄自增、成就记账、Mod 自己改的都算', '观察（不能改）；payload 带 `source`（`\'engine\'`/`\'mod\'`）用来过滤自己造成的噪声'],
           ],
         },
         {

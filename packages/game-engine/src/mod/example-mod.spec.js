@@ -207,20 +207,41 @@ describe('example-mod - code.js 执行与钩子', () => {
     expect(api.removeAchievement).toBeUndefined()
   })
 
-  test('propertyChange 只由 gameAPI.property.set 触发（它写的是自定义区，不是游戏属性）', async () => {
-    // 执行 code.js（里面有一句 property.set）。
-    const api = createGameAPI({ data, hooks, params })
-    new Function('gameAPI', 'require', '"use strict";\n' + code)(api, () => {})
-    // 钩子里那句 console.log 之外，能验证的是：数据对象上多了一个自定义键。
-    expect(data.properties.EXAMPLE_NOTE).toContain('example-mod')
-    // 再手动触发一次，确认总线接到了（emit 是异步的）。
+  test('propertyChange：能观察到引擎内部的属性变化，且能改真属性（2026-10 能力补齐）', async () => {
+    // 真 Life + 真属性桥（与浏览器接线一致：property 传 Life 本体）。
+    const bus = createHookBus()
+    const life = new Life({ data: makeLifeData({}), random: createRng(20261006), storage: memoryStorage(), hooks: bus })
+    await life.initial()
+    life.config()
+    life.start({ CHR: 5, INT: 5, STR: 5, MNY: 5, SPR: 5 })
+    // 执行示例 Mod 的 code.js（属性可用）。
+    const api = createGameAPI({ data: {}, hooks: bus, property: life, params: life.params })
+    new Function('gameAPI', 'require', '"use strict";\n' + readFileSync(join(MODS_DIR, 'example-mod', 'code.js'), 'utf8'))(api, () => {})
+    // 属性桥可用（示例 Mod 据此决定要不要改属性）。
+    expect(api.property.available).toBe(true)
+    // 跑一次 20 岁的逐岁钩子：示例 Mod 会给 SPR +3。
+    const before = life.propertys.SPR
+    const content = []
+    bus.emitSync('onYearAdvance', { age: 20, content, isEnd: false }, { error: () => {}, debug: () => {}, warn: () => {} })
+    // **真属性**变了（不是写进某个没人读的自定义键）。
+    expect(life.propertys.SPR).toBe(before + 3)
+    // 当年轨迹里也说了这件事。
+    expect(content.some((c) => String(c.description).includes('精神 +3'))).toBe(true)
+    // 引擎内部的变化照样能被观察到：年龄自增 → propertyChange（source='engine'）。
     const seen = []
-    hooks.on('propertyChange', (p) => seen.push(p))
-    await api.property.set('X', 1)
-    // code.js 里那句也会进同一个数组（它先触发），所以只看最后一条。
-    expect(seen[seen.length - 1]).toEqual({ prop: 'X', value: 1 })
-    // 游戏属性系统不受影响：CHR 仍在 propertys 里由 Property 管理，不在这里。
-    expect(data.properties.CHR).toBeUndefined()
+    bus.on('propertyChange', (p) => seen.push(p))
+    life.next()
+    expect(seen.some((p) => p.prop === 'AGE' && p.source === 'engine')).toBe(true)
+  })
+
+  test('属性不可用时（没跑到一局游戏里）示例 Mod 不会炸，且写操作明确报错', () => {
+    // 不注入 property → 降级桥。
+    const api = createGameAPI({ data: {}, hooks: createHookBus(), params })
+    // 执行 code.js 不该抛（示例里用 `available` 守卫了）。
+    expect(() => new Function('gameAPI', 'require', '"use strict";\n' + code)(api, () => {})).not.toThrow()
+    // 降级桥的写操作明确报错（不是静默写进没人读的对象）。
+    expect(api.property.available).toBe(false)
+    expect(() => api.property.set('SPR', 1)).toThrow(/没有游戏属性系统/)
   })
 
   test('onEventRender 是唯一返回值生效的钩子：示例文本被加 ✨ 前缀', async () => {

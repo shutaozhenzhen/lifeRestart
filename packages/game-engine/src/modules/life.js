@@ -73,7 +73,16 @@ class Life {
     const achievementLog = this.#log.child('achievement')
     const characterLog = this.#log.child('character')
     // 属性实例。
-    this.#property = new Property({ clone: cloneUtil, storage, random, logger: propertyLog })
+    // onChange：**任何**真实属性变更（事件/天赋效果、年龄自增、成就记账、Mod 自己改）都会
+    // 同步广播 `propertyChange` 钩子 —— 2026-10 起 Mod 才能真正"观察游戏内属性变化"。
+    // 用 emitSync（不是 emit）：这样回调里读到的就是变更后的值，且顺序确定。
+    this.#property = new Property({
+      clone: cloneUtil,
+      storage,
+      random,
+      logger: propertyLog,
+      onChange: (prop, value, source) => this.#hooks.emitSync('propertyChange', { prop, value, source }),
+    })
     // 条件求值闭包：用当前属性快照（所有模块共享）。
     const checkNow = (condition) => checkCondition(condition, this.#property.getAll())
     // 天赋实例。
@@ -705,6 +714,9 @@ class Life {
 
   // 属性类型常量。
   get PropertyTypes() { return this.#property.TYPES }
+  // 属性模块本体：**给 Mod 层的桥用**（`mod/property-bridge.js` 拿它构造 `gameAPI.property`），
+  // 以及测试直接驱动。Mod 代码不直接拿到这个对象，只拿到桥（`gameAPI.property`）。
+  get property() { return this.#property }
   // 参数注册表（Mod 的 gameAPI.param 用；浏览器侧构造 gameAPI 需要它）。
   get params() { return this.#property.registry }
   // 钩子总线（只读引用，供外部查询已注册的钩子）。

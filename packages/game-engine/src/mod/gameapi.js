@@ -17,6 +17,8 @@
 
 // 宿主桥（seam #3）：缺省用"无后端"的空桥，保证 gameAPI.host 永远可用。
 import { createHostBridge, createDenyHost } from './host.js'
+// 属性桥（Mod ↔ 真实游戏属性系统；2026-10 能力补齐）。
+import { createPropertyBridge, createUnavailablePropertyBridge } from './property-bridge.js'
 
 // #createHookBus
 // 创建钩子总线：注册/触发/移除，支持执行顺序与异常隔离。
@@ -154,9 +156,11 @@ export function createHookBus() {
 // @param {object} [deps.params] - 参数注册表（createParamRegistry 实例）；缺省不自建
 // @param {object} [deps.host] - 宿主桥（createHostBridge 的结果）**或其适配器**
 //   （{ available, call }）；缺省 createDenyHost()（available 为空、调用报错）
+// @param {object} [deps.property] - **属性桥**（`createPropertyBridge(life)` 的结果，或 Life 本身）；
+//   缺省用降级桥（`available: false`、写操作报错）—— 见 `mod/property-bridge.js`
 // @param {object} [deps.log] - 日志器
 // @returns {object} gameAPI
-export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, log }) {
+export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, property, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, error: () => {} }
   // 钩子总线：注入外部实例（与 Life 共享）或自建。
@@ -170,6 +174,15 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, log
   // 宿主桥（Mod 架构 v2）：注入的若是适配器（只有 available/call）则先包成桥；
   // 完全没注入 → 用空桥（静态站语义），这样 Mod 代码可以无条件写 gameAPI.host.has(...)。
   const hostBridge = host ? (typeof host.has === 'function' ? host : createHostBridge(host)) : createDenyHost()
+  // 属性桥：注入的若是 Life（有 .property）或 Property 模块，都包成桥；没注入 → 降级桥。
+  const propertyBridge = property ? createPropertyBridge(property) : createUnavailablePropertyBridge()
+  // 共享总线自检：属性变更通知是从 **Life 的总线**广播的（Property 由 Life 构造）。
+  // 若调用方给 Life 传的不是这条总线，Mod 注册的 `propertyChange` 会**静默收不到**通知 ——
+  // 这是很难查的一类问题，所以这里直接出声（不改语义：照样各用各的）。
+  if (property && property.hooks && property.hooks !== hooks) {
+    // 记 warn（调用方应把同一条总线同时给 Life 与 executeModCodes，`store.init` 就是这么做的）。
+    logger.warn?.('gameAPI: property 桥挂在 Life 上，但 hooks 与 Life 的总线不是同一个对象 —— propertyChange 通知会发到 Life 的总线上，Mod 可能收不到')
+  }
 
   // 返回 API。
   const api = {
@@ -230,20 +243,13 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, log
         }
       : null,
 
-    // 属性操作。
-    property: {
-      // 读取属性值。
-      get: (prop) => store.properties?.[prop],
-      // 设置属性值。
-      set: (prop, value) => {
-        // 初始化属性存储。
-        if (!store.properties) store.properties = {}
-        // 赋值。
-        store.properties[prop] = value
-        // 触发钩子（异步，返回 Promise 供调用方 await）。
-        return bus.emit('propertyChange', { prop, value }, logger)
-      },
-    },
+    // 属性系统（**真实**的游戏属性，2026-10 起）。
+    // 注入 `property` 桥（`createPropertyBridge(life)`）→ 读写真实属性并触发 `propertyChange`；
+    // 没注入 → 降级桥（`available: false`，写操作抛可读错误）。
+    //
+    // 历史：这里以前读写 `store.properties` 这个自定义键（全引擎无人读），是个"看起来能用、
+    // 实际什么都没发生"的假 API；已由本次能力补齐替换掉。
+    property: propertyBridge,
 
     // 天赋 CRUD。
     addTalent: (talent) => {

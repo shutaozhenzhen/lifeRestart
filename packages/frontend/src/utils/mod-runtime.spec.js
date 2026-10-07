@@ -51,9 +51,13 @@ function makeFetch(files) {
 
 // #makeLife
 // 造一个真实 Life（用于验证 Mod 注册属性/钩子）。
-async function makeLife() {
+//
+// @param {object} [hooks] - 钩子总线；**要与 executeModCodes 用同一条**（生产里 store.init 就是这么接的），
+//   否则属性变更通知会发到 Life 自己的（空）总线上，Mod 收不到 propertyChange。
+// @returns {Promise<object>} Life
+async function makeLife(hooks) {
   // 实例（内存 storage）。
-  const life = new Life({ data: buildFixtureData(), storage: { getItem: () => null, setItem: () => {} } })
+  const life = new Life({ data: buildFixtureData(), storage: { getItem: () => null, setItem: () => {} }, hooks })
   // 初始化 + 配置。
   await life.initial()
   life.config()
@@ -162,6 +166,45 @@ describe('mod-runtime - 执行 Mod 代码（注册新属性 / 钩子 / 异常隔
     await hooks.emit('onYearAdvance', payload)
     // 生效。
     expect(payload.content.some((c) => c.description === '来自 mod')).toBe(true)
+  })
+
+  test('Mod 能改**真实**游戏属性，也能观察引擎内部的属性变化（2026-10 能力补齐）', async () => {
+    // Life + 总线。
+    // ⚠️ 这里必须把**同一条总线**给 Life 与 executeModCodes（生产里 `store.init` 就是这么接的）：
+    //    属性变更通知是从 Life 的总线广播的 —— 给 Life 传另一条（或干脆不传）会让 Mod
+    //    注册的 propertyChange 收不到通知。
+    const hooks = createHookBus()
+    const life = await makeLife(hooks)
+    // 先给属性一个已知初值（走引擎自己的写入）。
+    life.property.set('CHR', 5)
+    // 记录 propertyChange（Mod 侧观察）。
+    const seen = []
+    hooks.on('propertyChange', (p) => seen.push(p))
+    // Mod 代码：读一次、改一次、再观察一次。
+    const codes = [{
+      name: 'prop-mod',
+      code: [
+        'var before = gameAPI.property.get("CHR");',
+        'gameAPI.property.change("CHR", 4);',
+        'gameAPI.on("propertyChange", function (p) { if (p.source === "engine") { console.log("engine:", p.prop); } });',
+        'gameAPI.property.set("SPR", before + 1);',
+      ].join('\n'),
+    }]
+    // 执行。
+    const { executed, errors } = executeModCodes({ codes, hooks, life })
+    // 成功。
+    expect(executed).toEqual(['prop-mod'])
+    expect(errors).toEqual([])
+    // **真的改了游戏属性**（这条守卫钉住 `executeModCodes` 里那行 `property: life` 接线：
+    // 少了它 gameAPI.property 就退回降级桥，写操作会抛错、CI 直接红）。
+    expect(life.propertys.CHR).toBe(9)
+    expect(life.propertys.SPR).toBe(6)
+    // Mod 自己的两次写入都带 source='mod'。
+    const modWrites = seen.filter((p) => p.source === 'mod').map((p) => p.prop)
+    expect(modWrites).toEqual(['CHR', 'SPR'])
+    // 引擎内部的变化（年龄自增，就是 life.next() 里的那一步）也能被观察到，且标成 engine。
+    life.property.ageNext()
+    expect(seen.some((p) => p.prop === 'AGE' && p.source === 'engine')).toBe(true)
   })
 
   test('单个 Mod 抛错被隔离：其它 Mod 照常执行', async () => {

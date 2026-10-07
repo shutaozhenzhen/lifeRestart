@@ -470,6 +470,11 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
       ai: aiConfig,
       // AI Mod 工厂（ai-mod 的 code.js 用它）。
       aiModFactory: createAIMod,
+      // 属性桥：把 gameAPI.property 接到**真实**的游戏属性系统（2026-10 能力补齐）。
+      // 有了它 Mod 才能 `property.change('CHR', 1)` 真的改属性，并通过 `propertyChange`
+      // 钩子观察引擎内部的属性变化（事件/天赋效果、年龄自增、成就记账）。
+      // 传 Life 本体即可（createPropertyBridge 会取它的 .property 模块）。
+      property: life,
       // 日志。
       log,
     })

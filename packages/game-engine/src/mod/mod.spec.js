@@ -370,17 +370,58 @@ describe('mod - createGameAPI', () => {
     expect(reached).toBe(true)
   })
 
-  test('property set triggers propertyChange hook', async () => {
-    // API。
+  test('property：没注入属性桥时是**降级桥**（available=false，写操作给可读错误）', () => {
+    // API（不注入 property）。
     const api = createGameAPI({ data: {} })
-    // 记录。
-    let last = null
-    // 钩子。
-    api.on('propertyChange', ({ prop, value }) => { last = { prop, value } })
-    // 设置（property.set 内部 emit 是异步的）。
-    await api.property.set('CHR', 10)
-    // 钩子触发。
-    expect(last).toEqual({ prop: 'CHR', value: 10 })
+    // 明确 advertise 不可用（Mod 应当先判断它）。
+    expect(api.property.available).toBe(false)
+    // 读取不抛（顺手读一下不该炸）。
+    expect(api.property.get('CHR')).toBeUndefined()
+    // 写操作**明确报错**（而不是静默写进一个没人读的对象里 —— 那正是修掉的旧行为）。
+    expect(() => api.property.set('CHR', 10)).toThrow(/没有游戏属性系统/)
+    expect(() => api.property.change('CHR', 1)).toThrow(/没有游戏属性系统/)
+    expect(() => api.property.effect({ CHR: 1 })).toThrow(/没有游戏属性系统/)
+  })
+
+  test('property：注入属性桥后读写真实属性，并触发 propertyChange（source=mod）', () => {
+    // 假属性模块（桥只依赖 get/set/change/effect/getAll/TYPES）。
+    const calls = []
+    const property = {
+      TYPES: { CHR: 'CHR', SPR: 'SPR' },
+      get: (p) => (p === 'CHR' ? 7 : undefined),
+      set: (p, v, s) => calls.push(['set', p, v, s]),
+      change: (p, v, s) => calls.push(['change', p, v, s]),
+      effect: (e, s) => calls.push(['effect', e, s]),
+      getAll: () => ({ CHR: 7 }),
+    }
+    // API。
+    const api = createGameAPI({ data: {}, property })
+    // 可用。
+    expect(api.property.available).toBe(true)
+    // 读。
+    expect(api.property.get('CHR')).toBe(7)
+    expect(api.property.all()).toEqual({ CHR: 7 })
+    expect(api.property.types()).toEqual(['CHR', 'SPR'])
+    // 写：**统一打上 source='mod'**（观察者据此过滤自己造成的变化）。
+    api.property.set('CHR', 99)
+    api.property.change('SPR', 1)
+    api.property.effect({ CHR: 1 })
+    // 转发正确。
+    expect(calls).toEqual([
+      ['set', 'CHR', 99, 'mod'],
+      ['change', 'SPR', 1, 'mod'],
+      ['effect', { CHR: 1 }, 'mod'],
+    ])
+  })
+
+  test('property：传 Life 本体也能建桥（取它的 .property 模块）', () => {
+    // 假 Life。
+    const property = { TYPES: {}, get: () => 42, set: () => {}, change: () => {}, effect: () => {}, getAll: () => ({}) }
+    // API（property 传的是"有 .property 的对象"）。
+    const api = createGameAPI({ data: {}, property: { property } })
+    // 可用且读到了值。
+    expect(api.property.available).toBe(true)
+    expect(api.property.get('CHR')).toBe(42)
   })
 
   test('addTalent with conflict overrides', async () => {

@@ -45,12 +45,19 @@ gameAPI.on('onTalentPoolGenerate', function (payload) {
 // onYearAdvance：每翻一年触发一次，payload = { age, content, isEnd }。
 // 往 payload.content 里 push 的条目会出现在当年轨迹里（必须在**同步**过程里 push）。
 gameAPI.on('onYearAdvance', function (payload) {
-  // 幸运值每年 +1（演示 param.change；param 可能不存在，所以用可选链）。
+  // 幸运值每年 +1（演示 param.change；param 可能不存在，所以先判断）。
   if (gameAPI.param) gameAPI.param.change('LUCK_EXAMPLE', 1)
   // 每到整十岁，往当年轨迹里追加一句。
   if (payload.age > 0 && payload.age % 10 === 0) {
     var luck = gameAPI.param ? gameAPI.param.get('LUCK_EXAMPLE') : '-'
     payload.content.push({ type: 'EVT', description: '【示例 Mod】你 ' + payload.age + ' 岁了，示例幸运值 ' + luck })
+  }
+  // **改真实游戏属性**（2026-10 起可用）：20 岁那年精神 +3。
+  // ⚠️ 为什么放在逐岁钩子里而不是 code.js 顶层：code.js 跑在 `life.start()`（开局分配属性）
+  //    **之前**，那时改属性会被随后的开局分配覆盖掉。要改属性就在游戏过程中的时机改。
+  if (payload.age === 20 && gameAPI.property && gameAPI.property.available) {
+    gameAPI.property.change('SPR', 3)
+    payload.content.push({ type: 'EVT', description: '【示例 Mod】你 20 岁了，精神 +3（示例属性改动）' })
   }
 })
 
@@ -63,9 +70,14 @@ gameAPI.on('onEventRender', function (payload) {
   return undefined
 })
 
-// propertyChange：只有 gameAPI.property.set 会触发它（引擎内部改属性**不**触发）。
+// propertyChange：**任何**属性变化都会触发（2026-10 起）——包括引擎内部的事件/天赋效果、
+// 年龄自增、成就记账。payload = { prop, value, source }，source 是 'engine'（引擎内部）
+// 或 'mod'（本 Mod 自己通过 gameAPI.property.* 改的）。观察时通常只看 'engine'，
+// 否则"我自己改的"会把通知刷屏（年龄自增那种一年一条的噪声也是这么来的）。
 gameAPI.on('propertyChange', function (payload) {
-  console.log('[example-mod] propertyChange:', payload.prop, '=', payload.value)
+  if (payload.source === 'engine') {
+    console.log('[example-mod] 引擎改了属性：', payload.prop, payload.value)
+  }
 })
 
 // ── 3. 运行时增删数据（效果与写数据文件等价，只是发生在代码里）──────
@@ -89,13 +101,12 @@ console.log('[example-mod] 当前天赋条数:', Object.keys(gameAPI.data.talent
 //   var fflate = require('fflate')
 // 没声明的模块名会直接抛错（这是故意设计的：依赖必须随包分发、运行期解析）。
 
-// ── 6. 触发一次 propertyChange（顺便说清它是什么）────────────────────
-// 两个容易误解的点：
-//   ① `propertyChange` **只**由下面这一行触发；引擎内部改属性（事件/天赋效果）**不触发**它，
-//      所以它不是"观察游戏属性变化"的钩子，而是给 Mod 之间通信用的小工具。
-//   ② `gameAPI.property.*` 读写的是数据对象上的一个**自定义区**（`data.properties`），
-//      **和游戏属性系统（CHR/INT/…）没有关系**：想改游戏属性请走「效果 effect」或「参数 param」。
-gameAPI.property.set('EXAMPLE_NOTE', '来自 example-mod 的一句话')
+// ── 6. 改游戏属性：见上面 onYearAdvance 里 20 岁那一段 ──────────────
+// 要点（2026-10 起 `gameAPI.property` 是真的游戏属性，不再是自定义区）：
+//   ① `available` 要先判断：宿主没跑到一局游戏里时是**降级桥**，写操作会抛可读错误；
+//   ② 时序：code.js 跑在 `life.start()`（开局分配属性）**之前**，在这里直接改会被覆盖 ——
+//      要改属性就找游戏过程中的时机（逐岁钩子 / 事件触发后的某一岁）；
+//   ③ 观察变化用 `propertyChange`（见上），并用 `payload.source` 过滤掉自己造成的。
 
 // ── 7. 与本 Mod 的后端入口通信（本示例没有 server.js → 走降级分支）──
 if (gameAPI.host && gameAPI.host.has && gameAPI.host.has('example-mod')) {

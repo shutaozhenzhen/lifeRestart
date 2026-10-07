@@ -48,7 +48,11 @@ class Property {
   // @param {object}   [deps.storage] - storage 适配器，默认内存实现
   // @param {() => number} [deps.random] - 随机源，默认 Math.random
   // @param {object}   [deps.params]  - 自定义参数定义（合并进内置）
-  constructor({ clone: cloneFn = clone, storage = defaultStorage, random = Math.random, params, logger } = {}) {
+  // @param {Function} [deps.onChange] - 属性变更回调 `(prop, value, source) => void`
+  //   **每一次真实变更都会调它**（引擎内部的事件/天赋效果、年龄自增、成就记账，以及 Mod 自己
+  //   调 gameAPI.property.* 都算）。用来支撑 `propertyChange` 钩子 —— 2026-10 之前这个钩子
+  //   只有 `gameAPI.property.set` 会触发，Mod **观察不到游戏内属性变化**（那是当时的能力边界）。
+  constructor({ clone: cloneFn = clone, storage = defaultStorage, random = Math.random, params, logger, onChange } = {}) {
     // 保存注入的克隆函数。
     this.#clone = cloneFn
     // 保存注入的 storage。
@@ -57,6 +61,8 @@ class Property {
     this.#random = random
     // 保存日志器（缺省静默，不干扰测试）。
     this.#log = logger || SILENT_LOGGER
+    // 保存变更回调（缺省无操作）。
+    this.#onChange = typeof onChange === 'function' ? onChange : null
     // 创建 param 注册表（注入 clone 供数组参数深拷贝）。
     this.#registry = createParamRegistry({ storage, cloneFn: cloneFn, random })
     // 注册内置参数。
@@ -107,6 +113,8 @@ class Property {
   #total        // 各类型总数（initial 注入）
   #data = {}    // 本局属性数据
   #judge        // 评价配置（config 注入）
+  #onChange     // 变更回调（构造注入；Mod 观察用）
+  #notifying = false  // 通知重入保护
 
   // #initial
   // 初始化年龄数据与总数。
@@ -234,6 +242,44 @@ class Property {
     this.#data.HSPR = this.get('SPR')
   }
 
+  // #notify
+  // 属性变更通知（`onChange` 注入；缺省无操作）。
+  //
+  // 两个刻意的设计：
+  //   1. **重入保护**：回调里再改属性会再次进入这里 → 无限递归。正在通知时直接跳过（记 trace），
+  //      这样"观察者在回调里顺手改一下属性"不会把游戏挂死。
+  //   2. source 区分来源：`'engine'`（引擎内部：事件/天赋效果、年龄自增、成就记账）/ `'mod'`
+  //      （Mod 通过 gameAPI.property.* 调的）—— 观察者可以据此过滤"自己造成的"变化。
+  //
+  // @param {string} prop - 属性类型
+  // @param {*} value - 变更量或新值
+  // @param {string} source - 'engine' | 'mod'
+  // @returns {void}
+  #notify(prop, value, source) {
+    // 没有回调。
+    if (!this.#onChange) return
+    // 重入保护（回调里又改属性）。
+    if (this.#notifying) {
+      // trace：跳过嵌套通知。
+      this.#log.trace(`property: 通知重入已跳过（${prop}）`)
+      // 返回。
+      return
+    }
+    // 标记。
+    this.#notifying = true
+    // 通知（回调抛错不能影响游戏主流程）。
+    try {
+      // 调用。
+      this.#onChange(prop, value, source || 'engine')
+    } catch (e) {
+      // 记 warn（观察者的问题不该让这一局崩）。
+      this.#log.warn(`property: onChange 回调异常（已忽略）：${e.message}`)
+    } finally {
+      // 解除标记。
+      this.#notifying = false
+    }
+  }
+
   // #get
   // 读取属性值。委托 param 注册表。
   //
@@ -277,13 +323,19 @@ class Property {
   // @param {string} prop - 属性类型
   // @param {*} value - 新值
   // @returns {void}
-  set(prop, value) {
+  // @param {string} prop - 属性类型
+  // @param {*} value - 新值
+  // @param {string} [source] - 变更来源（'engine' 缺省 / 'mod'）
+  // @returns {void}
+  set(prop, value, source) {
     // 委托注册表。
     this.#registry.set(prop, value)
+    // 通知（Mod 观察用）。
+    this.#notify(prop, value, source)
     // 数组累计参数：set 后触发 achieve。
     if (prop === 'TLT' || prop === 'EVT') {
-      // 记录累计（数组逐项）。
-      this.achieve(prop, value)
+      // 记录累计（数组逐项）——**它自己不再重复通知**（上面已经通知过这次 set）。
+      this.achieve(prop, value, true)
     }
   }
 
@@ -294,12 +346,15 @@ class Property {
   //
   // @param {string} prop - 属性类型
   // @param {*} value - 增量或 ID
+  // @param {string} [source] - 变更来源（'engine' 缺省 / 'mod'）
   // @returns {void}
-  change(prop, value) {
+  change(prop, value, source) {
     // trace：属性变更记录。
     this.#log.trace(`property.change(${prop}, ${JSON.stringify(value)})`)
     // 委托注册表。
     this.#registry.change(prop, value)
+    // 通知（Mod 观察用）——**effect() 会走到这里**，所以引擎内部的效果也在这条线上。
+    this.#notify(prop, value, source)
   }
 
   // #hookSpecial
@@ -323,14 +378,15 @@ class Property {
   // effects 形如 { CHR: 10, RDM: -1, ... }。
   //
   // @param {object} effects - 效果对象
+  // @param {string} [source] - 变更来源（'engine' 缺省 / 'mod'）
   // @returns {void}
-  effect(effects) {
+  effect(effects, source) {
     // trace：效果应用。
     this.#log.trace(`property.effect(${JSON.stringify(effects)})`)
     // 遍历每个属性增量。
     for (const prop in effects) {
       // RDM 等特殊属性先映射，再累加。
-      this.change(this.hookSpecial(prop), Number(effects[prop]))
+      this.change(this.hookSpecial(prop), Number(effects[prop]), source)
     }
   }
 
@@ -412,10 +468,14 @@ class Property {
   //
   // @param {string} prop - 属性类型
   // @param {*} newData - 新数据
+  // @param {boolean} [silent] - 不再重复通知（`set(TLT/EVT)` 已通知过一次）
+  // @param {string} [source] - 变更来源
   // @returns {void}
-  achieve(prop, newData) {
+  achieve(prop, newData, silent, source) {
     // 委托注册表（ACHV/ATLT/AEVT 的 change 处理累计语义）。
     this.#registry.change(prop, newData)
+    // 通知（成就/累计变化也是"属性变化"，Mod 可以观察）。
+    if (!silent) this.#notify(prop, newData, source)
   }
 
   // #lsget

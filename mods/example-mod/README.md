@@ -14,7 +14,7 @@
 | `events.json` | 事件表的字段：`event`（正文，注意字段名不叫 description）、`effect`、`include` / `exclude`（能否随机触发）、`branch`（**顺序**匹配的条件分支）、`postEvent`（后续文本）、`NoRandom`（禁止随机触发，只能被 branch 链到） |
 | `achievements.json` | 成就表的字段：`condition` + `opportunity`（在哪个时机判定：START / TRAJECTORY / SUMMARY / END）+ `hide` |
 | `age.json` | 年龄表怎么"加事件"，以及最容易踩的坑：**age 是整键替换，不是追加** |
-| `code.js` | 代码入口：能力探测、`param.define` 注册新参数、4 个钩子、运行时增删数据、随包依赖 `require()`、宿主桥降级 |
+| `code.js` | 代码入口：能力探测、`param.define` 注册新参数、4 个钩子、**改真实游戏属性**（`property.change`，20 岁精神 +3）、**观察属性变化**（`propertyChange` + 用 `source` 过滤自己造成的噪声）、运行时增删数据、随包依赖 `require()`、宿主桥降级 |
 
 ## 两个必须知道的坑（本示例刻意踩了一遍）
 
