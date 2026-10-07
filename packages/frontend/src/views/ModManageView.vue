@@ -134,7 +134,7 @@ async function onZipPicked(event) {
 // 抽出来的理由：这里有两件"漏了就会看起来像 bug"的事 ——
 //   1. 装上的 Mod 可能正躺在「已移除」列表里（用户先移除、又装回来）：
 //      不清掉标记，装完它还是不出现、不加载，用户只会以为"没装上"。
-//   2. 关闭确认过的警告（路径/尺寸/非文本）必须逐条进日志，不许静默。
+//   2. 关闭确认过的警告（路径/尺寸）必须逐条进日志，不许静默。
 // 两份复制迟早会分叉，所以只留一份。
 //
 // @param {object} r - 安装结果（installModFromZip / installModFromGitHub）
@@ -145,10 +145,10 @@ async function onZipPicked(event) {
 async function afterInstall(r, from, { setMessage = true } = {}) {
   // 来源后缀（GitHub 会在后面追一句它是哪一版）。
   const origin = r.source ? `${from}（${r.source.owner}/${r.source.repo}@${String(r.source.commit).slice(0, 7)}）` : from
-  // 成功提示。
-  if (setMessage) installMessage.value = `已安装 ${r.name}（${r.files} 个文件）${r.system ? ' · 覆盖了系统预装 Mod' : ''}`
+  // 成功提示（资源数单独报：`files` 只数文本文件，2026-10 起包能带图片/音频/字体）。
+  if (setMessage) installMessage.value = `已安装 ${r.name}（${r.files} 个文件${r.assets ? ` + ${r.assets} 个资源` : ''}）${r.system ? ' · 覆盖了系统预装 Mod' : ''}`
   // 日志。
-  gameStore.pushLog('info', `[UI][mods] 已安装 Mod ${r.name}（${origin}，${r.files} 个文件${r.system ? '，覆盖系统预装' : ''}）`)
+  gameStore.pushLog('info', `[UI][mods] 已安装 Mod ${r.name}（${origin}，${r.files} 个文件${r.assets ? ` + ${r.assets} 个资源` : ''}${r.system ? '，覆盖系统预装' : ''}）`)
   // 它可能正在「已移除」里 —— 上传成功就必须清掉标记，否则装完还是看不见（用户会以为没装上）。
   if (removedMods.value.includes(r.name)) {
     // 清标记（纯函数返回新数组）。
@@ -158,7 +158,7 @@ async function afterInstall(r, from, { setMessage = true } = {}) {
     // 日志。
     gameStore.pushLog('info', `[UI][mods] ${r.name} 原在「已移除」列表里，安装后已自动恢复`)
   }
-  // 警告（路径/尺寸/二进制）逐条记。
+  // 警告（路径/尺寸）逐条记。
   for (const w of r.errors) gameStore.pushLog('warn', `[UI][mods] ${w}`)
   // 刷新目录。
   await refreshCatalog()

@@ -21,6 +21,8 @@ import { readFileSync, existsSync } from 'node:fs'
 import { createModLoader, scanMods } from './loader.js'
 import { createNodeSource } from './source-node.js'
 import { createGameAPI, createHookBus } from './gameapi.js'
+// 资源桥（Mod 包内二进制资源；2026-10 能力补齐 ②）。
+import { createAssetBridge } from './asset-bridge.js'
 import { createParamRegistry } from '../params/param-registry.js'
 // 引擎：Life（真跑一局）。
 import Life from '../modules/life.js'
@@ -241,6 +243,76 @@ describe('example-mod - code.js 执行与钩子', () => {
     // 降级桥的写操作明确报错（不是静默写进没人读的对象）。
     expect(api.property.available).toBe(false)
     expect(() => api.property.set('SPR', 1)).toThrow(/没有游戏属性系统/)
+  })
+
+  test('资源：不注入资源能力时示例 Mod 不炸，降级桥读操作报可读错误', async () => {
+    // 不注入 asset → 降级桥。
+    const api = createGameAPI({ data: {}, hooks: createHookBus(), params })
+    // 降级桥。
+    expect(api.asset.available).toBe(false)
+    // 清单空（探测语义不抛）。
+    await expect(api.asset.list()).resolves.toEqual([])
+    // 读操作明确报错（示例 Mod 的 `available` 守卫让它不会走到这里）。
+    expect(() => api.asset.url('assets/logo.png')).toThrow(/资源能力不可用/)
+    // 执行 code.js 不该抛。
+    expect(() => new Function('gameAPI', 'require', '"use strict";\n' + code)(api, () => {})).not.toThrow()
+  })
+
+  test('资源：注入资源源后能**逐字节**读到示例 Mod 包里的 png（2026-10 能力补齐 ②）', async () => {
+    // 假资源源：只认这三个资源路径（**不碰真实文件系统的路径拼接** ——
+    // 顺便证明"只读该 Mod 包内"这条约束是靠注入的 readBytes 实现的）。
+    const allowed = ['assets/logo.png', 'assets/a.png', 'assets/b.ogg']
+    // 真字节（从示例 Mod 目录真读一份，用于逐字节比对）。
+    const realPng = new Uint8Array(readFileSync(join(MODS_DIR, 'example-mod', 'assets', 'logo.png')))
+    // 替身。
+    const fake = {
+      // 清单。
+      async listFiles() { return ['manifest.json', 'code.js', 'assets/logo.png'] },
+      // 读字节（清单外的路径 → null，与真实 Node 源的行为一致）。
+      async readBytes(_mod, path) {
+        // 越界/不存在。
+        if (!allowed.includes(path)) return null
+        // 真 png。
+        return realPng
+      },
+    }
+    // 桥（Node 形态：传一个没有 createObjectURL 的 urlApi）。
+    const bridge = createAssetBridge({ modName: 'example-mod', listFiles: fake.listFiles, readBytes: fake.readBytes, baseDir: join(MODS_DIR, 'example-mod'), urlApi: { Blob: undefined } })
+    // 清单只列资源（manifest.json / code.js 不算资源）。
+    expect(await bridge.list()).toEqual(['assets/logo.png'])
+    // 逐字节一致。
+    const bytes = await bridge.bytes('assets/logo.png')
+    expect([...bytes]).toEqual([...realPng])
+    // PNG magic（真的是一张图，不是被 UTF-8 损坏的文本）。
+    expect([...bytes.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    // Node 形态的 url() 是绝对路径，且指向这个 Mod 目录里的文件。
+    const url = await bridge.url('assets/logo.png')
+    expect(url.endsWith('assets/logo.png')).toBe(true)
+    expect(existsSync(url)).toBe(true)
+    // **路径穿越被拒**（连 readBytes 都不会被调用）。
+    await expect(bridge.bytes('../../package.json')).rejects.toThrow(/资源路径不合法/)
+    // 包内没有的资源 → 可读错误。
+    await expect(bridge.bytes('assets/nope.png')).rejects.toThrow(/没有资源/)
+  })
+
+  test('资源：示例 Mod 的 30 岁轨迹文本里带受控占位符（界面据此渲染 <img>）', () => {
+    // 执行 code.js（钩子要先注册上）。
+    const api = createGameAPI({ data, hooks, params })
+    new Function('gameAPI', 'require', '"use strict";\n' + code)(api, () => {})
+    // 整十岁之外。
+    const c29 = []
+    hooks.emitSync('onYearAdvance', { age: 29, content: c29, isEnd: false }, { error: () => {}, debug: () => {} })
+    expect(c29.some((c) => String(c.description).includes('{{asset:'))).toBe(false)
+    // 30 岁：追加的那条里带占位符（**语法固定**：`{{asset:相对路径}}`）。
+    const c30 = []
+    hooks.emitSync('onYearAdvance', { age: 30, content: c30, isEnd: false }, { error: () => {}, debug: () => {} })
+    // 命中。
+    const hit = c30.find((c) => String(c.description).includes('{{asset:'))
+    expect(hit, '30 岁应该追加一条带资源占位符的轨迹').toBeTruthy()
+    // 路径与包内实际文件一致（写错路径 = 界面上永远是一串字符）。
+    expect(hit.description).toContain('{{asset:assets/logo.png}}')
+    // 那张图真的在包里（这条断言把"文档/示例"与真实文件钉在一起）。
+    expect(existsSync(join(MODS_DIR, 'example-mod', 'assets', 'logo.png'))).toBe(true)
   })
 
   test('onEventRender 是唯一返回值生效的钩子：示例文本被加 ✨ 前缀', async () => {

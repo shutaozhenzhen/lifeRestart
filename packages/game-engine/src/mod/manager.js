@@ -14,11 +14,11 @@
 // Node 内置：文件系统。
 import { readFileSync, existsSync, readdirSync, renameSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 // Node 内置：路径。
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 // manifest 校验。
 import { validateManifest } from './manifest.js'
 // 共用的 zip 解析（浏览器与 Node 同一实现；未注入 unzip 时走它）。
-import { readModPackage } from './zip.js'
+import { isSafeEntryPath, readModPackage } from './zip.js'
 // 权限常量。
 export { PERMISSION_LABELS, VALID_PERMISSIONS } from './permissions.js'
 
@@ -101,7 +101,10 @@ export function importZip({ zipData, modsDir, unzip, log }) {
       return { ok: false, errors: parsed.errors }
     }
     // 采用结果（文件已归一化到 Mod 根、manifest 已校验）。
-    files = parsed.files
+    // 文本与**二进制资源**合成一张落盘表：`writeFileSync` 对 string 走文本、对
+    // Uint8Array 走原始字节 —— 资源因此**逐字节**写出去（2026-10 能力补齐 ②）。
+    // 以前这里只有 `parsed.files`（纯文本），二进制在解析阶段就被丢掉了。
+    files = { ...parsed.files, ...(parsed.assets || {}) }
     manifest = parsed.manifest
     name = parsed.name
     // 路径/尺寸警告带出来（不影响安装，但要让用户看到）。
@@ -121,11 +124,16 @@ export function importZip({ zipData, modsDir, unzip, log }) {
     mkdirSync(targetDir, { recursive: true })
     // 写入文件。
     for (const [path, content] of Object.entries(files)) {
-      // 只写 Mod 目录下的文件。
-      if (!path.includes('/')) {
-        // 写文件。
-        writeFileSync(join(targetDir, path), content)
-      }
+      // 路径安全（再挡一次：解析侧已经挡过，落盘是最后一道）。
+      if (!isSafeEntryPath(path)) continue
+      // 目标路径（**允许子目录**：`assets/logo.png`、`vendor/x.mjs` 都在子目录里；
+      // 以前这里 `if (!path.includes('/'))` 把子目录文件全丢了 —— 资源能力上线后
+      // 那会让"装上了但资源不见了"，所以一并修掉）。
+      const dest = join(targetDir, path)
+      // 建父目录（嵌套路径）。
+      mkdirSync(dirname(dest), { recursive: true })
+      // 写文件（string → 文本；Uint8Array → 原始字节）。
+      writeFileSync(dest, content)
     }
     // 日志。
     logger.info(`导入 Mod: ${name}`)

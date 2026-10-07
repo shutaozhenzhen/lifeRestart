@@ -104,8 +104,11 @@ async function startGame() {
   loading.value = true
   // 初始化引擎：种子留空 → 自动生成（随后显示在轨迹页/总结页），填了就用它复现。
   // hooks/modCodes/modRequires 来自前端 Mod 运行时（Mod 代码在 Life 建好后执行 → 可注册属性与钩子）。
+  // 2026-10 能力补齐 ②：`assetReader`/`assetSource` 是**惰性**的资源读取能力
+  // （构造时不读任何字节；只有 Mod 真的用 `gameAPI.asset`，或轨迹里出现
+  //  `{{asset:路径}}` 占位符时，才去读那一个文件）。
   const bundle = await buildData()
-  await store.init(bundle.data, { seed: seedInput.value, hooks: bundle.hooks, modCodes: bundle.modCodes, modRequires: bundle.modRequires })
+  await store.init(bundle.data, { seed: seedInput.value, hooks: bundle.hooks, modCodes: bundle.modCodes, modRequires: bundle.modRequires, assetReader: bundle.assetReader, assetSource: bundle.assetSource })
   // 日志：本局种子（复现的关键信息）。
   store.pushLog('info', `[UI][home] 本局随机种子：${store.seed}`)
   // 跳转：名人模式先去选名人（名人自带属性与天赋），自定义模式去抽天赋。

@@ -7,14 +7,15 @@
  *   3. 缺 manifest / manifest 非法 → 可读错误
  *   4. **路径穿越**（`../x`、绝对路径）被挡住并报告
  *   5. 尺寸与条目数上限（尺寸炸弹防护）
- *   6. 非文本文件被识别但不进 files（Mod 包约定只消费 JSON/JS）
- *   7. manager.importZip 走共用模块：真 zip → 落盘成功；危险 zip → 不落盘
+ *   6. **二进制资源逐字节保留**（2026-10 能力补齐 ②：以前是被丢弃 + 警告）
+ *   7. MIME 判定（浏览器渲染资源全靠它）
+ *   8. manager.importZip 走共用模块：真 zip → 落盘成功；危险 zip → 不落盘
  */
 
 // vitest DSL。
 import { describe, test, expect } from 'vitest'
 // 被测模块。
-import { MAX_ENTRIES, createModZip, isSafeEntryPath, readModPackage, stripWrapperDir } from './zip.js'
+import { MAX_ENTRIES, MAX_FILE_BYTES, createModZip, getMimeType, isSafeEntryPath, readModPackage, stripWrapperDir } from './zip.js'
 import { importZip } from './manager.js'
 // Node 内置（落盘校验）。
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -93,15 +94,110 @@ describe('mod/zip - 读写往返', () => {
     expect(JSON.parse(r.files['talents.json']).t1.name).toBe('甲')
   })
 
-  test('非文本文件（如 png）不进 files，但会被提示', () => {
-    // 二进制内容。
-    const zip = createModZip({ files: { 'manifest.json': MANIFEST, 'icon.png': new Uint8Array([137, 80, 78, 71]) } })
+  test('二进制资源**逐字节保留**（2026-10 能力补齐 ②：以前是被丢弃 + 警告）', () => {
+    // 一段"像 PNG"的字节（真要逐字节比对，不能用随机文本）。
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 255, 128, 7])
+    // 打包（用 assets 形态）。
+    const zip = createModZip({ files: { 'manifest.json': MANIFEST }, assets: { 'assets/logo.png': png } })
     // 解包。
     const r = readModPackage(zip)
     // 成功。
     expect(r.ok).toBe(true)
-    expect(r.files['icon.png']).toBeUndefined()
-    expect(r.binaries).toContain('icon.png')
+    // 资源在 assets 里（**不是** files —— files 只装文本）。
+    expect(r.files['assets/logo.png']).toBeUndefined()
+    expect(r.assets['assets/logo.png']).toBeInstanceOf(Uint8Array)
+    // 逐字节一致。
+    expect([...r.assets['assets/logo.png']]).toEqual([...png])
+    // binaries 是资源名单的别名（历史字段名，语义已变：从"被丢弃"变成"已保留"）。
+    expect(r.binaries).toContain('assets/logo.png')
+    // **不该再给"二进制被丢弃"的警告** —— 它现在留下来了，给警告会让人以为丢了。
+    expect(r.errors).toEqual([])
+    expect(r.skipped).toEqual([])
+  })
+
+  test('未知后缀也逐字节保留（按 application/octet-stream 对待）', () => {
+    // 任意字节（含 0x00 与高位字节：UTF-8 解码会毁掉它们）。
+    const blob = new Uint8Array([0, 1, 2, 254, 255, 128, 0])
+    // 打包（未知后缀 + 目录嵌套）。
+    const zip = createModZip({ files: { 'manifest.json': MANIFEST }, assets: { 'assets/data.bin': blob } })
+    // 解包。
+    const r = readModPackage(zip)
+    // 保留且一致。
+    expect([...r.assets['assets/data.bin']]).toEqual([...blob])
+    // MIME 走通用二进制。
+    expect(getMimeType('assets/data.bin')).toBe('application/octet-stream')
+  })
+
+  test('往返同时含文本与资源：各归各位，互不串味', () => {
+    // 资源。
+    const png = new Uint8Array([137, 80, 78, 71])
+    // 打包（files 与 assets 混用，且 files 里也允许字节）。
+    const zip = createModZip({
+      files: { 'manifest.json': MANIFEST, 'code.js': 'gameAPI.log.info("x")' },
+      assets: { 'assets/a.png': png, 'assets/b.woff2': new Uint8Array([119, 79, 70, 50]) },
+    })
+    // 解包。
+    const r = readModPackage(zip)
+    // 文本可读。
+    expect(r.files['code.js']).toContain('gameAPI.log.info')
+    // 资源逐字节一致。
+    expect([...r.assets['assets/a.png']]).toEqual([...png])
+    expect(Object.keys(r.assets).sort()).toEqual(['assets/a.png', 'assets/b.woff2'])
+    // 清单里没有任何文本文件混进资源表。
+    expect(Object.keys(r.assets)).not.toContain('code.js')
+  })
+
+  test('资源也受体积上限约束：超限的被跳过并报告（上限没有放宽）', () => {
+    // 超单文件上限的字节（**常量没变**：8 MB）。
+    const huge = new Uint8Array(MAX_FILE_BYTES + 1)
+    // 打包。
+    const zip = createModZip({ files: { 'manifest.json': MANIFEST }, assets: { 'assets/huge.png': huge } })
+    // 解包。
+    const r = readModPackage(zip)
+    // 安装仍可继续（资源被跳过）。
+    expect(r.ok).toBe(true)
+    // 没进 assets。
+    expect(r.assets['assets/huge.png']).toBeUndefined()
+    // 报告可读（带上限数值）。
+    expect(r.skipped.some((s) => s.includes('assets/huge.png') && s.includes(String(MAX_FILE_BYTES)))).toBe(true)
+    // 小文件照常通过（不是"一超全丢"）。
+    const okZip = createModZip({ files: { 'manifest.json': MANIFEST }, assets: { 'assets/small.png': new Uint8Array([1, 2, 3]) } })
+    expect([...readModPackage(okZip).assets['assets/small.png']]).toEqual([1, 2, 3])
+  })
+
+  test('资源的路径穿越同样被挡住（`../evil.png` 不进 assets）', () => {
+    // 含穿越路径的资源。
+    const zip = createModZip({ files: { 'manifest.json': MANIFEST }, assets: { '../evil.png': new Uint8Array([1, 2]) } })
+    // 解包。
+    const r = readModPackage(zip)
+    // 安装继续，但没有那条资源。
+    expect(r.ok).toBe(true)
+    expect(r.assets['../evil.png']).toBeUndefined()
+    expect(r.binaries).toEqual([])
+    // 报告了不安全路径。
+    expect(r.errors.some((e) => e.includes('不安全路径'))).toBe(true)
+  })
+
+  test('getMimeType：覆盖任务要求的后缀，未知给 application/octet-stream', () => {
+    // 图片。
+    expect(getMimeType('a.png')).toBe('image/png')
+    expect(getMimeType('a.jpg')).toBe('image/jpeg')
+    expect(getMimeType('a.jpeg')).toBe('image/jpeg')
+    expect(getMimeType('a.gif')).toBe('image/gif')
+    expect(getMimeType('a.webp')).toBe('image/webp')
+    expect(getMimeType('a.svg')).toBe('image/svg+xml')
+    // 音频。
+    expect(getMimeType('a.mp3')).toBe('audio/mpeg')
+    expect(getMimeType('a.ogg')).toBe('audio/ogg')
+    expect(getMimeType('a.wav')).toBe('audio/wav')
+    // 字体。
+    expect(getMimeType('a.woff')).toBe('font/woff')
+    expect(getMimeType('a.woff2')).toBe('font/woff2')
+    expect(getMimeType('a.ttf')).toBe('font/ttf')
+    // 大小写与未知后缀。
+    expect(getMimeType('assets/LOGO.PNG')).toBe('image/png')
+    expect(getMimeType('a.unknown')).toBe('application/octet-stream')
+    expect(getMimeType('noext')).toBe('application/octet-stream')
   })
 })
 
@@ -189,6 +285,28 @@ describe('mod/zip - manager.importZip 复用同一实现（后端与前端一致
       const again = importZip({ zipData: zip, modsDir: dir })
       expect(again.ok).toBe(false)
       expect(again.errors[0]).toContain('已存在')
+    } finally {
+      // 清理。
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('含资源的 zip → 字节按原样落盘（CLI 侧也能装带图的 Mod）', () => {
+    // 临时 mods 目录。
+    const dir = mkdtempSync(join(tmpdir(), 'zip-import-asset-'))
+    // 清理。
+    try {
+      // 一段带高位字节的内容（用 utf8 写盘会坏掉，所以这条能真正验证"按字节写"）。
+      const png = new Uint8Array([137, 80, 78, 71, 255, 0, 128])
+      // 打包。
+      const zip = createModZip({ files: { 'manifest.json': MANIFEST }, assets: { 'assets/logo.png': png } })
+      // 导入。
+      const r = importZip({ zipData: zip, modsDir: dir })
+      // 成功。
+      expect(r.ok).toBe(true)
+      // 文件真的落盘，且逐字节一致（`writeFileSync` 收到 Uint8Array 时不会做文本转换）。
+      const written = readFileSync(join(dir, 'zip-mod', 'assets', 'logo.png'))
+      expect([...written]).toEqual([...png])
     } finally {
       // 清理。
       rmSync(dir, { recursive: true, force: true })

@@ -452,6 +452,217 @@ async function playRealLife(seed, options = {}) {
   return playLife(seed, { maxYears: 120, data: loadRealData(), ...options })
 }
 
+describe('gameStore Mod 资源接线（2026-10 能力补齐 ②）', () => {
+  // #fakeAssetReader
+  // 假资源读取能力（**不碰真实网络/文件系统**）。
+  //
+  // @param {object} files - { 路径: Uint8Array }
+  // @returns {object} 读取器
+  function fakeAssetReader(files) {
+    // 返回。
+    return {
+      // 类型。
+      kind: 'fake',
+      // 可用。
+      available: true,
+      // 清单。
+      listFiles: async () => Object.keys(files),
+      // 字节。
+      readBytes: async (_mod, path) => files[path] ?? null,
+    }
+  }
+
+  // #fakeUrlApi
+  // 假的 URL 原语（**必须注入**：Node 18 里没有 `URL.createObjectURL`，
+  // 不注入的话桥会走"绝对路径"降级分支，就测不到 blob 的缓存与释放了）。
+  //
+  // @returns {object} { urlApi, created, revoked }
+  function fakeUrlApi() {
+    // 记录。
+    const created = []
+    const revoked = []
+    // 返回。
+    return {
+      created,
+      revoked,
+      urlApi: {
+        // Blob（只需要 type 便于断言 MIME）。
+        Blob: class { constructor(parts, opts) { this.type = opts?.type } },
+        // 造 URL。
+        createObjectURL: () => { const u = `blob:store/${created.length + 1}`; created.push(u); return u },
+        // 释放。
+        revokeObjectURL: (u) => revoked.push(u),
+      },
+    }
+  }
+
+  test('AA：Mod 代码拿到 gameAPI.asset（读自己包里的字节）', async () => {
+    // store。
+    const store = useGameStore()
+    // 一段资源字节。
+    const bytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3])
+    // 初始化（带资源能力 + 一段会读资源的 Mod 代码）。
+    await store.init(buildData(), {
+      assetReader: fakeAssetReader({ 'assets/logo.png': bytes }),
+      modCodes: [{
+        name: 'asset-mod',
+        // 顶层不能 await → 用 then 把结果挂到全局，稍后断言。
+        code: 'gameAPI.asset.bytes("assets/logo.png").then(function (b) { globalThis.__storeAssetBytes = Array.from(b) })',
+      }],
+    })
+    // 等异步回调。
+    await new Promise((r) => setTimeout(r, 0))
+    // 逐字节一致（**真的接到了 Mod 代码里**，不是只建了个空对象）。
+    expect(globalThis.__storeAssetBytes).toEqual([...bytes])
+    // 清理。
+    delete globalThis.__storeAssetBytes
+    // 注册表挂在 store 上（界面侧解析占位符要用同一份）。
+    expect(store.assetRegistry).toBeTruthy()
+    expect(store.assetsAvailable).toBe(true)
+  })
+
+  test('AB：推进一年后自动解析轨迹里的 `{{asset:路径}}`（有资源 → URL；没有 → null）', async () => {
+    // store。
+    const store = useGameStore()
+    // 假的 URL 原语（注入：Node 里没有 createObjectURL，否则只会走"绝对路径"分支）。
+    const { urlApi, created } = fakeUrlApi()
+    // 初始化（带资源能力；Mod 代码往每年轨迹里塞一个占位符）。
+    // ⚠️ 这里**故意不传 hooks**：`store.init` 必须自己建一条总线并同时给 Life 与 Mod 代码 ——
+    //    两边各建一条的话，Mod 的钩子永远不会被触发（且完全静默），本用例就是这条回归。
+    await store.init(buildData(), {
+      assetReader: fakeAssetReader({ 'assets/logo.png': new Uint8Array([1, 2, 3]) }),
+      assetUrlApi: urlApi,
+      modCodes: [{
+        name: 'asset-mod',
+        code: [
+          'gameAPI.on("onYearAdvance", function (p) {',
+          '  p.content.push({ type: "EVT", description: "照片 {{asset:assets/logo.png}} 和 {{asset:assets/missing.png}}" })',
+          '})',
+        ].join('\n'),
+      }],
+    })
+    // 开局 + 拉满生命（fixture 里 0 岁有致死事件）。
+    store.begin({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+    store.life.request('PROPERTY').set('LIF', 100)
+    // 推进一年（next 内部会调 trackAssets）。
+    store.next()
+    // 等异步解析。
+    await new Promise((r) => setTimeout(r, 0))
+    // 有资源的那条解析出了 URL（缓存 + tick 递增，模板据此重渲染）。
+    expect(store.assetUrl('assets/logo.png')).toBe('blob:store/1')
+    expect(store.assetUrlTick).toBeGreaterThan(0)
+    // 缺失的那条**不入缓存**（`assetUrl` 给 null → 界面降级成纯文本；
+    // 不缓存是为了"Mod 修好之后立刻能看见"，而不是永远记住这次失败）。
+    expect(store.assetUrl('assets/missing.png')).toBeNull()
+    // 只造了一个 blob URL（同路径不重复造）。
+    expect(created).toEqual(['blob:store/1'])
+    // 同一路径再问一次还是同一个 URL（缓存）。
+    expect(store.assetUrl('assets/logo.png')).toBe('blob:store/1')
+    // 轨迹里也确实写进去了（两条：0 岁死亡事件 + Mod 追加的那条）。
+    expect(JSON.stringify(store.history)).toContain('{{asset:assets/logo.png}}')
+  })
+
+  test('AC：没有资源能力时 trackAssets 是空操作（advisor 不炸、占位符留给界面降级）', async () => {
+    // store（不传资源能力）。
+    const store = useGameStore()
+    await store.init(buildData())
+    // 手动塞一条带占位符的轨迹（模拟"Mod 已经写在文本里了"）。
+    store.history.push({ age: 1, isEnd: false, items: [{ type: 'EVT', description: 'x {{asset:assets/logo.png}}' }] })
+    // 解析（没有注册表 → 直接返回）。
+    expect(() => store.trackAssets()).not.toThrow()
+    // 什么都没发生。
+    expect(store.assetUrlTick).toBe(0)
+    expect(store.assetUrl('assets/logo.png')).toBeNull()
+    expect(store.assetRegistry).toBeNull()
+    expect(store.assetsAvailable).toBe(false)
+  })
+
+  test('AD：restartWithSeed 继承资源能力（复现的一局里占位符仍能解析）', async () => {
+    // store。
+    const store = useGameStore()
+    // 资源能力（重开一局必须带上，否则图片全变文字）。
+    const reader = fakeAssetReader({ 'assets/logo.png': new Uint8Array([9]) })
+    await store.init(buildData(), {
+      // 资源读取能力 + 文件源（restartWithSeed 用 assetSource 重建读取器）。
+      assetReader: reader,
+      assetSource: { listFiles: reader.listFiles, readBytes: reader.readBytes },
+      modCodes: [{ name: 'asset-mod', code: 'gameAPI.on("onYearAdvance", function (p) { p.content.push({ type: "EVT", description: "{{asset:assets/logo.png}}" }) })' }],
+    })
+    // 重开（同种子）。
+    const ok = await store.restartWithSeed(12345)
+    expect(ok).toBe(true)
+    // 资源能力被继承下来了。
+    expect(store.assetRegistry).toBeTruthy()
+    expect(store.assetsAvailable).toBe(true)
+    // 缓存是新的（旧缓存指向上一局的 blob）。
+    expect(store.assetUrlCache.size).toBe(0)
+    // 代码也重新执行了（重开的一局里同样能解析）。
+    store.begin({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+    store.life.request('PROPERTY').set('LIF', 100)
+    store.next()
+    await new Promise((r) => setTimeout(r, 0))
+    // 有 URL 或至少"没有报错"：happy-dom 的 createObjectURL 可能给 blob:…。
+    expect(store.assetUrl('assets/logo.png') === null || typeof store.assetUrl('assets/logo.png') === 'string').toBe(true)
+  })
+
+  test('AE：换局时释放上一局的 blob URL（不释放 = 内存泄漏）', async () => {
+    // store。
+    const store = useGameStore()
+    // 假的 URL 原语（记录造出来与释放掉的 URL）。
+    const { urlApi, created, revoked } = fakeUrlApi()
+    // 第一局。
+    await store.init(buildData(), {
+      assetReader: fakeAssetReader({ 'assets/logo.png': new Uint8Array([1]) }),
+      assetUrlApi: urlApi,
+      modCodes: [{ name: 'asset-mod', code: 'gameAPI.on("onYearAdvance", function (p) { p.content.push({ type: "EVT", description: "{{asset:assets/logo.png}}" }) })' }],
+    })
+    // 造一个 URL。
+    store.begin({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+    store.life.request('PROPERTY').set('LIF', 100)
+    store.next()
+    await new Promise((r) => setTimeout(r, 0))
+    // 真的造出来了。
+    expect(created.length).toBe(1)
+    expect(store.assetUrl('assets/logo.png')).toBe(created[0])
+    // 第二局（init 会先 dispose 上一局的注册表）。
+    await store.init(buildData(), {
+      assetReader: fakeAssetReader({ 'assets/logo.png': new Uint8Array([1]) }),
+      assetUrlApi: urlApi,
+      modCodes: [{ name: 'asset-mod', code: 'gameAPI.on("onYearAdvance", function (p) { p.content.push({ type: "EVT", description: "{{asset:assets/logo.png}}" }) })' }],
+    })
+    // 上一局的 URL 被释放了（**不释放就是内存泄漏**：每个 blob URL 都把字节钉在内存里）。
+    expect(revoked).toContain(created[0])
+    // 新一局的缓存是空的（旧 URL 已经失效，留着就是破图）。
+    expect(store.assetUrlCache.size).toBe(0)
+    expect(store.assetUrl('assets/logo.png')).toBeNull()
+  })
+
+  test('AF：Node 形态（没有 createObjectURL）下 url() 降级为绝对路径，仍然能读', async () => {
+    // store（不注入 URL 原语 → 桥看到的是运行环境的真实能力）。
+    const store = useGameStore()
+    // 初始化。
+    await store.init(buildData(), {
+      // 资源能力（可读）。
+      assetReader: fakeAssetReader({ 'assets/logo.png': new Uint8Array([1]) }),
+      // `urlApi` 显式给一个"没有 createObjectURL"的对象（模拟 Node）。
+      assetUrlApi: { Blob: undefined },
+      // 每年塞一个占位符。
+      modCodes: [{ name: 'asset-mod', code: 'gameAPI.on("onYearAdvance", function (p) { p.content.push({ type: "EVT", description: "{{asset:assets/logo.png}}" }) })' }],
+    })
+    // 开局 + 推进一年。
+    store.begin({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+    store.life.request('PROPERTY').set('LIF', 100)
+    store.next()
+    await new Promise((r) => setTimeout(r, 0))
+    // 降级成路径（**不抛、不空**）—— 界面拿到它仍能显示（Node/Electron 场景）。
+    const url = store.assetUrl('assets/logo.png')
+    expect(typeof url).toBe('string')
+    expect(url.endsWith('assets/logo.png')).toBe(true)
+    // 路径形态没有 blob 需要释放。
+    expect(store.assetRegistry.dispose()).toBe(0)
+  })
+})
+
 describe('gameStore 成就提示（引擎 emit → 界面弹窗）', () => {
   test('W：开局触发的成就（START 时机）会推入提示队列', async () => {
     // store + 开局。

@@ -19,6 +19,8 @@
 import { createHostBridge, createDenyHost } from './host.js'
 // 属性桥（Mod ↔ 真实游戏属性系统；2026-10 能力补齐）。
 import { createPropertyBridge, createUnavailablePropertyBridge } from './property-bridge.js'
+// 资源桥（Mod 包内二进制资源；2026-10 能力补齐 ②）。
+import { createAssetBridge, createUnavailableAssetBridge } from './asset-bridge.js'
 
 // #createHookBus
 // 创建钩子总线：注册/触发/移除，支持执行顺序与异常隔离。
@@ -158,9 +160,11 @@ export function createHookBus() {
 //   （{ available, call }）；缺省 createDenyHost()（available 为空、调用报错）
 // @param {object} [deps.property] - **属性桥**（`createPropertyBridge(life)` 的结果，或 Life 本身）；
 //   缺省用降级桥（`available: false`、写操作报错）—— 见 `mod/property-bridge.js`
+// @param {object} [deps.asset] - **资源桥**（`createAssetBridge({ modName, listFiles, readBytes })`
+//   的结果）；缺省用降级桥（`available: false`、读操作报错）—— 见 `mod/asset-bridge.js`
 // @param {object} [deps.log] - 日志器
 // @returns {object} gameAPI
-export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, property, storage, modName: _modName, log }) {
+export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, property, asset, storage, modName: _modName, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, error: () => {} }
   // Mod 名（storage 命名空间 + 日志前缀用）。
@@ -182,6 +186,15 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, pro
   const hostBridge = host ? (typeof host.has === 'function' ? host : createHostBridge(host)) : createDenyHost()
   // 属性桥：注入的若是 Life（有 .property）或 Property 模块，都包成桥；没注入 → 降级桥。
   const propertyBridge = property ? createPropertyBridge(property) : createUnavailablePropertyBridge()
+  // 资源桥（2026-10 能力补齐 ②）：注入的若是 `{ listFiles, readBytes }` 形态则包成桥；
+  // 没注入 → 降级桥（`available: false`，读操作抛可读错误）。
+  //
+  // 历史：以前这里**根本没有** asset 这个键 —— Mod 包只收文本，二进制在 zip 安装时
+  // 就被丢弃了（`AGENTS.md` 边界 ④ 曾写着"不能带资源文件进 zip"）。现在包能带图片/
+  // 音频/字体，字节逐字节保留，由这个桥交给 Mod。
+  const assetBridge = asset
+    ? (typeof asset.list === 'function' ? asset : createAssetBridge({ modName, ...asset }))
+    : createUnavailableAssetBridge(modName)
   // 共享总线自检：属性变更通知是从 **Life 的总线**广播的（Property 由 Life 构造）。
   // 若调用方给 Life 传的不是这条总线，Mod 注册的 `propertyChange` 会**静默收不到**通知 ——
   // 这是很难查的一类问题，所以这里直接出声（不改语义：照样各用各的）。
@@ -341,6 +354,15 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, pro
     // 历史：这里以前读写 `store.properties` 这个自定义键（全引擎无人读），是个"看起来能用、
     // 实际什么都没发生"的假 API；已由本次能力补齐替换掉。
     property: propertyBridge,
+
+    // 资源（**Mod 包内的二进制资源**，2026-10 能力补齐 ②）。
+    // 注入 `asset` 桥（`createAssetBridge({ modName, listFiles, readBytes })`）→ 能读包里的
+    // 图片/音频/字体（`list/has/bytes/url/text`）；没注入 → 降级桥（`available: false`，
+    // 读操作抛可读错误）。
+    //
+    // 历史：以前这个键**不存在** —— zip 安装只收文本，二进制被丢弃并给警告；
+    // 想用图片只能靠宿主桥 `fs` 读本地文件（见 `AGENTS.md` 边界 ④ 的旧写法）。
+    asset: assetBridge,
 
     // 天赋 CRUD。
     addTalent: (talent) => {

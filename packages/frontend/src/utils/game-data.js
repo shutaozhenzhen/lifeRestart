@@ -120,7 +120,7 @@ export async function fetchOriginalData({ fetchImpl, baseUrl } = {}) {
 // @param {object} [deps.storage] - 存储适配器（读 Mod 启停）
 // @param {string} [deps.baseUrl] - 数据基础路径
 // @param {boolean} [deps.withMods] - 是否加载 Mod（缺省 true；模拟页等可关掉）
-// @returns {Promise<{data: object, dataSource: string, degraded: boolean, hooks: object|null, modCodes: Array, mods: object|null}>} 数据与来源
+// @returns {Promise<{data: object, dataSource: string, degraded: boolean, hooks: object|null, modCodes: Array, modRequires: object|null, assetReader: object|null, assetSource: object|null, mods: object|null}>} 数据与来源
 export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = true } = {}) {
   // 原版数据 Mod 的启停（缺省视为启用：系统内置默认开）。
   const enabled = loadModState('lifeRestart-data', storage)
@@ -155,6 +155,10 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
   let hooks = null
   let modCodes = []
   let modRequires = null
+  // 资源能力（2026-10 能力补齐 ②）：惰性读取器 + 文件源，交给 store.init。
+  // 没加载 Mod 时是 null（`gameAPI.asset` 走降级桥、占位符按纯文本显示）。
+  let assetReader = null
+  let assetSource = null
   let mods = null
   // 需要且未禁用时加载。
   if (withMods) {
@@ -187,6 +191,10 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
       modCodes = bundle.codes
       // 运行时模块（每个 Mod 的 require；阶段二注入给 code.js）。
       modRequires = bundle.requires
+      // 资源能力（**惰性**：这里不读任何字节；只有 Mod 真用 `gameAPI.asset` 或
+      // 轨迹里出现 `{{asset:路径}}` 时才去读那一个文件）。
+      assetReader = bundle.assetReader
+      assetSource = bundle.assetSource
       // 运行信息（报告/界面用）。
       mods = {
         // 目录（界面渲染）。
@@ -208,5 +216,5 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
     }
   }
   // 返回。
-  return { data, dataSource, degraded, hooks, modCodes, modRequires, mods }
+  return { data, dataSource, degraded, hooks, modCodes, modRequires, assetReader, assetSource, mods }
 }

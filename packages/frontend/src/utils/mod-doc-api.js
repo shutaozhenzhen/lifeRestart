@@ -75,14 +75,17 @@ gameAPI.on('onYearAdvance', (p) => {    // 注册钩子
   // 宿主桥（调用本 Mod 的 server.js 注册的处理器；静态站是空桥）
   host: { available, has(mod), call(mod, handler, args) },
 
+  // 包内二进制资源（图片/音频/字体；宿主没注入资源能力时是降级桥）
+  asset: { available, list(), has(path), bytes(path), url(path), text(path), dispose() },
+
   // AI Mod 工厂（引擎未注入时为 null）
   createAIMod(cfg),
 
   // 参数注册表（**宿主没传注册表时整个 param 为 null**，见下）
   param: { define(name, def), get(name), set(name, v), change(name, v), names, getAll() },
 
-  // 属性自定义区（**不是**游戏属性系统，见 §5）
-  property: { get(prop), set(prop, value) },
+  // 属性系统（**真实**游戏属性，不是自定义区；见 §5）
+  property: { available, get(prop), set(prop, value), change(prop, v), effect(e), all(), types() },
 
   // 数据 CRUD（顶层扁平函数，没有 talent.* / event.* 这种子命名空间）
   addTalent(t), getTalent(id), removeTalent(id),
@@ -893,7 +896,7 @@ if (gameAPI.host.has('my-mod')) {
           t: 'table',
           head: ['做不到的事', '实情'],
           rows: [
-            ['**加界面**', '没有页面/组件/路由/属性面板/统计项的注册 API。Mod 定义的新参数与新统计**不会自动出现在界面上**（统计项还必须在 `statistics-view.js` 里登记，那是前端源码）'],
+            ['**加界面**', '没有页面/组件/路由/属性面板/统计项的注册 API。Mod 定义的新参数与新统计**不会自动出现在界面上**（统计项还必须在 `statistics-view.js` 里登记，那是前端源码）。⚠️ **唯一的例外是轨迹里的图片**：文本里写 `{{asset:相对路径}}` 会渲染成真 `<img>`（2026-10 起，见 §14）—— 它是一个**受控占位符**，不是通用界面注册能力'],
             ['**订阅成就达成**', '成就广播走 Life 自己的 emit，与 Mod 钩子总线是两条通道（见 §3 末）'],
             ['**network API**', '`permissions` 里的 `network` 只是声明字符串，**没有对应 API**（也没有强制）。`storage` 已于 2026-10 有对应 API：见 §13 的 `gameAPI.storage`'],
             ['**utils（工具函数）**', 'gameAPI 不提供工具函数（没有深拷贝 / 格式化 / 随机数）；`log` 已于 2026-10 提供（见 §13）'],
@@ -903,6 +906,164 @@ if (gameAPI.host.has('my-mod')) {
             ['**沙箱**', '`new Function` 执行、只注入 gameAPI：浏览器侧 Mod 摸得到 `window`/`document`，Node 侧 `server.js` 是真 ESM（`node:fs`、`child_process` 都能用）。"完全权限"是 Mod 模型的既定前提，不是缺陷'],
             ['**回滚/卸载数据**', '加载并执行过的 Mod 数据与钩子没有"卸载"接口（钩子只能靠 `on` 返回的注销函数手动摘），游戏内数据在重开一局时按原始内容重建'],
             ['**拿到 AI 配置**', '浏览器侧目前不给 Mod 注入 AI 配置（`ai.available` 为 false）；`manifest.ai` 字段引擎**从不读取**'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'info',
+          text: '**已经不是"做不到"的两件事**（改文档时最容易漏）：① 资源文件 —— Mod 包能带图片/音频/字体了，用 `gameAPI.asset`（§14；以前 zip "只收文本"，二进制被丢弃）；② 逐岁**同步**介入 + 异步生命周期点（`onBeforeLife` / `onAfterLife`）—— 后者可以 await，前者不行（见上表最后几行）。',
+        },
+      ],
+    },
+
+    // ---------- asset（包内二进制资源；2026-10 能力补齐 ②） ----------
+    {
+      id: 'asset',
+      title: '14. asset：读 Mod 包里的图片 / 音频 / 字体',
+      blocks: [
+        {
+          t: 'p',
+          text: 'Mod 的包里可以带**二进制资源**（图片、音频、字体），由 `gameAPI.asset` 读出来用。以前这是硬边界：zip 只收文本（`.json/.js/.mjs/.txt/.md`），二进制在安装时被丢弃并给警告 —— 所以想把图片放进 Mod 只能靠宿主桥 `fs` 去读本地文件。',
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '**先判断 `available` 再用**（与 `property` 同一个风格）：宿主没有注入资源能力时（例如所有 CLI 原型、或者旧版本前端）这是**降级桥** —— `list()` 给空数组、`has()` 恒 false，而 `bytes/url/text` 抛**可读错误**（不会静默返回空字节：那样你只会看到一张破图）。',
+        },
+        {
+          t: 'code',
+          lang: 'js',
+          label: 'code.js：把包里的图放进这一年的人生轨迹',
+          code: `// 包里放了 assets/logo.png（打包时按相对路径，子目录也行）
+if (gameAPI.asset.available) {
+  gameAPI.asset.list().then((list) => {
+    gameAPI.log.info('[my-mod] 包内资源：', list.join(', '))   // 只有图片/音频/字体
+  })
+
+  gameAPI.on('onYearAdvance', (p) => {
+    // ⚠️ 钩子是**同步**的，而 asset.url() 是异步的 → 先把 URL 读好缓存起来，
+    //    在同步钩子里用缓存值（见下方"异步"一节）。
+  })
+}
+
+// 轨迹文本里的**受控占位符**：界面会把它渲染成真的 <img>（不用 v-html）。
+// 资源读不到时原样显示这几个字符（不会报错、不会白屏）。
+payload.content.push({
+  type: 'EVT',
+  description: '你翻出了小时候的照片 {{asset:assets/logo.png}}',
+})`,
+        },
+        {
+          t: 'api',
+          path: 'asset',
+          sig: 'gameAPI.asset → { available, list(), has(path), bytes(path), url(path), text(path), dispose() }',
+          params: [],
+          returns: '资源门面（**永远存在**，但 `available` 可能是 false）',
+          side: '无',
+          note: '资源是**惰性**读的：构造桥、开局都不会读任何字节 —— 只有你真的调 `bytes/url/text`（或轨迹里出现 `{{asset:路径}}`）时才读那一个文件。',
+          platform: '两端（需宿主注入文件源）',
+        },
+        {
+          t: 'api',
+          path: 'asset.available',
+          sig: 'gameAPI.asset.available → boolean',
+          params: [],
+          returns: '宿主有没有资源能力',
+          side: '无',
+          note: '**先判断再用**。浏览器侧有（Mod 文件源 / zip 装出来的本地存储），CLI 侧取决于有没有给了 mods 目录。',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'asset.list',
+          sig: 'gameAPI.asset.list() → Promise<string[]>',
+          params: [],
+          returns: '该 Mod 的**资源**路径数组（图片/音频/字体）',
+          side: '读一次文件清单（不读字节）',
+          note: '**只列资源后缀**（`png/jpg/jpeg/gif/webp/svg/bmp/ico/mp3/ogg/wav/m4a/flac/woff/woff2/ttf/otf`，大小写不敏感）。`manifest.json` / `code.js` / 五张数据表**不在其中** —— 那些走引擎自己的加载链路。没有资源 → 空数组。',
+          platform: '两端',
+          example: `const list = await gameAPI.asset.list()
+// 例如：['assets/logo.png', 'assets/bgm.ogg']`,
+        },
+        {
+          t: 'api',
+          path: 'asset.has',
+          sig: 'gameAPI.asset.has(path: string) → Promise<boolean>',
+          params: [['path', 'string', '包内相对路径（与 zip 里的路径一致，例如 `assets/logo.png`）']],
+          returns: '是否存在',
+          side: '读一次文件清单（不读字节）',
+          note: '做的是**清单判断**（不是"猜后缀"）：不在清单里就是 false。非法路径（`..` / 绝对路径 / 反斜杠）直接 false，不抛。',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'asset.bytes',
+          sig: 'gameAPI.asset.bytes(path: string) → Promise<Uint8Array>',
+          params: [['path', 'string', '包内相对路径']],
+          returns: '**原始字节**（逐字节，含 0 与 255）',
+          side: '读这**一个**文件的字节',
+          note: '读不到时**抛可读错误**（例如 `Mod my-mod 里没有资源 assets/x.png（用 gameAPI.asset.list() 看这个包里的资源清单…）`）—— 不是返回空字节。绝对路径、`..`、反斜杠会被拒绝（只允许读本 Mod 包内的路径）。',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'asset.url',
+          sig: 'gameAPI.asset.url(path: string) → Promise<string>',
+          params: [['path', 'string', '包内相对路径']],
+          returns: '浏览器：`blob:` URL（可直接当 `<img src>`）；Node：**绝对文件路径**',
+          side: '读这**一个**文件的字节（首次），之后走缓存',
+          note: '**同路径恒同 URL**（缓存；每次新建会让同一张图在内存里存很多份）。blob URL 由 `dispose()` 释放 —— 不释放就是内存泄漏。MIME 按后缀判定（`png→image/png`、`ogg→audio/ogg`、`woff2→font/woff2`；未知后缀 `application/octet-stream`）。**Node 没有 `URL.createObjectURL`** → 降级为绝对路径（它不能直接当 `<img src>`，但省内存、且指向明确）。',
+          platform: '两端（形态不同）',
+          example: `// 浏览器里可以直接喂给 <img>；Node 里拿到的是文件路径
+const url = await gameAPI.asset.url('assets/logo.png')`,
+        },
+        {
+          t: 'api',
+          path: 'asset.text',
+          sig: 'gameAPI.asset.text(path: string) → Promise<string>',
+          params: [['path', 'string', '包内相对路径']],
+          returns: '按 UTF-8 解码的文本',
+          side: '读这**一个**文件的字节',
+          note: '给 `.svg` 这类"既是图片又是文本"的资源用（`.svg` 在 `list()` 里算资源，但内容可以当文本处理）。读不到同样抛可读错误。',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'asset.dispose',
+          sig: 'gameAPI.asset.dispose() → number',
+          params: [],
+          returns: '释放掉的 blob URL 数量',
+          side: '**释放本 Mod 的全部 blob URL**（幂等）',
+          note: '用于"换局 / 禁用 Mod"时收尾（引擎在换局时也会自动调它）。释放后再调 `bytes/url/text` 会抛**可读错误**（而不是给你一个已经失效的 URL）。Node 形态（绝对路径）没有可释放的东西 → 返回 0。',
+          platform: '两端',
+        },
+        {
+          t: 'sub',
+          text: '轨迹里的受控占位符（让图片**在界面上真的看得见**）',
+        },
+        {
+          t: 'p',
+          text: '往轨迹文本里写 `{{asset:相对路径}}`，轨迹页会把它渲染成真的 `<img>`（**绝不用 `v-html`**，这是 XSS 边界）。语法是**严格**的：只认相对路径、拒绝 `..`/绝对路径/反斜杠/`http:`/`data:`；写法不标准就**原样当普通文本**（于是笔误会被你一眼看到，而不是渲染成破图）。资源缺失时同样原样显示这几个字符，且不会报错。',
+        },
+        {
+          t: 'note',
+          kind: 'tip',
+          text: '占位符只解决"文本里插图"。要在**开局**就把资源准备好（例如拿 URL 设背景音乐、预加载），在 `onAfterLife`（可异步的生命周期钩子）里 await `gameAPI.asset.url(...)` 并把结果存进 `gameAPI.storage`；**三个逐岁钩子是同步的**，里面不能 `await`（回调里 `await` 不会阻塞那一年）。',
+        },
+        {
+          t: 'sub',
+          text: '打包与体积（**上限没放宽**）',
+        },
+        {
+          t: 'table',
+          head: ['项', '值', '说明'],
+          rows: [
+            ['资源放哪', '包内任意相对路径（约定 `assets/`）', '子目录会一起同步到站点 / 一起打进 zip'],
+            ['单文件', '≤ 8 MB', '超限条目**跳过 + 警告**（安装继续）'],
+            ['累计解压', '≤ 32 MB', '同上。图片/音效/字体够用；大音乐请自己压缩'],
+            ['条目数', '≤ 512', '含资源文件'],
+            ['`node_modules/`', '—', '仍然忽略并提示改用 `vendor/`'],
+            ['后缀白名单', '引擎 zip 的 `ASSET_EXT`', '与 `scripts/sync-mods.mjs` 的清单**必须一致**（有回归用例比对），少一个就是"站点上静默少读"'],
           ],
         },
       ],

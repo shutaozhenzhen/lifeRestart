@@ -4,8 +4,13 @@
  * 为什么不用 localStorage：Mod 包是多个文件、可能几 MB，而 localStorage 只有 ~5MB
  * 且只能存字符串 —— 装两个 Mod 就炸。IndexedDB 能存结构化对象、容量按配额给。
  *
- * 对外接口刻意与"文件源"同形（list/listFiles/readText），这样组合源可以直接把
+ * 对外接口刻意与"文件源"同形（list/listFiles/readText/readBytes），这样组合源可以直接把
  * 本地已安装的 Mod 与服务器上的 Mod 拼在一起，加载内核完全不用改。
+ *
+ * 二进制资源（2026-10 能力补齐 ②）：Mod 记录里多一个 `assets`（`{ 路径: Uint8Array }`），
+ * 与 `files`（文本）并列。IndexedDB 结构化克隆**原生支持 Uint8Array**（不需要 base64），
+ * 所以资源是逐字节存下来的；`listFiles()` 返回两者的并集（**清单即权威**：漏列一个资源
+ * 就等于浏览器侧静默读不到它）。
  *
  * 测试与降级：无 indexedDB（Node/happy-dom/隐私模式）时自动退回内存实现，
  * 也可注入自定义 factory。
@@ -16,12 +21,25 @@ const DB_NAME = 'lifeRestart-mods'
 const STORE_NAME = 'mods'
 const DB_VERSION = 1
 
+// #recordFiles
+// 取一条 Mod 记录的完整文件清单（文本 + 资源）。
+//
+// 为什么单列一个函数：内存实现与 IndexedDB 实现必须给出**同一份清单**，
+// 否则"上传 zip 装出来的 Mod 能读到资源、服务器目录的读不到"这种分叉极难查。
+//
+// @param {object} rec - 记录 { files, assets }
+// @returns {string[]} 路径数组
+function recordFiles(rec) {
+  // 文本键 + 资源键（老记录可能没有 assets）。
+  return [...Object.keys(rec?.files || {}), ...Object.keys(rec?.assets || {})]
+}
+
 // #createMemoryModStore
 // 内存实现（测试与 IndexedDB 不可用时的降级）。
 //
 // @returns {object} 存储
 export function createMemoryModStore() {
-  // name → { name, manifest, files }
+  // name → { name, manifest, files, assets }
   const mods = new Map()
   // 返回。
   return {
@@ -32,22 +50,29 @@ export function createMemoryModStore() {
       // 转数组。
       return [...mods.values()].map((m) => ({ name: m.name, manifest: m.manifest }))
     },
-    // 某个 Mod 的文件清单。
+    // 某个 Mod 的文件清单（文本 + 资源）。
     async listFiles(name) {
       // 取记录。
       const rec = mods.get(name)
       // 不存在。
-      return rec ? Object.keys(rec.files) : null
+      return rec ? recordFiles(rec) : null
     },
     // 读一个文件（文本）。
     async readText(name, rel) {
       // 取记录后读。
       return mods.get(name)?.files?.[rel] ?? null
     },
-    // 安装（覆盖同名）。
-    async install({ name, manifest, files }) {
+    // 读一个文件（**字节**，2026-10 能力补齐 ②）。
+    async readBytes(name, rel) {
+      // 取记录后读资源表。
+      const bytes = mods.get(name)?.assets?.[rel]
+      // 不存在 → null（由 asset 桥转成可读错误）。
+      return bytes ?? null
+    },
+    // 安装（覆盖同名）。`assets` 可选（老调用方只给 files）。
+    async install({ name, manifest, files, assets }) {
       // 写入。
-      mods.set(name, { name, manifest, files: { ...files } })
+      mods.set(name, { name, manifest, files: { ...files }, assets: { ...(assets || {}) } })
     },
     // 卸载。
     async remove(name) {
@@ -121,12 +146,12 @@ export function createIndexedDBModStore({ dbName = DB_NAME, factory } = {}) {
       // 只暴露名字与 manifest（加载器需要 manifest）。
       return all.map((m) => ({ name: m.name, manifest: m.manifest }))
     },
-    // 文件清单。
+    // 文件清单（文本 + 资源）。
     async listFiles(name) {
       // 取记录。
       const rec = await wrap((await tx('readonly')).get(name))
       // 返回键。
-      return rec ? Object.keys(rec.files) : null
+      return rec ? recordFiles(rec) : null
     },
     // 读文本文件。
     async readText(name, rel) {
@@ -135,10 +160,19 @@ export function createIndexedDBModStore({ dbName = DB_NAME, factory } = {}) {
       // 读文件。
       return rec?.files?.[rel] ?? null
     },
+    // 读二进制资源（**逐字节**；IndexedDB 结构化克隆直接支持 Uint8Array）。
+    async readBytes(name, rel) {
+      // 取记录。
+      const rec = await wrap((await tx('readonly')).get(name))
+      // 读资源。
+      const bytes = rec?.assets?.[rel]
+      // 不存在 → null。
+      return bytes ?? null
+    },
     // 安装（put 覆盖）。
-    async install({ name, manifest, files }) {
+    async install({ name, manifest, files, assets }) {
       // 写。
-      await wrap((await tx('readwrite')).put({ name, manifest, files: { ...files } }))
+      await wrap((await tx('readwrite')).put({ name, manifest, files: { ...files }, assets: { ...(assets || {}) } }))
     },
     // 卸载。
     async remove(name) {

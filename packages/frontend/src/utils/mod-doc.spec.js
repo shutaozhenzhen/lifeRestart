@@ -22,7 +22,7 @@ import { createGameAPI, createHookBus } from 'game-engine/src/mod/gameapi.js'
 import { createParamRegistry } from 'game-engine/src/params/param-registry.js'
 
 // 允许展开到第二层的命名空间（其余键当叶子处理）。
-const NAMESPACES = ['ai', 'param', 'property', 'host']
+const NAMESPACES = ['ai', 'param', 'property', 'host', 'asset']
 
 // 合法的块类型（DocPage.vue 里实现了这几种）。
 const BLOCK_TYPES = ['p', 'sub', 'note', 'list', 'table', 'code', 'link', 'api']

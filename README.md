@@ -9,6 +9,7 @@
 ## 特性
 
 - **Mod 即内核**：manifest 校验、依赖拓扑排序、加载器、`gameAPI` 钩子（可注册参数 / 天赋 / 事件 / 成就 / AI 注入），内置 Data Mod
+- **Mod 能带资源文件**（2026-10）：zip / GitHub / 站点目录 / Node 目录都能带图片 / 音频 / 字体，二进制**逐字节保留**；Mod 用 `gameAPI.asset`（`list/has/bytes/url/text/dispose`）读取，轨迹文本里的 `{{asset:相对路径}}` 会渲染成真 `<img>`（**不用 `v-html`**）
 - **condition 引擎（新语法）**：条件即原生 JS 表达式，构建期用 `convertLegacy()` 把原版旧语法一次性转换为新语法，运行时不再解析旧语法
 - **参数即配置**：`param` 注册表（local / derived / storage / function / special 类型分发 + 函数体编译 + 循环依赖检测）
 - **AI 集成**：AI 客户端（OpenAI 协议）+ 输出校验器 + `createAIMod` 工厂 + 零依赖代理服务（多模型路由 / SSE 流式 / CORS / mock）
@@ -292,12 +293,12 @@ node scripts/collect-apk.js       # 可选：把 APK 收集到 out/liferestart-m
 
 | 位置 | 用例数 | 覆盖 |
 |---|---|---|
-| `packages/game-engine` | 753 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**、**HTTP 文件源**、**Mod 架构 v2 宿主桥：`host.js` + `host-node.js` + `manifest` 的 targets/entry/deterministic**、**依赖排序回归**、**教学样板 `mods/example-mod` 的真跑一局回归**）/ ai / cli（含**无数据源即报错**的回归）/ data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
-| `packages/frontend` | 400 | 纯逻辑（日志/自动播放/storage/mods-state（含**完全移除·恢复**）/ **Mod 运行时与 zip 安装（含系统名二次确认）**/**Mod 导出为 zip（含真实数据整包往返）**/**从 GitHub 拉源码安装（URL 解析 / 限流 / 候选目录 / 取消 / raw 失败走 git-blobs 兜底 / 系统名不重复拉取）**/**Mod 文档的内容+覆盖性守卫（gameAPI 真实键 ↔ 文档条目双向核对）**/**数据加载（含空内容 / 已完全移除）**/**单个 Mod 数据读取与统计**/**重置数据清单**/**模拟驱动器**/**统计展示**）+ **12 个页面 + 4 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
+| `packages/game-engine` | 774 | condition（含**编译缓存**）/ compat / params / 各模块 / mod（含 **zip 读写**、**HTTP 文件源**、**Mod 架构 v2 宿主桥：`host.js` + `host-node.js` + `manifest` 的 targets/entry/deterministic**、**依赖排序回归**、**教学样板 `mods/example-mod` 的真跑一局回归**）/ ai / cli（含**无数据源即报错**的回归）/ data-loader / **sim（策略 + 模拟内核 + 导出器 + CLI）** / util（**种子 RNG 与规范化**） |
+| `packages/frontend` | 432 | 纯逻辑（日志/自动播放/storage/mods-state（含**完全移除·恢复**）/ **Mod 运行时与 zip 安装（含系统名二次确认）**/**Mod 导出为 zip（含真实数据整包往返）**/**从 GitHub 拉源码安装（URL 解析 / 限流 / 候选目录 / 取消 / raw 失败走 git-blobs 兜底 / 系统名不重复拉取）**/**Mod 文档的内容+覆盖性守卫（gameAPI 真实键 ↔ 文档条目双向核对）**/**数据加载（含空内容 / 已完全移除）**/**单个 Mod 数据读取与统计**/**重置数据清单**/**模拟驱动器**/**统计展示**）+ **12 个页面 + 4 个公共组件测试** + **真实数据全流程集成** + **种子复现闭环（真实数据）** |
 | `platforms/electron` | 5 | 桌面版主进程/打包逻辑 |
 | `platforms/web` | 7 | Web 版构建与内嵌代理 |
 | `platforms/mobile` | 67 | 前端产物同步（复用/强制重建/残缺即失败）、APK 收集（**递归查找 + 固定文件名 + 找不到就失败**）、**CI workflow 不变量**（JDK 21 / 平铺上传 / 递归收集 / `--latest`） |
-| **合计** | **1232** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
+| **合计** | **1285** | 由 `node scripts/test-all.mjs` 逐包编排（5 个包全部参与） |
 
 ### 前端测试分层（2026-10 补齐）
 

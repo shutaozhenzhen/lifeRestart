@@ -98,12 +98,13 @@ export const MOD_GUIDE = {
           t: 'table',
           head: ['能做', '不能做'],
           rows: [
-            ['加/改**数据**：天赋、事件、成就、名人、年龄表（后加载覆盖先加载）', '**加界面**：没有页面/组件/路由/面板注册 API'],
+            ['**加/改数据**：天赋、事件、成就、名人、年龄表（后加载覆盖先加载）', '**加界面**：没有页面/组件/路由/面板注册 API（唯一例外：轨迹文本里的 `{{asset:路径}}` 会渲染成图片，见 §10）'],
             ['挂**钩子**：抽卡池、每一年、事件文本渲染，以及**观察任何属性变化**（`propertyChange`，带 `source` 区分来源）', '**异步介入逐岁流程**：`life.next()` 是同步的'],
-            ['**注册新参数**：条件里立刻能用的 `params.XXX`', '**带资源文件**：包只收文本（`.json/.js/.mjs/.txt/.md`）'],
-            ['**运行期改数据**：`addTalent` / `addEvent` / `addAchievement` 等', '**Mod 之间没有正式 API**：只能自定义钩子名互发消息，或共享 `gameAPI.data`'],
-            ['**改游戏属性**：`gameAPI.property.change/set/effect` 直接读写真实属性（2026-10 起）', '**私有仓库 / 任意 URL 安装**：只支持 zip 与 GitHub 公开仓库'],
-            ['**调用 AI**（需用户配 Key）与**本 Mod 的后端**（需 `server.js`）', '**发布到应用商店/被审核**：没有中心化分发，也没有访问控制'],
+            ['**注册新参数**：条件里立刻能用的 `params.XXX`', '**私有仓库 / 任意 URL 安装**：只支持 zip 与 GitHub 公开仓库'],
+            ['**带资源文件**：包里放图片 / 音频 / 字体（`assets/`），用 `gameAPI.asset` 读出来（2026-10 起）', '**Mod 之间没有正式 API**：只能自定义钩子名互发消息，或共享 `gameAPI.data`'],
+            ['**运行期改数据**：`addTalent` / `addEvent` / `addAchievement` 等', '**发布到应用商店/被审核**：没有中心化分发，也没有访问控制'],
+            ['**改游戏属性**：`gameAPI.property.change/set/effect` 直接读写真实属性（2026-10 起）', '**加音频/动画的系统级能力**：资源能读出来，但播放要自己在浏览器里做（没有音频通道 API）'],
+            ['**调用 AI**（需用户配 Key）与**本 Mod 的后端**（需 `server.js`）', '**超 8 MB 的单个资源 / 超 32 MB 的整包**：会被跳过（不是拒绝安装）'],
           ],
         },
         {
@@ -546,10 +547,88 @@ gameAPI.on('onEventRender', (payload) => {
       ],
     },
 
+    // ---------- 资源文件（2026-10 能力补齐 ②） ----------
+    {
+      id: 'assets',
+      title: '10. 带资源文件：图片 / 音频 / 字体',
+      blocks: [
+        {
+          t: 'p',
+          text: 'Mod 的包里可以放**二进制资源**（图片、音频、字体），用 `gameAPI.asset` 读出来。以前这是硬边界 —— zip 安装"只收文本"（`.json/.js/.mjs/.txt/.md`），其它文件被**丢弃**并给一条警告，所以想把图片带进 Mod 只能靠宿主桥去读本地文件。现在二进制**逐字节保留**（zip 装出来的 Mod 也一样）。',
+        },
+        {
+          t: 'code',
+          lang: 'text',
+          label: '包结构（约定把资源放 assets/，子目录会一起同步）',
+          code: `my-mod/
+├── manifest.json
+├── code.js
+├── talents.json          （数据表，文本）
+└── assets/
+    ├── logo.png          （资源，二进制）
+    └── bgm.ogg`,
+        },
+        {
+          t: 'code',
+          lang: 'js',
+          label: 'code.js：读资源 + 在轨迹里显示图片',
+          code: `// ① 先判断 available（宿主可能没有资源能力 → 降级桥，读操作会抛可读错误）
+if (gameAPI.asset.available) {
+  gameAPI.asset.list().then((list) => {
+    gameAPI.log.info('[my-mod] 包内资源：', list.join(', '))   // 只列图片/音频/字体
+  })
+
+  // ② 拿一个可直接用的 URL（浏览器里是 blob:，同路径恒同 URL）
+  //    ⚠️ 这是异步的；逐岁钩子是**同步**的，所以要先把 URL 读好缓存起来。
+  let logoUrl = null
+  gameAPI.asset.url('assets/logo.png').then((u) => { logoUrl = u })
+}
+
+// ③ 轨迹文本里的**受控占位符**：界面会把它渲染成真的 <img>（不用 v-html）。
+//    资源读不到时原样显示这几个字符，不报错、不白屏。
+gameAPI.on('onYearAdvance', (p) => {
+  if (p.age === 30) {
+    p.content.push({ type: 'EVT', description: '你翻出了小时候的照片 {{asset:assets/logo.png}}' })
+  }
+})`,
+        },
+        {
+          t: 'sub',
+          text: '占位符语法的边界（严格，不猜）',
+        },
+        {
+          t: 'table',
+          head: ['写法', '结果'],
+          rows: [
+            ['`{{asset:assets/logo.png}}`', '渲染成 `<img>`（路径必须是包内相对路径）'],
+            ['`{{asset:../x.png}}` / `{{asset:/etc/passwd}}`', '**原样当普通文本**（拒绝路径穿越与绝对路径）'],
+            ['`{{asset:http://…}}` / `{{asset:data:…}}`', '**原样当普通文本**（资源只能来自本 Mod 包内，这是 XSS 边界）'],
+            ['`{{asset:a\\b.png}}` / `{{Asset:a.png}}` / `{{asset:}}`', '**原样当普通文本**（反斜杠、大小写、空路径都不认）'],
+            ['资源不存在 / 本局没有资源能力', '**原样显示占位符**（作者一眼能看出路径写错了；页面不报错）'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '**体积上限没有放宽**：单文件 ≤ 8 MB、累计 ≤ 32 MB、条目 ≤ 512。超了是**跳过那一个文件 + 警告**（安装仍然成功）—— 表现会是"装上了但那张图读不到"，所以打包前自己看一眼大小。大音乐请先压缩。',
+        },
+        {
+          t: 'note',
+          kind: 'tip',
+          text: '**`files.json` 是浏览器侧的权威清单**：跑 `sync-mods`（dev/build 自动跑）时会递归找出资源一起复制并写进清单。如果你自己手写清单**漏列了一个资源**，浏览器侧根本不会去请求它 —— 表现是"本地好好的、线上永远是一串字符"（有回归用例盯着这件事）。',
+        },
+        {
+          t: 'link',
+          to: '/mods/api',
+          text: '`gameAPI.asset` 每条签名的完整说明（list / has / bytes / url / text / dispose）',
+        },
+      ],
+    },
+
     // ---------- 调试 ----------
     {
       id: 'debug',
-      title: '10. 调试与排错',
+      title: '11. 调试与排错',
       blocks: [
         {
           t: 'list',
@@ -577,6 +656,8 @@ gameAPI.on('onEventRender', (payload) => {
             ['成就永远不达成', '`opportunity` 写错（必须精确四选一）'],
             ['运行期加的天赋没效果', '缺 `maxTriggers`（见第 5 节）'],
             ['条件里的新参数总是 undefined', '参数名拼错，或 `gameAPI.param` 在这个宿主里是 null'],
+            ['图片永远是一串 `{{asset:…}}` 字符', '路径写错（用 `gameAPI.asset.list()` 对一遍）/ 资源没进包 / `files.json` 漏列（见第 10 节）'],
+            ['`gameAPI.asset.available` 是 false', '宿主没注入资源能力（旧版本前端 / 该环境下没有 Mod 文件源）'],
           ],
         },
         {
@@ -590,7 +671,7 @@ gameAPI.on('onEventRender', (payload) => {
     // ---------- 打包分发 ----------
     {
       id: 'ship',
-      title: '11. 打包与分发',
+      title: '12. 打包与分发',
       blocks: [
         {
           t: 'table',
@@ -614,7 +695,7 @@ gameAPI.on('onEventRender', (payload) => {
             ['单文件', '≤ 8 MB', '超限条目跳过 + 警告（安装继续）'],
             ['累计解压', '≤ 32 MB', '同上'],
             ['路径安全', '拒绝 `../` / 绝对路径', '越界条目跳过'],
-            ['文件类型', '只收 `.json/.js/.mjs/.txt/.md`', '其它（png/ogg/woff…）丢弃并提示'],
+            ['文件类型', '文本 `.json/.js/.mjs/.txt/.md` + **资源**（`png/jpg/jpeg/gif/webp/svg/bmp/ico/mp3/ogg/wav/m4a/flac/woff/woff2/ttf/otf`）', '资源**逐字节保留**（2026-10 起；以前直接丢弃并提示）'],
             ['`node_modules/`', '—', '忽略并提示改用 `vendor/` + `manifest.modules`'],
             ['系统名', '`lifeRestart-data` / `ai-mod`', '**默认拒绝**被包覆盖；用户二次确认后可放行（挡误操作，不是权限）'],
           ],
@@ -625,7 +706,7 @@ gameAPI.on('onEventRender', (payload) => {
     // ---------- 自检清单 ----------
     {
       id: 'checklist',
-      title: '12. 提交前自检清单',
+      title: '13. 提交前自检清单',
       blocks: [
         {
           t: 'list',
@@ -640,6 +721,7 @@ gameAPI.on('onEventRender', (payload) => {
             '成就的 `opportunity` 精确是 `START`/`TRAJECTORY`/`SUMMARY`/`END` 之一',
             '成就与名人条目自带 `id`；名人的 `talent` 是数组',
             '依赖放 `vendor/` 单文件并在 `manifest.modules` 登记（没带 `node_modules/`）',
+            '带了资源（图片/音频/字体）→ 放在包内相对路径下（约定 `assets/`），并用 `gameAPI.asset` 读；单个 ≤ 8 MB、整包 ≤ 32 MB',
             '在页面里真跑了一局，确认数据与轨迹都对（不是只看"能加载"）',
             '有条件就加一条测试：跑一局断言你的数据/钩子真的生效（例：`example-mod.spec.js`）',
           ],

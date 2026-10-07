@@ -14,7 +14,8 @@
 | `events.json` | 事件表的字段：`event`（正文，注意字段名不叫 description）、`effect`、`include` / `exclude`（能否随机触发）、`branch`（**顺序**匹配的条件分支）、`postEvent`（后续文本）、`NoRandom`（禁止随机触发，只能被 branch 链到） |
 | `achievements.json` | 成就表的字段：`condition` + `opportunity`（在哪个时机判定：START / TRAJECTORY / SUMMARY / END）+ `hide` |
 | `age.json` | 年龄表怎么"加事件"，以及最容易踩的坑：**age 是整键替换，不是追加** |
-| `code.js` | 代码入口：能力探测、`param.define` 注册新参数、4 个钩子、**改真实游戏属性**（`property.change`，20 岁精神 +3）、**观察属性变化**（`propertyChange` + 用 `source` 过滤自己造成的噪声）、运行时增删数据、随包依赖 `require()`、宿主桥降级 |
+| `code.js` | 代码入口：能力探测、`param.define` 注册新参数、4 个钩子、**改真实游戏属性**（`property.change`，20 岁精神 +3）、**观察属性变化**（`propertyChange` + 用 `source` 过滤自己造成的噪声）、运行时增删数据、**读包内资源**（`gameAPI.asset`，见下）、随包依赖 `require()`、宿主桥降级 |
+| `assets/logo.png` | **包内的二进制资源**（1×1 的极小 PNG，70 字节）。它证明 Mod 包能带图片/音频/字体，并且**逐字节**保留（zip 装出来也一样）。资源只能经 `gameAPI.asset` 读 —— 不允许任何"凭路径直接取文件"的旁路 |
 
 ## 两个必须知道的坑（本示例刻意踩了一遍）
 
@@ -40,6 +41,12 @@
 - 1 岁时多出一句「【示例事件】你在路边捡到一枚硬币。」（age 表），并按 `branch` 顺序走后续：
   有钱（`MNY > 8`）→ 许愿池；否则 → 古币被收走
 - 每 10 岁轨迹里多一句「【示例 Mod】你 N 岁了，示例幸运值 N」（`onYearAdvance` + 自定义参数）
+- **30 岁那年轨迹里出现一张图片**：`assets/logo.png`（1×1 白点，别盯着看）。
+  写法是轨迹文本里的受控占位符 —— `【示例 Mod】你翻出了小时候的照片 {{asset:assets/logo.png}}`；
+  界面把它渲染成真的 `<img>`（**不用 v-html**）。资源读不到时（老版本/没有资源能力）
+  这串字符**原样显示**，不会报错也不会白屏
+- 日志里能看到 `[example-mod] 包内资源：assets/logo.png` 与解析出来的 URL
+  （浏览器是 `blob:…`，Node 是绝对文件路径）
 - 带「示例事件」字样的文本会被加上 ✨ 前缀（`onEventRender` 是唯一返回值生效的钩子）
 - 成就「示例·活到十岁」会在总结/结束时判定
 - 日志里能看到能力探测与降级信息（没有后端时那段代码被安全跳过）

@@ -253,6 +253,82 @@ describe('GameView', () => {
     expect(wrapper.find('.jump').exists()).toBe(false)
   })
 
+  test('轨迹里的 `{{asset:...}}` 渲染成 <img>；资源缺失时降级成纯文本且不报错', async () => {
+    // 准备。
+    const store = await readyStore()
+    // 挂载。
+    const { wrapper } = mountView(GameView)
+    await flushPromises()
+    // 造一个"解析得出 URL"的 Mod 资源桥并注册（**不碰真实网络/文件系统**）。
+    const { createAssetRegistry } = await import('../utils/mod-runtime.js')
+    const { createAssetBridge } = await import('game-engine/src/mod/asset-bridge.js')
+    // 假的 URL 原语（happy-dom 有 URL.createObjectURL，但这里要能断言"缓存 + 只造一个"）。
+    const created = []
+    const urlApi = {
+      Blob: class { constructor(parts, opts) { this.type = opts?.type } },
+      createObjectURL: vi.fn(() => { const u = `blob:test/${created.length + 1}`; created.push(u); return u }),
+      revokeObjectURL: vi.fn(),
+    }
+    // 桥（清单 + 字节都来自注入的替身）。
+    const bridge = createAssetBridge({
+      modName: 'demo',
+      listFiles: async () => ['assets/logo.png'],
+      readBytes: async () => new Uint8Array([137, 80, 78, 71]),
+      urlApi,
+    })
+    // 注册表。
+    const registry = createAssetRegistry()
+    registry.register('demo', bridge)
+    // 写进 store（生产里由 store.init 里的 executeModCodes 完成）。
+    store.assetRegistry = registry
+    store.assetUrlCache = new Map()
+    // 两条轨迹：一条资源存在、一条**路径不存在**（降级）。
+    store.history.push({ age: 30, isEnd: false, items: [{ type: 'EVT', description: '翻出照片 {{asset:assets/logo.png}} 好看' }] })
+    store.history.push({ age: 31, isEnd: false, items: [{ type: 'EVT', description: '缺图 {{asset:assets/missing.png}} 尾巴' }] })
+    // 触发解析（生产里由 store.next() 在推进一年后调用）。
+    store.trackAssets()
+    await flushPromises()
+    await nextTick()
+    // **有资源的那条渲染成真 <img>**。
+    const img = wrapper.find('img.asset-img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe('blob:test/1')
+    // alt/title 是路径（排障时看得到到底是哪个资源）。
+    expect(img.attributes('alt')).toBe('assets/logo.png')
+    // 同一个路径只造一个 URL（**缓存**：不缓存的话同一张图会造无数个 blob）。
+    expect(urlApi.createObjectURL).toHaveBeenCalledTimes(1)
+    // **缺失的那条降级成纯文本**：占位符原样可见，且没有第二个 img。
+    const entries = wrapper.findAll('.entry .text')
+    expect(entries.length).toBe(2)
+    expect(entries[1].text()).toContain('{{asset:assets/missing.png}}')
+    expect(wrapper.findAll('img.asset-img').length).toBe(1)
+    // 两侧的普通文本都没丢。
+    expect(entries[0].text()).toContain('翻出照片')
+    expect(entries[0].text()).toContain('好看')
+    expect(entries[1].text()).toContain('尾巴')
+  })
+
+  test('没有资源能力时（assetRegistry 为 null）占位符原样当文本，页面不报错', async () => {
+    // 准备（默认 init 不传资源能力 → assetRegistry 为 null）。
+    const store = await readyStore()
+    // 挂载。
+    const { wrapper } = mountView(GameView)
+    await flushPromises()
+    // 一条带占位符的轨迹。
+    store.history.push({ age: 30, isEnd: false, items: [{ type: 'EVT', description: '照片 {{asset:assets/logo.png}}' }] })
+    // 解析（没有注册表 → 直接返回，不做任何事）。
+    store.trackAssets()
+    await flushPromises()
+    await nextTick()
+    // 没有 img。
+    expect(wrapper.find('img.asset-img').exists()).toBe(false)
+    // 占位符原样可见（不是"（图片缺失）"这种替换 —— 保留路径才好排障）。
+    expect(wrapper.find('.entry .text').text()).toContain('{{asset:assets/logo.png}}')
+    // 也没有解析出任何 URL。
+    expect(store.assetUrlTick).toBe(0)
+    expect(store.assetUrl('assets/logo.png')).toBeNull()
+  })
+
   test('状态栏显示本局随机种子，点击可复制（用于复现）', async () => {
     // 准备。
     const store = await readyStore()

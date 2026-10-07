@@ -35,6 +35,68 @@ export const DATA_FILES = ['age.json', 'talents.json', 'events.json', 'achieveme
 // 数据已由 public/data 提供的 Mod（只同步 manifest/code，避免 4MB 重复）。
 export const DATA_FROM_PUBLIC = ['lifeRestart-data']
 
+// #ASSET_EXT
+// 视为**资源**的后缀（图片 / 音频 / 字体）。
+//
+// ⚠️ 与引擎的 `mod/zip.js` 的 `ASSET_EXT` **必须一致**（那边是"zip 收哪些二进制"、
+// 这里是"哪些二进制要同步到站点"）。多列一个不会错（只是白复制一份），
+// **少列一个就是静默少读**：`files.json` 是浏览器的权威清单，
+// 漏列的文件前端根本不会去请求（有既有守卫：mod-detail.spec.js 的"清单与实际文件一致"）。
+//
+// 这里刻意**不 import 引擎模块**：`scripts/sync-mods.mjs` 在 vite 配置里被 Node 直接
+// 加载（`node scripts/sync-mods.mjs`），保持零依赖最稳。
+export const ASSET_EXT = [
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico',
+  '.mp3', '.ogg', '.wav', '.m4a', '.flac',
+  '.woff', '.woff2', '.ttf', '.otf',
+]
+
+// #listFilesRecursive
+// 递归列出目录下的全部文件（相对路径，`/` 分隔；跳过 node_modules）。
+//
+// @param {string} dir - 目录
+// @param {string} [prefix] - 前缀（递归用）
+// @returns {string[]} 相对路径
+export function listFilesRecursive(dir, prefix = '') {
+  // 结果。
+  const out = []
+  // 读不到就当空。
+  let entries = []
+  // 尝试。
+  try {
+    // 列目录。
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    // 空。
+    return out
+  }
+  // 逐项。
+  for (const entry of entries) {
+    // 依赖目录（不该进 Mod 包）。
+    if (entry.name === 'node_modules') continue
+    // 相对路径（统一 `/`，与 files.json / zip 内的键一致）。
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+    // 子目录 → 递归。
+    if (entry.isDirectory()) out.push(...listFilesRecursive(join(dir, entry.name), rel))
+    // 文件 → 记录。
+    else if (entry.isFile()) out.push(rel)
+  }
+  // 返回。
+  return out
+}
+
+// #isAssetPath
+// 是不是资源文件（按后缀）。
+//
+// @param {string} rel - 相对路径
+// @returns {boolean} 是 → true
+export function isAssetPath(rel) {
+  // 后缀（小写）。
+  const lower = String(rel).toLowerCase()
+  // 命中任一资源后缀。
+  return ASSET_EXT.some((ext) => lower.endsWith(ext))
+}
+
 // #buildSyncPlan
 // 扫描 mods 目录，算出"要同步哪些文件"（纯计算，便于单测）。
 //
@@ -103,6 +165,22 @@ export function buildSyncPlan({ modsDir }) {
     } catch (e) {
       // manifest 读不了（上面已按"缺 manifest"处理过），这里只记模块解析失败。
       errors.push(`Mod ${name} 的 modules 解析失败：${e.message}`)
+    }
+    // 资源文件（图片/音频/字体）—— **递归**找出并一起同步（2026-10 能力补齐 ②）。
+    //
+    // 为什么必须在这里列出来：`files.json` 是浏览器侧的**权威清单**
+    // （清单即权威：引擎只请求清单里有的文件）。漏掉一个 png，表现是
+    // "`{{asset:图标.png}}` 永远是文字而没有任何报错" —— 正是最难查的一类静默失败。
+    //
+    // `copyFileSync` 本来就是按字节复制的（不像 readFileSync+writeFileSync 那样
+    // 要注意编码），所以二进制不会被破坏。
+    for (const rel of listFilesRecursive(dir)) {
+      // 非资源后缀不管（文本走上面的白名单，避免把包里的无关文件也复制出去）。
+      if (!isAssetPath(rel)) continue
+      // 已列过（理论上不会，保险去重）。
+      if (files.includes(rel)) continue
+      // 带上。
+      files.push(rel)
     }
     // 记录。
     index.push(name)

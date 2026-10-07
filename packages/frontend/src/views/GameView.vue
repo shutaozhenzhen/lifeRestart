@@ -12,6 +12,8 @@ import { useGameStore } from '../stores/game.js'
 import { createAutoPlayer, PLAY_SPEEDS, DEFAULT_SPEED, speedDelay } from '../utils/auto-play.js'
 // 复制文本（剪贴板 API + 回退，与日志导出共用）。
 import { copyText } from '../utils/log-export.js'
+// 轨迹文本里的受控资源占位符 `{{asset:相对路径}}`（纯函数 + 同步取 URL）。
+import { resolveAssetText, splitAssetText } from '../utils/asset-text.js'
 
 // 路由。
 const router = useRouter()
@@ -185,6 +187,19 @@ function textOf(c) {
   return c.description || '（无描述）'
 }
 
+// #assetLike
+// 一条轨迹条目里有没有资源占位符（决定要不要拆成 `<img>` + 文本混排）。
+//
+// 拆开单独判断的原因：绝大多数条目是纯文本，走原来那条 `{{ textOf(c) }}` 路径
+// 既简单又不改变 DOM 结构（既有页面测试断言的是文本节点）。
+//
+// @param {object} c - 条目
+// @returns {boolean} 有 → true
+function assetLike(c) {
+  // 主文本或副文本里出现合法占位符。
+  return splitAssetText(textOf(c)).some((p) => p.type === 'asset')
+}
+
 // #subOf
 // 条目副文本（天赋描述 / 事件后续）。
 //
@@ -197,6 +212,54 @@ function subOf(c) {
   if (c.type === 'EVT') return c.postEvent ? `后续：${c.postEvent}` : ''
   // 其它无副文本。
   return ''
+}
+
+// 资源 URL 解析完成度（store 每次解析出一个 URL 就 +1；这里只用于**建立依赖**，
+// 否则 Map 里后写进去的 URL 不会让模板重渲染）。
+const assetUrlTick = computed(() => store.assetUrlTick)
+
+// #partsOf
+// 把一段轨迹文本切成"可渲染片段"（文本片 + 资源片）。
+//
+// 资源片里的 `url` 来自 `store.assetUrl(path)`（**同步**读缓存；字节的读取发生在
+// `store.trackAssets()` 里，推进一年后异步做一次）：
+//   · 拿到 URL → 渲染真 `<img>`；
+//   · 没拿到（解析中 / 路径不存在 / 本局没有资源能力）→ **降级成纯文本**，
+//     把 `{{asset:路径}}` 原样显示（作者一眼能看出自己写的路径有没有问题）。
+//
+// ⚠️ XSS 边界：这里**只用真元素**渲染（`<img>` + 插值文本），**绝不用 `v-html`**。
+//    文本里的 `<script>` 因此永远只是几个字符；`<img src>` 的取值也只能来自
+//    `asset.url()`（本 Mod 包内的 blob URL），不会出现 `javascript:` / 外域 URL。
+//
+// @param {string} text - 原文
+// @returns {Array<object>} 片段
+function partsOf(text) {
+  // 解析（url 为 null 的片段由模板降级成文本）。
+  return resolveAssetText(text, {
+    // 同步取 URL（`assetUrlTick` 是依赖：Map 不是响应式的，靠它触发重算）。
+    getUrl: (path) => {
+      // 读 tick（建立响应式依赖）。
+      void assetUrlTick.value
+      // 取。
+      return store.assetUrl(path)
+    },
+  })
+}
+
+// #partText
+// 一个片段的**纯文本形态**（资源缺失时的降级显示）。
+//
+// 为什么放在 JS 里而不是模板里拼字符串：模板里的 `${...}` 拼接会写成
+// `{{asset:${part.path}}}` —— Vue 会把它解析成"插值 `asset:${part.path}`"，
+// 得到 `{{asset:...}}` 外层花括号反而被吃掉。放这里就没有歧义。
+//
+// @param {object} part - resolveAssetText 的片段
+// @returns {string} 文本
+function partText(part) {
+  // 文本片段原样。
+  if (part.type !== 'asset') return part.text || ''
+  // 资源片段：原样显示占位符（含花括号）。
+  return `{{asset:${part.path}}}`
 }
 
 // 挂载：未开局则开局（返回/刷新后不重复），随后自动开始播放。
@@ -300,7 +363,24 @@ function summary() {
         >
           <span class="kind">{{ kindLabel(c) }}</span>
           <span class="body">
-            <span class="text">{{ textOf(c) }}</span>
+            <span class="text">
+              <!-- 纯文本条目：与以前完全一样（绝大多数条目走这条路径）。
+                   含 `{{asset:路径}}` 的条目：拆成文本 + 真 <img>（**不用 v-html**），
+                   资源拿不到 URL 时把占位符原样当文本显示（降级，不报错）。 -->
+              <template v-if="assetLike(c)">
+                <template v-for="(part, pi) in partsOf(textOf(c))" :key="pi">
+                  <img
+                    v-if="part.type === 'asset' && part.url"
+                    class="asset-img"
+                    :src="part.url"
+                    :alt="part.path"
+                    :title="part.path"
+                  >
+                  <template v-else>{{ partText(part) }}</template>
+                </template>
+              </template>
+              <template v-else>{{ textOf(c) }}</template>
+            </span>
             <span v-if="subOf(c)" class="sub">{{ subOf(c) }}</span>
           </span>
         </div>
@@ -511,6 +591,16 @@ function summary() {
   font-size: 11px;
   color: #8f9bb3;
   line-height: 1.4;
+}
+/* 轨迹里内联的 Mod 资源图片（`{{asset:路径}}` 渲染出来的真 <img>）。
+   限高 + 圆角：Mod 图片尺寸不可控，别把整条轨迹顶开。 */
+.asset-img {
+  display: block;
+  max-width: 100%;
+  max-height: 180px;
+  margin: 4px 0;
+  border-radius: 6px;
+  border: 1px solid #22304f;
 }
 .empty {
   color: #666;

@@ -55,6 +55,34 @@ describe('mod-store - 本地已安装 Mod', () => {
     await store.remove('x')
     expect(await store.list()).toEqual([])
   })
+
+  test('二进制资源随记录保存并按路径读回（2026-10 能力补齐 ②）', async () => {
+    // 存储。
+    const store = createMemoryModStore()
+    // 一段含高位字节的"图片"。
+    const png = new Uint8Array([137, 80, 78, 71, 0, 255, 128])
+    // 安装（文本 + 资源并列）。
+    await store.install({
+      name: 'with-assets',
+      manifest: { name: 'with-assets', version: '1' },
+      files: { 'manifest.json': '{}' },
+      assets: { 'assets/logo.png': png, 'assets/bgm.ogg': new Uint8Array([1, 2]) },
+    })
+    // 读回**逐字节一致**（不是 Base64 字符串，也不是被 UTF-8 破坏的文本）。
+    const bytes = await store.readBytes('with-assets', 'assets/logo.png')
+    expect(bytes).toBeInstanceOf(Uint8Array)
+    expect([...bytes]).toEqual([...png])
+    // 不存在的资源 → null（不抛；由 asset 桥转成可读错误）。
+    expect(await store.readBytes('with-assets', 'assets/nope.png')).toBeNull()
+    // 清单 = 文本 + 资源的**并集**（漏一个 = 浏览器侧静默少读）。
+    expect((await store.listFiles('with-assets')).sort()).toEqual(['assets/bgm.ogg', 'assets/logo.png', 'manifest.json'])
+    // 文本读取不受影响。
+    expect(await store.readText('with-assets', 'manifest.json')).toBe('{}')
+    // 老形态调用（不给 assets）也不炸。
+    await store.install({ name: 'no-assets', manifest: { name: 'no-assets', version: '1' }, files: { 'manifest.json': '{}' } })
+    expect(await store.readBytes('no-assets', 'assets/x.png')).toBeNull()
+    expect(await store.listFiles('no-assets')).toEqual(['manifest.json'])
+  })
 })
 
 describe('组合源 - 本地优先', () => {
@@ -93,6 +121,29 @@ describe('installModFromZip - 解析与安全', () => {
     expect(r.files).toBe(2)
     // 已进本地存储。
     expect(await store.readText('sta-mod', 'code.js')).toContain('param.define')
+  })
+
+  test('带资源的 zip → 资源逐字节落到本地存储（2026-10 能力补齐 ②）', async () => {
+    // 存储。
+    const store = createMemoryModStore()
+    // 一段"像 PNG"的字节（含 0 与 255：UTF-8 解码会毁掉它们）。
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 255, 128])
+    // 打包（文本 + 资源）。
+    const zip = createModZip({ files: { 'manifest.json': MANIFEST, 'code.js': CODE }, assets: { 'assets/logo.png': png } })
+    // 安装。
+    const r = await installModFromZip({ bytes: zip, store })
+    // 成功。
+    expect(r.ok).toBe(true)
+    // 文本与资源分开计数（界面提示用）。
+    expect(r.files).toBe(2)
+    expect(r.assets).toBe(1)
+    // **不该把资源报成"被丢弃的二进制"**（那会让人以为丢了东西）。
+    expect(r.errors).toEqual([])
+    // 逐字节读回。
+    const bytes = await store.readBytes('sta-mod', 'assets/logo.png')
+    expect([...bytes]).toEqual([...png])
+    // 清单里也有它（浏览器才会去请求）。
+    expect(await store.listFiles('sta-mod')).toContain('assets/logo.png')
   })
 
   test('系统 Mod 名不能被 zip 覆盖（默认拒绝，且带 system 标记供界面确认）', async () => {

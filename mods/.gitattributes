@@ -1,0 +1,28 @@
+# ⚠️ 本文件存在的唯一理由：**别让 git 改坏 Mod 包里的二进制资源**。
+#
+# 本仓库所在的机器（Windows）上常见 `core.autocrlf=true`。它会把文本文件的行尾
+# CRLF ⇄ LF 来回转换 —— 而 `.png` / `.ogg` / `.woff2` **不是文本**：PNG 里就有
+# `0d 0a` 这样的字节序列（IHDR 长度后的 CRLF），一旦被"规范化"成 `0a`，
+# 文件就永久损坏（CRC 对不上 → 浏览器显示破图），而且 `git diff` 看不出来。
+#
+# 所以：Mod 目录下的一切资源后缀都必须标成 `binary`（= `-text -diff`，
+# 既不转换行尾，也不做文本 diff）。
+#
+# 判据：如果哪天有人把新后缀的资源放进 Mod 包却发现"线上图片是破的、本地是好的"，
+# 十有八九就是漏了这里的一行。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.bmp binary
+*.ico binary
+*.mp3 binary
+*.ogg binary
+*.wav binary
+*.m4a binary
+*.flac binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

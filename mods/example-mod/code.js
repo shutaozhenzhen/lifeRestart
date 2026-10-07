@@ -6,7 +6,7 @@
 //     · 不要写 export / import（直接语法错误）；
 //     · 不能用顶层 await（不是 async 函数）；
 //     · 作用域里只有两样东西：`gameAPI` 与 `require`（require 只认 manifest.modules 声明过的模块）；
-//     · 想看日志就用 console.log —— gameAPI **没有** log 方法。
+//     · 想看日志就用 gameAPI.log（**2026-10 起可用**；console.log 在打包环境不进日志面板）。
 //
 // 完整字段与 API 清单见页面里的「Mod 制作文档」/「gameAPI 参考」（/mods/docs、/mods/api）。
 
@@ -14,9 +14,12 @@
 // gameAPI.param 只有在"宿主已经建好 Life"时才存在（浏览器侧有；别假设一定有）。
 // gameAPI.host 在纯静态站里是**空桥**：available 为空、has() 恒 false、call() 抛错。
 // gameAPI.ai 只在用户配了 API Key 时 available 才为 true。
-console.log(
+// gameAPI.property 只有在跑到一局游戏里时才 available（见第 6 节）。
+gameAPI.log.info(
   '[example-mod] 能力探测 →',
   'param:', gameAPI.param ? '可用' : '不可用',
+  '| property:', gameAPI.property && gameAPI.property.available ? '可用' : '不可用（降级桥）',
+  '| asset:', gameAPI.asset && gameAPI.asset.available ? '可用' : '不可用（降级桥）',
   '| host:', gameAPI.host && gameAPI.host.available && gameAPI.host.available.length ? gameAPI.host.available.join(',') : '（无后端，静态站正常现象）',
   '| ai:', gameAPI.ai && gameAPI.ai.available ? '已配置' : '未配置',
 )
@@ -52,6 +55,11 @@ gameAPI.on('onYearAdvance', function (payload) {
     var luck = gameAPI.param ? gameAPI.param.get('LUCK_EXAMPLE') : '-'
     payload.content.push({ type: 'EVT', description: '【示例 Mod】你 ' + payload.age + ' 岁了，示例幸运值 ' + luck })
   }
+  // 30 岁那年，往轨迹里塞一张**包内的图**（2026-10 能力补齐 ②）。
+  // 界面识别这个受控占位符并渲染成真 `<img>`（资源读不到就原样显示这几个字符，不报错）。
+  if (payload.age === 30) {
+    payload.content.push({ type: 'EVT', description: '【示例 Mod】你翻出了小时候的照片 {{asset:assets/logo.png}}' })
+  }
   // **改真实游戏属性**（2026-10 起可用）：20 岁那年精神 +3。
   // ⚠️ 为什么放在逐岁钩子里而不是 code.js 顶层：code.js 跑在 `life.start()`（开局分配属性）
   //    **之前**，那时改属性会被随后的开局分配覆盖掉。要改属性就在游戏过程中的时机改。
@@ -76,7 +84,7 @@ gameAPI.on('onEventRender', function (payload) {
 // 否则"我自己改的"会把通知刷屏（年龄自增那种一年一条的噪声也是这么来的）。
 gameAPI.on('propertyChange', function (payload) {
   if (payload.source === 'engine') {
-    console.log('[example-mod] 引擎改了属性：', payload.prop, payload.value)
+    gameAPI.log.debug('[example-mod] 引擎改了属性：', payload.prop, payload.value)
   }
 })
 
@@ -94,7 +102,7 @@ gameAPI.addAchievement({ id: '90002', name: '示例·Mod 作者', description: '
 
 // ── 4. 读数据（只读视图）──────────────────────────────────────────
 // gameAPI.data 就是合并后的数据表；按 id 取单条用 getTalent/getEvent/getAchievement。
-console.log('[example-mod] 当前天赋条数:', Object.keys(gameAPI.data.talents || {}).length)
+gameAPI.log.info('[example-mod] 当前天赋条数:', Object.keys(gameAPI.data.talents || {}).length)
 
 // ── 5. 用随包分发的依赖（需要 manifest.modules 声明过才 require 得到）──
 // 示例：manifest 里写 "modules": { "fflate": "vendor/fflate.mjs" }，然后：
@@ -108,11 +116,40 @@ console.log('[example-mod] 当前天赋条数:', Object.keys(gameAPI.data.talent
 //      要改属性就找游戏过程中的时机（逐岁钩子 / 事件触发后的某一岁）；
 //   ③ 观察变化用 `propertyChange`（见上），并用 `payload.source` 过滤掉自己造成的。
 
-// ── 7. 与本 Mod 的后端入口通信（本示例没有 server.js → 走降级分支）──
-if (gameAPI.host && gameAPI.host.has && gameAPI.host.has('example-mod')) {
-  gameAPI.host.call('example-mod', 'hello', { from: 'code.js' }).then(function (r) {
-    console.log('[example-mod] 后端返回', r)
+// ── 7. 用包里的**资源文件**（图片/音频/字体；2026-10 能力补齐 ②）────
+// 本 Mod 的包里就带了一张图：`assets/logo.png`（1×1 的极小 PNG，70 字节）。
+//
+// 三条要点（照抄这段就能用）：
+//   ① **先问 available 再用**：宿主没注入资源能力时 `gameAPI.asset` 是**降级桥**
+//      （`available: false`，读操作抛可读错误）—— 无条件调用会炸。
+//   ② `url(path)` 在浏览器里给 `blob:` URL（可直接当 `<img src>`），**同路径恒同 URL**；
+//      Node 里没有 `URL.createObjectURL`，降级成**绝对文件路径**。
+//   ③ 轨迹文本里写 `{{asset:assets/logo.png}}`，界面会把它渲染成真的 `<img>`
+//      （走的是同一条 `asset.url()` 通道；**绝不用 v-html**）。资源缺失时原样显示占位符。
+if (gameAPI.asset && gameAPI.asset.available) {
+  // 列出包里的资源（只列图片/音频/字体；`manifest.json`/`code.js` 不在其中）。
+  gameAPI.asset.list().then(function (list) {
+    // 日志（debug 级：资源清单在排障时有用，但不该刷屏）。
+    gameAPI.log.debug('[example-mod] 包内资源：', list.join(', ') || '（无）')
+    // 取一个可直接用的 URL（blob URL / 绝对路径）并把结果说清楚。
+    return gameAPI.asset.url('assets/logo.png')
+  }).then(function (url) {
+    // 有就报出来（`url` 是 undefined 时说明这个包没带那张图）。
+    gameAPI.log.info('[example-mod] 资源 assets/logo.png →', url || '（读不到，界面会降级成文本）')
+  }).catch(function (e) {
+    // 读资源失败不致命（界面照样能玩），但必须**出声**。
+    gameAPI.log.warn('[example-mod] 读取资源失败：', e.message)
   })
 } else {
-  console.log('[example-mod] 没有可用的后端：这段代码在静态站上被安全跳过')
+  // 降级分支：这句日志让"为什么图没出来"变得可查。
+  gameAPI.log.info('[example-mod] 当前宿主没有资源能力（gameAPI.asset.available === false）：资源相关的代码被安全跳过')
+}
+
+// ── 8. 与本 Mod 的后端入口通信（本示例没有 server.js → 走降级分支）──
+if (gameAPI.host && gameAPI.host.has && gameAPI.host.has('example-mod')) {
+  gameAPI.host.call('example-mod', 'hello', { from: 'code.js' }).then(function (r) {
+    gameAPI.log.debug('[example-mod] 后端返回', r)
+  })
+} else {
+  gameAPI.log.info('[example-mod] 没有可用的后端：这段代码在静态站上被安全跳过')
 }

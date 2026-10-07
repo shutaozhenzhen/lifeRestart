@@ -27,7 +27,11 @@ import { formatLogLine, countByLevel, collectLogMeta, buildLogReport } from '../
 // Mod 启停状态（报告里带上，便于复现）。
 import { loadModsState } from '../utils/mods-state.js'
 // Mod 代码执行（网页版运行时；与 CLI 共用引擎内核）。
-import { executeModCodes } from '../utils/mod-runtime.js'
+import { executeModCodes, createAssetRegistry, createSourceAssetReader } from '../utils/mod-runtime.js'
+// 钩子总线（`store.init` 没被传总线时**自己建一条**，见下面 init 里的说明）。
+import { createHookBus } from 'game-engine/src/mod/gameapi.js'
+// 轨迹文本里的受控资源占位符（`{{asset:相对路径}}`；纯函数 + 异步解析）。
+import { collectAssetPaths } from '../utils/asset-text.js'
 
 // 日志缓冲上限：1000 条在 trace 级下也够覆盖一次完整复现（每条约 100 字节）。
 const LOG_BUFFER_LIMIT = 1000
@@ -104,6 +108,23 @@ export const useGameStore = defineStore('game', {
     rawData: null,
     // 成就达成提示队列（引擎 emit('achievement') 推入；由全局 AchievementToast 渲染）。
     achievementToasts: [],
+    // Mod 资源注册表（2026-10 能力补齐 ②）：每局由 executeModCodes 建好，
+    // 界面用它把 `{{asset:路径}}` 解析成可显示的 URL（blob URL）。
+    // null = 这局没有资源能力（降级：占位符按纯文本显示）。
+    assetRegistry: null,
+    // 资源 URL 缓存（路径 → URL / Promise；**markRaw 的 Map**，见 init 里的说明）。
+    // 只缓存"本局确认能拿到 URL"的路径 —— 缺失的资源不缓存，等 Mod 修好后立刻可见。
+    assetUrlCache: null,
+    // 资源 URL 解析完成度计数器（Map 不是响应式的，模板靠这个数字触发重渲染）。
+    assetUrlTick: 0,
+    // 本局的 Mod 装载输入（供 `restartWithSeed` 重建：数据不变，但代码/钩子/资源要重来一遍）。
+    modCodes: null,
+    // 本局的钩子总线（同上）。
+    modHooks: null,
+    // 本局的各 Mod require（同上）。
+    modRequires: null,
+    // 本局的 Mod 文件源（界面侧按路径读资源字节；markRaw）。
+    assetSource: null,
   }),
 
   // 计算属性。
@@ -148,6 +169,8 @@ export const useGameStore = defineStore('game', {
     errorCount: (state) => countByLevel(state.logBuffer).error,
     // 警告条数（同上）。
     warnCount: (state) => countByLevel(state.logBuffer).warn,
+    // 本局有没有可用的 Mod 资源能力（界面据此决定占位符能不能渲染成 <img>）。
+    assetsAvailable: (state) => Boolean(state.assetRegistry?.available),
   },
 
   // 动作。
@@ -160,7 +183,10 @@ export const useGameStore = defineStore('game', {
     // @param {Array<{name: string, code: string}>} [options.modCodes] - Mod 代码（Life 建好后执行）
     // @param {Record<string, Function>} [options.modRequires] - 每个 Mod 的 require
     //   （运行时模块：依赖随包分发，阶段一已由 mod-runtime 异步加载好）
-    async init(data, { seed, hooks, modCodes, modRequires } = {}) {
+    // @param {object} [options.assetReader] - Mod 资源读取能力（阶段一产出的惰性读取器）
+    // @param {object} [options.assetSource] - Mod 文件源（界面侧按路径读资源字节用）
+    // @param {object} [options.assetUrlApi] - 注入的 URL 原语（缺省全局；测试用）
+    async init(data, { seed, hooks, modCodes, modRequires, assetReader, assetSource, assetUrlApi } = {}) {
       // 重置单局状态：从主页重新开始时，不能残留上一局的进度标记与选择。
       this.started = false
       this.talentsConfirmed = false
@@ -194,12 +220,20 @@ export const useGameStore = defineStore('game', {
       // 之后所有随机（天赋抽卡、事件抽取、RDM 效果）都走 createRng(seed)，
       // 因此"同种子 + 同操作顺序 = 同一局人生"。
       this.seed = normalizeSeed(seed) ?? createSeed()
+      // ⚠️ **钩子总线必须在这里收敛成一条**（2026-10 修的真实缺陷）：
+      //   以前直接把入参 `hooks` 往下传。生产路径（HomeView → loadModBundle）总会给，
+      //   但**只要有一处调用方不传**（测试、未来的其它入口），就会出这种事：
+      //     · `createGameAPI` 在 hooks 为 undefined 时**自建一条总线** → Mod 的钩子挂在 A 上；
+      //     · Life 在 hooks 为 undefined 时**另建一条总线** → `life.next()` 在 B 上 emitSync；
+      //   结果是 Mod 代码执行"成功"、`hooks.list()` 里也有它，**但钩子永远不会被触发**
+      //   （完全静默）。收敛成一条之后，"谁注册的、谁触发"必然对得上。
+      const hookBus = hooks || createHookBus()
       // 创建 Life 实例：经 create-life 统一装配（数据 + 日志 + **持久化 storage** + 种子随机源 + 事件总线）。
       // emit：引擎在成就达成时广播 'achievement'（带成就对象），这里转成界面提示。
       // markRaw 防止被 reactive 代理（Life 含 # 私有字段，被代理会崩）。
       // 生命周期钩子 onBeforeLife（Phase A 语义：这个点**可以异步**，Mod 能在这里等后端 / 预取数据）。
       // 位置在建 Life 之前 —— 钩子总线此时已由 loadModBundle 建好并传入。
-      if (hooks && typeof hooks.emit === 'function') await hooks.emit('onBeforeLife', { data }, logger)
+      await hookBus.emit('onBeforeLife', { data }, logger)
       this.life = markRaw(createAppLife({
         // 数据。
         data,
@@ -210,7 +244,7 @@ export const useGameStore = defineStore('game', {
         // 事件总线。
         emit: (tag, payload) => this.handleEngineEvent(tag, payload),
         // Mod 钩子总线（Mod 里 gameAPI.on 注册的钩子由它触发）。
-        hooks,
+        hooks: hookBus,
       }))
       // 保留原始数据引用（markRaw 保护，避免 Vue 深度代理 3.5MB 数据），供"同种子复现"重开一局。
       this.rawData = markRaw(data)
@@ -221,19 +255,68 @@ export const useGameStore = defineStore('game', {
       // 执行 Mod 代码：**必须在 Life 建好之后**——Mod 可注册新属性/读写参数/注册钩子，
       // 而 gameAPI.param 需要 Life 的参数注册表（浏览器侧就是靠这一步把 Mod 支持接上的）。
       if (Array.isArray(modCodes) && modCodes.length > 0) {
+        // 资源注册表（2026-10 能力补齐 ②）：**换局时必须先释放上一局的 blob URL**，
+        // 否则换几十局之后内存里堆着一堆没人引用的图片（每个 blob URL 都把字节钉住）。
+        if (this.assetRegistry?.dispose) this.assetRegistry.dispose()
+        // 资源能力：优先用调用方给的读取器，否则用文件源现造一个（`restartWithSeed` 走这条）。
+        const reader = assetReader || (assetSource ? createSourceAssetReader(assetSource) : null)
+        // 本局的资源注册表（界面解析 `{{asset:...}}` 与 Mod 代码操作**同一份**桥）。
+        const assetRegistry = createAssetRegistry({ log: logger })
         // 执行（异常隔离：单个 Mod 失败不影响游戏）。
-        const { executed, errors } = executeModCodes({ codes: modCodes, hooks, life: this.life, data, log: logger, requires: modRequires })
+        const { executed, errors } = executeModCodes({
+          // 代码。
+          codes: modCodes,
+          // 钩子总线（与 Life **同一条**：见上面 hookBus 的说明）。
+          hooks: hookBus,
+          // Life（提供 params / property / storage）。
+          life: this.life,
+          // 数据。
+          data,
+          // 日志。
+          log: logger,
+          // 运行时模块。
+          requires: modRequires,
+          // 资源读取能力（惰性；没有就是降级桥）。
+          assetReader: reader,
+          // 注册表（与界面共用）。
+          assetRegistry,
+          // URL 原语（缺省全局；测试注入假实现才能测到 blob URL 的缓存与释放）。
+          assetUrlApi: assetUrlApi || null,
+        })
+        // 记下注册表 + 清空 URL 缓存（旧缓存指向上一局的 blob）。
+        // ⚠️ Map 必须 markRaw：Vue 会深度代理 Map 的**值**，而我们往里面存的是 Promise
+        //    （代理 Promise 会让 `await` 拿到一个被包过的 thenable，行为不可预期）。
+        this.assetRegistry = markRaw(assetRegistry)
+        this.assetUrlCache = markRaw(new Map())
         // 记运行信息（日志报告里能看到"这局跑了哪些 Mod"）。
         this.modsRuntime = { loaded: executed, errors }
         // 日志。
         this.pushLog('info', `[UI][mods] 已执行 Mod 代码：${executed.join(', ') || '（无）'}${errors.length ? `（失败 ${errors.length} 个）` : ''}`)
         // 失败逐条记（便于按报告排障）。
         errors.forEach((e) => this.pushLog('warn', `[UI][mods] ${e}`))
+        // 资源能力可用时提示一句（Mod 作者排障时能立刻确认"我的包里有资源能力"）。
+        if (assetRegistry.available) {
+          // 列出各 Mod 的资源数（**惰性读清单**，量级很小）。
+          try {
+            // 读清单。
+            const list = await assetRegistry.list()
+            // 日志。
+            this.pushLog('debug', `[UI][mods] Mod 资源可用：${list.length} 个（${list.slice(0, 8).map((x) => x.path).join(', ')}${list.length > 8 ? ', …' : ''}）`)
+          } catch {
+            // 读清单失败不影响开局（真正的错误会在用的时候出声）。
+          }
+        }
       }
       // 生命周期钩子 onAfterLife（Life 已就绪 + Mod 代码已执行完）：适合做「开局后一次性」的异步准备。
-      if (hooks && typeof hooks.emit === 'function') await hooks.emit('onAfterLife', { life: this.life, data }, logger)
+      await hookBus.emit('onAfterLife', { life: this.life, data }, logger)
       // 标记完成。
       this.initialized = true
+      // 本局使用的资源文件源（`restartWithSeed` 重开一局时还要用它重建资源能力）。
+      this.assetSource = assetSource ? markRaw(assetSource) : null
+      // 记下本局的 Mod 装载输入（重开一局要用同一批代码/钩子/依赖重建）。
+      this.modCodes = Array.isArray(modCodes) ? modCodes : null
+      this.modHooks = hookBus
+      this.modRequires = modRequires || null
       // 同步属性。
       this.sync()
     },
@@ -247,7 +330,21 @@ export const useGameStore = defineStore('game', {
       // 没有数据（例如直接刷新到总结页）→ 交给调用方引导回主页。
       if (!this.rawData) return false
       // 复用同一份数据重新初始化（种子相同 → 随机序列相同）。
-      await this.init(this.rawData, { seed })
+      // 资源能力也要带上：不带的话复现的一局里 `{{asset:...}}` 全都会降级成文本。
+      await this.init(this.rawData, {
+        // 种子。
+        seed,
+        // Mod 代码（上一局加载的，重开要重新执行一遍）。
+        modCodes: this.modCodes,
+        // 钩子总线。
+        hooks: this.modHooks,
+        // 运行时模块。
+        modRequires: this.modRequires,
+        // 资源读取能力（上一局的文件源现造一个，惰性）。
+        assetReader: this.assetSource ? createSourceAssetReader(this.assetSource) : null,
+        // 资源文件源（界面侧解析占位符用）。
+        assetSource: this.assetSource,
+      })
       // 成功。
       return true
     },
@@ -358,8 +455,65 @@ export const useGameStore = defineStore('game', {
         // 条目快照。
         items: (result.content || []).map((c) => ({ ...c })),
       })
+      // 轨迹里的资源占位符（`{{asset:路径}}`）解析成 URL（异步；不阻塞逐年推进）。
+      this.trackAssets()
       // 返回结果（供组件渲染事件卡片）。
       return result
+    },
+
+    // #trackAssets
+    // 把轨迹文本里的 `{{asset:相对路径}}` 解析成可显示的 URL（2026-10 能力补齐 ②）。
+    //
+    // 为什么在这里做：轨迹条目是**同步**产生的（`life.next()` 是同步函数），而资源 URL
+    // 必须异步拿（blob URL 要读字节）。所以推进一年后异步解析一批，界面拿到就渲染 `<img>`；
+    // 还没解析完 / 解析不到 → 占位符按纯文本显示（绝不阻塞、绝不报错）。
+    //
+    // @returns {void}
+    trackAssets() {
+      // 没有资源能力 → 什么都不用做（界面会把占位符当纯文本）。
+      if (!this.assetRegistry) return
+      // 缓存（markRaw 的 Map；缺了就当没有）。
+      const cache = this.assetUrlCache || (this.assetUrlCache = markRaw(new Map()))
+      // 收集本局轨迹里出现过的全部资源路径。
+      const paths = collectAssetPaths(this.history)
+      // 逐个（已在缓存里的跳过：Map 里存的是 URL 或"解析中"的 Promise）。
+      for (const path of paths) {
+        // 已有（URL 或进行中的 Promise）→ 跳过。
+        if (cache.has(path)) continue
+        // 起一次解析（只读这一个文件）。
+        const task = (async () => {
+          // 问注册表要 URL（跨 Mod 按路径查找；读不到给 null）。
+          const url = await this.assetRegistry.url(path)
+          // 读到了才进缓存（**读不到不入缓存**：Mod 修好后重新推进一年就能看见）。
+          if (url) {
+            // 存 URL。
+            cache.set(path, url)
+            // 触发模板重渲染（Map 本身不是响应式的）。
+            this.assetUrlTick++
+            // 日志（trace 级：逐年轨迹里出现资源是很频繁的事，别刷屏）。
+            this.pushLog('trace', `[UI][asset] ${path} → ${String(url).slice(0, 48)}`)
+          }
+        })()
+        // 先存 Promise（避免同一路径并发解析多次）。
+        cache.set(path, task)
+        // 失败不影响游戏（静默降级为纯文本）。
+        task.catch(() => {})
+      }
+    },
+
+    // #assetUrl
+    // 同步取一个资源路径的 URL（给模板用）。
+    //
+    // 语义：解析完成 → URL 字符串；解析中/读不到/无资源能力 → `null`（调用方降级成纯文本）。
+    // 这一步**不做 IO** —— 字节的读取发生在 `trackAssets()` 里（推进一年后异步做一次）。
+    //
+    // @param {string} path - 资源相对路径
+    // @returns {string|null} URL 或 null
+    assetUrl(path) {
+      // 缓存里找。
+      const hit = this.assetUrlCache?.get(path)
+      // 字符串才是 URL（Promise = 解析中；undefined = 没解析到）。
+      return typeof hit === 'string' ? hit : null
     },
 
     // 设置游戏模式。

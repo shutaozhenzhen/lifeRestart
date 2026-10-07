@@ -7,12 +7,14 @@
  *   3. executeModCodes：**Mod 注册新属性**（gameAPI.param）与注册钩子；异常隔离
  *   4. mod-catalog：原型清单 ↔ 真实 Mod 合并（覆盖展示字段 / 标记不可用 / 追加第三方）
  *   5. sync-mods：同步计划正确（Data Mod 不重复同步 4MB 数据）+ 真跑一次写盘
+ *   6. **Mod 包内二进制资源**（2026-10 能力补齐 ②）：`gameAPI.asset` 能读到自己包里的图，
+ *      且读取是**惰性**的（不预下载）
  */
 
 // vitest DSL。
-import { describe, test, expect } from 'vitest'
+import { describe, test, expect, vi } from 'vitest'
 // 被测模块。
-import { createBrowserAIConfig, discoverMods, executeModCodes, loadModBundle, readAIConfig, resolveAIProxyBase, resolveSitePath, MODS_BASE_URL, NATIVE_AI_PROXY_PORT } from './mod-runtime.js'
+import { createBrowserAIConfig, discoverMods, executeModCodes, loadModBundle, readAIConfig, resolveAIProxyBase, resolveSitePath, MODS_BASE_URL, NATIVE_AI_PROXY_PORT, createAssetRegistry, createSourceAssetReader, createStoreSource } from './mod-runtime.js'
 // 源码扫描（守卫用）。
 import { readSourceFiles } from '../test-utils/source-scan.js'
 import { DEFAULT_MOD_LIST, buildModCatalog, enabledModNames } from './mod-catalog.js'
@@ -45,6 +47,50 @@ function makeFetch(files) {
   }
   // 附带记录。
   fetchImpl.calls = calls
+  // 返回。
+  return fetchImpl
+}
+
+// #makeBinaryFetch
+// 静态文件服务器替身，**同时支持文本与二进制**（`arrayBuffer()`）。
+//
+// 与 makeFetch 分开写的原因：老替身只实现 `text()`，拿它测"读二进制"会得到
+// "源不支持"的假象（而真实 fetch 一直有 arrayBuffer）。
+//
+// @param {object} files - { URL: string|Uint8Array }
+// @returns {Function} fetch 替身（带 calls / binaryCalls 记录）
+function makeBinaryFetch(files) {
+  // 记录请求（区分走了 text 还是 arrayBuffer —— 用来证明"没有用 text 读 PNG"）。
+  const calls = []
+  const binaryCalls = []
+  // 实现。
+  const fetchImpl = async (url) => {
+    // 记录。
+    calls.push(String(url))
+    // 命中。
+    const hit = files[String(url)]
+    // 404。
+    if (hit === undefined) return { ok: false, status: 404, text: async () => '', arrayBuffer: async () => new ArrayBuffer(0) }
+    // 字节化。
+    const bytes = typeof hit === 'string' ? new TextEncoder().encode(hit) : hit
+    // 200。
+    return {
+      ok: true,
+      status: 200,
+      // 文本形态（引擎读 manifest/code.js 用）。
+      text: async () => (typeof hit === 'string' ? hit : new TextDecoder().decode(hit)),
+      // 二进制形态（资源用）。
+      arrayBuffer: async () => {
+        // 记一笔（证明资源确实走的这条路）。
+        binaryCalls.push(String(url))
+        // 拷一份 ArrayBuffer（模拟真实 fetch 给新缓冲区）。
+        return bytes.slice().buffer
+      },
+    }
+  }
+  // 记录挂在函数上。
+  fetchImpl.calls = calls
+  fetchImpl.binaryCalls = binaryCalls
   // 返回。
   return fetchImpl
 }
@@ -130,6 +176,186 @@ describe('mod-runtime - 发现与加载（浏览器路径）', () => {
     expect(bundle.disabled).toEqual(['b'])
     expect(bundle.data.talents.tA).toBeDefined()
     expect(bundle.data.talents.tB).toBeUndefined()
+  })
+})
+
+describe('mod-runtime - Mod 包内二进制资源（2026-10 能力补齐 ②）', () => {
+  // 一段"像 PNG"的字节（含高位字节：用 text() 读会被 UTF-8 解码破坏，所以能真正验证走的是字节通道）。
+  const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 255, 128, 7])
+  // 假服务器：Mod `a` 的清单里同时有文本与资源。
+  const files = {
+    '/mods/index.json': '["a"]',
+    '/mods/a/files.json': '["manifest.json","code.js","assets/logo.png"]',
+    '/mods/a/manifest.json': '{"name":"a","version":"1.0.0"}',
+    '/mods/a/code.js': 'gameAPI.on("x", () => {})',
+    '/mods/a/assets/logo.png': PNG,
+  }
+
+  test('loadModBundle 带出**惰性**的资源读取能力（构造时不读任何字节）', async () => {
+    // 假服务器（记录请求）。
+    const fetchImpl = makeBinaryFetch(files)
+    // 加载。
+    const bundle = await loadModBundle({ fetchImpl })
+    // 能力带出来了。
+    expect(bundle.assetReader).toBeTruthy()
+    expect(bundle.assetSource).toBeTruthy()
+    expect(bundle.assetReader.available).toBe(true)
+    // **没有读任何资源**（惰性：开局不该把几 MB 图片拉下来）。
+    expect(fetchImpl.binaryCalls).toEqual([])
+    // 也没请求过那个 png 的文本形态。
+    expect(fetchImpl.calls.some((u) => u.includes('logo.png'))).toBe(false)
+  })
+
+  test('Mod 通过 gameAPI.asset 拿到自己包里的资源（逐字节；blob URL）', async () => {
+    // 假服务器。
+    const fetchImpl = makeBinaryFetch(files)
+    // 阶段一。
+    const bundle = await loadModBundle({ fetchImpl })
+    // 阶段二：Mod 代码读自己包里的图。
+    const { executed } = executeModCodes({
+      // ⚠️ 用外部注册表（生产里 store 就是这么接的：界面与 Mod 用**同一份**桥）。
+      assetRegistry: createAssetRegistry(),
+      // 资源读取能力。
+      assetReader: bundle.assetReader,
+      // 钩子总线。
+      hooks: bundle.hooks,
+      // Mod 代码（回调里断言 —— 顶层不能 await）。
+      codes: [{
+        name: 'a',
+        code: [
+          'gameAPI.asset.list().then(function (list) { globalThis.__assetList = list })',
+          'gameAPI.asset.bytes("assets/logo.png").then(function (b) { globalThis.__assetBytes = Array.from(b) })',
+          'gameAPI.asset.url("assets/logo.png").then(function (u) { globalThis.__assetUrl = u })',
+        ].join('\n'),
+      }],
+    })
+    // 执行成功。
+    expect(executed).toEqual(['a'])
+    // 等异步回调（真实网络/文件都不碰）。
+    await new Promise((r) => setTimeout(r, 0))
+    // 清单只列资源（manifest.json / code.js 不算资源）。
+    expect(globalThis.__assetList).toEqual(['assets/logo.png'])
+    // **逐字节一致**（含 0 与 255；走 text() 读会坏掉）。
+    expect(globalThis.__assetBytes).toEqual([...PNG])
+    // Node/happy-dom 里没有 URL.createObjectURL → url() 降级为路径（不抛）。
+    expect(typeof globalThis.__assetUrl).toBe('string')
+    // 资源真的被请求过一次（而且是走 arrayBuffer，不是 text）。
+    expect(fetchImpl.binaryCalls).toEqual(['/mods/a/assets/logo.png'])
+    // 清理全局。
+    delete globalThis.__assetList
+    delete globalThis.__assetBytes
+    delete globalThis.__assetUrl
+  })
+
+  test('Mod 代码读**别人**包的资源读不到（按 Mod 隔离）', async () => {
+    // 假服务器（同一个包里没有的资源）。
+    const fetchImpl = makeBinaryFetch(files)
+    // 阶段一 + 阶段二。
+    const bundle = await loadModBundle({ fetchImpl })
+    // Mod 代码读一个包内不存在的路径 → 可读错误（**不静默返回空字节**）。
+    const errors = []
+    const { errors: execErrors } = executeModCodes({
+      assetReader: bundle.assetReader,
+      hooks: bundle.hooks,
+      codes: [{
+        name: 'a',
+        // 顶层不能 await，所以用 catch 收集（同步执行完就已经拿到错误对象了）。
+        code: 'gameAPI.asset.bytes("assets/nope.png").catch(function (e) { globalThis.__assetErr = e.message })',
+      }],
+    })
+    // 代码本身执行成功（错误在 promise 里，不影响其它 Mod）。
+    expect(execErrors).toEqual([])
+    // 等回调。
+    await new Promise((r) => setTimeout(r, 0))
+    // 可读错误带 Mod 名、路径与"用 list() 看清单"的指引。
+    expect(globalThis.__assetErr).toMatch(/a 里没有资源 assets\/nope\.png/)
+    expect(globalThis.__assetErr).toMatch(/asset\.list\(\)/)
+    // 收尾。
+    delete globalThis.__assetErr
+    // errors 变量只是为了让 lint 不抱怨未使用（本用例的错误在 promise 里）。
+    expect(errors).toEqual([])
+  })
+
+  test('注册表：按路径跨 Mod 查找 + 缺失时给 null（界面渲染不该被炸）', async () => {
+    // 两个 Mod 各带一张图。
+    const fetchImpl = makeBinaryFetch({
+      '/mods/index.json': '["a","b"]',
+      '/mods/a/files.json': '["manifest.json","assets/a.png"]',
+      '/mods/a/manifest.json': '{"name":"a","version":"1.0.0"}',
+      '/mods/a/assets/a.png': new Uint8Array([1, 2, 3]),
+      '/mods/b/files.json': '["manifest.json","dependencies-marker.json","assets/b.ogg"]',
+      '/mods/b/manifest.json': '{"name":"b","version":"1.0.0","dependencies":["a"]}',
+      '/mods/b/assets/b.ogg': new Uint8Array([4, 5, 6]),
+    })
+    // 阶段一。
+    const bundle = await loadModBundle({ fetchImpl })
+    // 阶段二（Mod 代码为空也要建桥 —— 界面侧的占位符解析靠注册表）。
+    const registry = createAssetRegistry()
+    executeModCodes({ codes: [{ name: 'a', code: '' }, { name: 'b', code: '' }], hooks: bundle.hooks, assetReader: bundle.assetReader, assetRegistry: registry })
+    // 注册表可用，两个 Mod 都登记了。
+    expect(registry.available).toBe(true)
+    expect(registry.names().sort()).toEqual(['a', 'b'])
+    // 跨 Mod 按路径查找。
+    expect(await registry.has('assets/a.png')).toBe(true)
+    expect(await registry.has('assets/b.ogg')).toBe(true)
+    expect(await registry.has('assets/nope.png')).toBe(false)
+    // url 给字符串（Node 里是路径）、缺失给 null。
+    expect(typeof (await registry.url('assets/a.png'))).toBe('string')
+    expect(await registry.url('assets/nope.png')).toBeNull()
+    // list 带 Mod 名（排障用）。
+    expect((await registry.list()).map((x) => `${x.mod}:${x.path}`).sort()).toEqual(['a:assets/a.png', 'b:assets/b.ogg'])
+    // dispose 幂等。
+    expect(registry.dispose()).toBe(0)
+    expect(registry.dispose()).toBe(0)
+    // dispose 之后找不到东西（不返回失效 URL）。
+    expect(await registry.has('assets/a.png')).toBe(false)
+    expect(await registry.url('assets/a.png')).toBeNull()
+  })
+
+  test('没有资源能力时（源不支持 readBytes / 源缺失）→ 降级且不报错', async () => {
+    // 源替身：只实现"读文本"（模拟升级前的旧源 / 旧存储）。
+    const legacy = {
+      kind: 'legacy',
+      async listMods() { return ['a'] },
+      async listFiles() { return ['manifest.json'] },
+      async readText() { return null },
+    }
+    // 读取器。
+    const reader = createSourceAssetReader(legacy, { warn: () => {} })
+    // 明确标成不可用（不是"看起来能用但一直读不到"）。
+    expect(reader.available).toBe(false)
+    // 读字节给 null（不抛：调用方按"没有"处理）。
+    expect(await reader.readBytes('a', 'assets/x.png')).toBeNull()
+    // 桥因此降级（available false，读操作抛可读错误）。
+    const bundle = { assetReader: reader, hooks: createHookBus() }
+    const registry = createAssetRegistry()
+    executeModCodes({ codes: [{ name: 'a', code: '' }], hooks: bundle.hooks, assetReader: bundle.assetReader, assetRegistry: registry })
+    expect(registry.available).toBe(false)
+    // 界面拿不到 URL（降级成纯文本），不抛。
+    expect(await registry.url('assets/x.png')).toBeNull()
+    // 没有源时也不炸。
+    const none = createSourceAssetReader(undefined, { warn: () => {} })
+    expect(none.available).toBe(false)
+    expect(await none.listFiles('a')).toBeNull()
+  })
+
+  test('store 源：能读 zip 装出来的 Mod 的资源（listFiles 取文本+资源并集）', async () => {
+    // 存储替身（与 mod-store 记录同形）。
+    const store = {
+      async list() { return [{ name: 'a', manifest: {} }] },
+      async listFiles() { return ['manifest.json', 'assets/logo.png'] },
+      async readText(_n, rel) { return rel === 'manifest.json' ? '{}' : null },
+      async readBytes(_n, rel) { return rel === 'assets/logo.png' ? PNG : null },
+    }
+    // 源适配。
+    const source = createStoreSource(store)
+    // 清单含资源。
+    expect(await source.listFiles('a')).toEqual(['manifest.json', 'assets/logo.png'])
+    // 读出字节。
+    expect([...(await source.readBytes('a', 'assets/logo.png'))]).toEqual([...PNG])
+    // 老存储（没有 readBytes）→ null（不是抛）。
+    const legacy = createStoreSource({ async listFiles() { return [] }, async readText() { return null } })
+    expect(await legacy.readBytes('a', 'assets/logo.png')).toBeNull()
   })
 })
 
@@ -357,6 +583,50 @@ describe('sync-mods - 同步计划与写盘', () => {
     expect(example.files).toContain('code.js')
     expect(example.files).toContain('manifest.json')
     expect(example.files).toContain('age.json')
+  })
+
+  test('资源文件（图片/音频/字体）也进计划与 files.json —— **漏列 = 浏览器侧静默少读**', () => {
+    // 计划（仓库真实 mods/：example-mod 带了一张 assets/logo.png）。
+    const plan = buildSyncPlan({ modsDir: MODS_DIR })
+    // 示例 Mod 的资源在计划里（**含子目录**）。
+    const example = plan.mods.find((m) => m.name === 'example-mod')
+    expect(example.files).toContain('assets/logo.png')
+    // 无错误。
+    expect(plan.errors).toEqual([])
+  })
+
+  test('writeSync：资源按**字节**复制到 public/mods（逐字节一致）', () => {
+    // 临时目录。
+    const outDir = mkdtempSync(join(tmpdir(), 'sync-mods-assets-'))
+    // 同步。
+    try {
+      // 计划 + 写盘。
+      const plan = buildSyncPlan({ modsDir: MODS_DIR })
+      writeSync({ plan, modsDir: MODS_DIR, outDir })
+      // 目标文件存在。
+      const copied = join(outDir, 'example-mod', 'assets', 'logo.png')
+      expect(existsSync(copied)).toBe(true)
+      // **逐字节一致**（copyFileSync 是二进制复制；用 readFileSync + 文本写回就会坏）。
+      const src = readFileSync(join(MODS_DIR, 'example-mod', 'assets', 'logo.png'))
+      const dst = readFileSync(copied)
+      expect([...dst]).toEqual([...src])
+      // PNG magic（真的是一张图）。
+      expect([...dst.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+      // files.json 里列了它（浏览器据此才会去请求）。
+      const files = JSON.parse(readFileSync(join(outDir, 'example-mod', 'files.json'), 'utf8'))
+      expect(files).toContain('assets/logo.png')
+    } finally {
+      // 清理。
+      rmSync(outDir, { recursive: true, force: true })
+    }
+  })
+
+  test('资源后缀清单：sync-mods 与引擎 zip 模块**必须一致**（少一个就是静默少读）', async () => {
+    // 动态导入（避免顶层再多一个 import）。
+    const engine = await import('game-engine/src/mod/zip.js')
+    const sync = await import('../../scripts/sync-mods.mjs')
+    // 双向比对（顺序无关）。
+    expect([...sync.ASSET_EXT].sort()).toEqual([...engine.ASSET_EXT].sort())
   })
 
   test('writeSync：写出 index.json 与各 Mod 的 files.json', () => {

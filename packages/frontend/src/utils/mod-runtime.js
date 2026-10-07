@@ -18,6 +18,8 @@ import { createModLoader, scanMods } from 'game-engine/src/mod/loader.js'
 import { createFetchSource } from 'game-engine/src/mod/source-fetch.js'
 import { readModPackage } from 'game-engine/src/mod/zip.js'
 import { createHookBus, createGameAPI } from 'game-engine/src/mod/gameapi.js'
+// 资源桥（Mod 包内二进制资源；2026-10 能力补齐 ②）。
+import { createAssetBridge, createUnavailableAssetBridge } from 'game-engine/src/mod/asset-bridge.js'
 // 运行时模块注册表（依赖随包分发、运行期解析；见引擎的 mod/modules.js）。
 import { createModuleRegistry, createDenyRequire } from 'game-engine/src/mod/modules.js'
 import { createAIClient } from 'game-engine/src/ai/ai-client.js'
@@ -189,6 +191,160 @@ export function createBlobModuleLoader({ createObjectURL, revokeObjectURL, impor
   return load
 }
 
+// #createSourceAssetReader
+// 把"Mod 文件源"适配成 asset 桥需要的**惰性**读取能力（2026-10 能力补齐 ②）。
+//
+// 为什么是惰性：`readBytes` 与 `listFiles` 都只是把源包一层 —— 构造时不发生任何 IO。
+// 图片/音频可能几 MB，开局就把所有 Mod 的二进制预读进内存是纯浪费；只有 Mod 真的调
+// `gameAPI.asset.bytes()/url()`（或页面渲染 `{{asset:...}}`）时才读那一个文件。
+//
+// @param {object} source - 文件源（createBrowserModSource 的结果；需有 readBytes）
+// @param {object} [log] - 日志器（源不支持二进制时出声，不静默）
+// @returns {object} { kind, available, listFiles, readBytes }
+export function createSourceAssetReader(source, log) {
+  // 源能不能读字节（老的源/替身可能没有 readBytes）。
+  const canRead = typeof source?.readBytes === 'function'
+  // 不支持时出声一次（否则表现是"所有资源都读不到"，而看不出为什么）。
+  if (!canRead && log?.warn) log.warn('[UI][mods] 当前 Mod 文件源不支持二进制资源（readBytes 缺失）→ gameAPI.asset 不可用')
+  // 返回。
+  return {
+    // 类型标记（日志/调试用）。
+    kind: 'source-assets',
+    // 能不能读资源（ModManage 之外的调用方据此决定要不要提示）。
+    available: canRead,
+    // 文件清单（**完整**清单；桥自己按后缀过滤出资源）。没有源 → null（= 清单未知）。
+    listFiles: (mod) => (typeof source?.listFiles === 'function' ? source.listFiles(mod) : null),
+    // 读字节（逐字节；fetch 用 arrayBuffer、store 读 IndexedDB、Node 读 fs）。
+    readBytes: (mod, path) => (canRead ? source.readBytes(mod, path) : Promise.resolve(null)),
+  }
+}
+
+// #createAssetRegistry
+// 把"每个 Mod 一份资源桥"聚合成一个门面（2026-10 能力补齐 ②）。
+//
+// 为什么需要它：桥必须按 Mod 隔离（`readBytes(mod, path)` 的第一个参数就是 Mod 名，
+// 只能读本 Mod 包内的路径），而**页面/界面的消费方只有"路径"这一个线索**
+// （`{{asset:assets/logo.png}}` 不知道它属于哪个 Mod）。所以：
+//   · 执行 code.js 时为每个 Mod 建一份桥并 `register(name, bridge)`；
+//   · 界面用 `url(path)` / `has(path)` 在已注册的桥里**逐个问**（Mod 数量是个位数，
+//     且大部分路径一眼就能排除），命中即返回。
+//
+// `dispose()` 会释放全部桥的 blob URL —— 不释放就是内存泄漏（换局/禁用 Mod 后
+// 那些 URL 没有任何人再引用，但字节还钉在内存里）。
+//
+// @param {object} [params]
+// @param {object} [params.log] - 日志器
+// @returns {object} 注册表（has/url/list/dispose）
+export function createAssetRegistry({ log } = {}) {
+  // Mod 名 → 桥（注册顺序 = 执行顺序 = 拓扑顺序）。
+  const bridges = new Map()
+  // #find
+  // 找第一个"有这个路径"的桥。
+  //
+  // @param {string} path - 资源相对路径
+  // @returns {Promise<{name: string, bridge: object}|null>} 命中项
+  async function find(path) {
+    // 逐个问。
+    for (const [name, bridge] of bridges) {
+      // 出错（桥已释放 / 源异常）跳过该桥，不影响其它 Mod。
+      try {
+        if (await bridge.has(path)) return { name, bridge }
+      } catch {
+        // 继续。
+        continue
+      }
+    }
+    // 没有。
+    return null
+  }
+
+  // 返回注册表。
+  return {
+    // 已注册的 Mod 名。
+    names: () => [...bridges.keys()],
+    // 登记一份桥（重复登记覆盖）。
+    register(name, bridge) {
+      // 存。
+      bridges.set(name, bridge)
+    },
+    // #available：有没有桥（界面据此判断"本局能不能解析资源占位符"）。
+    get available() {
+      // 至少一份桥（且它自己是可用的）。
+      for (const bridge of bridges.values()) if (bridge.available) return true
+      // 都没有。
+      return false
+    },
+    // #has：某个资源路径在**任何**已注册的 Mod 包里存在吗。
+    async has(path) {
+      // 命中即 true（大小写敏感：路径就是键）。
+      return (await find(path)) !== null
+    },
+    // #url：拿可显示的 URL（blob URL / Node 绝对路径）。
+    // 找不到 → null（**给 null 而不是抛**：界面渲染"资源缺失"是常态，不该让页面炸）。
+    async url(path) {
+      // 找。
+      const hit = await find(path)
+      // 没有。
+      if (!hit) return null
+      // 读 URL（桥内部缓存；同一路径恒同 URL）。
+      try {
+        return await hit.bridge.url(path)
+      } catch (e) {
+        // 出声（路径对但字节读不到是配置问题，不是"没有"）。
+        log?.warn?.(`[UI][mods] 读取资源失败 ${path}（Mod ${hit.name}）：${e.message}`)
+        // 返回空。
+        return null
+      }
+    },
+    // #list：全部 Mod 的资源路径（带 Mod 名，便于排障/展示）。
+    async list() {
+      // 结果。
+      const out = []
+      // 逐个桥。
+      for (const [name, bridge] of bridges) {
+        // 读清单（失败跳过）。
+        try {
+          for (const p of await bridge.list()) out.push({ mod: name, path: p })
+        } catch {
+          // 跳过。
+          continue
+        }
+      }
+      // 返回。
+      return out
+    },
+    // #dispose：释放全部桥的 blob URL（幂等）。
+    dispose() {
+      // 累计释放数。
+      let n = 0
+      // 逐个释放。
+      for (const bridge of bridges.values()) n += bridge.dispose?.() || 0
+      // 清空注册表。
+      bridges.clear()
+      // 返回。
+      return n
+    },
+  }
+}
+
+// #createUnavailableAssetReader
+// 没有文件源时的占位（让调用方不用到处判空）。桥仍是降级桥，行为与"宿主没有资源能力"一致。
+//
+// @returns {object} 读取器
+export function createUnavailableAssetReader() {
+  // 返回。
+  return {
+    // 类型。
+    kind: 'unavailable',
+    // 不可用。
+    available: false,
+    // 清单未知。
+    listFiles: async () => null,
+    // 读不到。
+    readBytes: async () => null,
+  }
+}
+
 // #createStoreSource
 // 把"已安装 Mod 存储"（mod-store）适配成文件源。
 //
@@ -204,7 +360,7 @@ export function createStoreSource(store) {
       // 列表。
       return (await store.list()).map((m) => m.name)
     },
-    // 文件清单。
+    // 文件清单（文本 + 资源；store 实现负责取并集）。
     async listFiles(mod) {
       // 委托。
       return store.listFiles(mod)
@@ -213,6 +369,13 @@ export function createStoreSource(store) {
     async readText(mod, rel) {
       // 委托。
       return store.readText(mod, rel)
+    },
+    // 读**二进制资源**（zip 装出来的 Mod 的图片/音频/字体；2026-10 能力补齐 ②）。
+    async readBytes(mod, rel) {
+      // 老存储实现可能没有 readBytes（升级前的记录）→ 按"没有"处理，不抛。
+      if (typeof store.readBytes !== 'function') return null
+      // 委托。
+      return store.readBytes(mod, rel)
     },
   }
 }
@@ -285,6 +448,25 @@ export function createCompositeSource(sources = []) {
       // 都没命中。
       return null
     },
+    // 读二进制资源：第一个非 null 的源胜出（与 readText 同一套规则）。
+    async readBytes(mod, rel) {
+      // 逐个源。
+      for (const source of list) {
+        // 尝试。
+        try {
+          // 源不支持二进制 → 跳过（老实现）。
+          if (typeof source.readBytes !== 'function') continue
+          // 读。
+          const bytes = await source.readBytes(mod, rel)
+          // 命中。
+          if (bytes !== null && bytes !== undefined) return bytes
+        } catch {
+          // 继续下一个源。
+        }
+      }
+      // 都没命中。
+      return null
+    },
   }
 }
 
@@ -343,7 +525,9 @@ export async function installModFromZip({ bytes, store, log, allowSystem = false
     return { ok: false, system: true, name: parsed.name, errors: [`${parsed.name} 是系统 Mod，不能被未经确认的包覆盖（装回来请二次确认）`] }
   }
   // 写入本地存储。
-  await store.install({ name: parsed.name, manifest: parsed.manifest, files: parsed.files })
+  // `assets` 是二进制资源表（图片/音频/字体，逐字节；2026-10 能力补齐 ②）。
+  // 以前这里只有 `files`（文本），二进制在解析阶段就被丢弃了。
+  await store.install({ name: parsed.name, manifest: parsed.manifest, files: parsed.files, assets: parsed.assets })
   // 返回（把路径/尺寸警告一并带出）。
   return {
     // 成功。
@@ -354,11 +538,13 @@ export async function installModFromZip({ bytes, store, log, allowSystem = false
     manifest: parsed.manifest,
     // 系统 Mod 名（界面据此提示"这是覆盖了系统预装"）。
     system,
-    // 警告。
+    // 警告（路径/尺寸；**不含资源** —— 资源现在是真的留下来了，报警告会让人以为丢了）。
     errors: [...parsed.errors, ...(parsed.skipped || []).map((s) => `已跳过：${s}`)],
-    // 文件数。
+    // 文本文件数。
     files: Object.keys(parsed.files).length,
-    // 非文本文件提示。
+    // 资源文件数（界面提示用；语义与 files 并列）。
+    assets: Object.keys(parsed.assets || {}).length,
+    // 资源路径清单（历史字段名；**不再是"被丢弃"的意思**）。
     binaries: parsed.binaries || [],
   }
 }
@@ -386,7 +572,7 @@ export async function discoverMods({ baseUrl = MODS_BASE_URL, fetchImpl, log, st
 // @param {Function} [params.fetchImpl] - fetch 实现（测试注入）
 // @param {string[]} [params.enabled] - 启用的 Mod 名（缺省全加载）
 // @param {object} [params.log] - 日志器
-// @returns {Promise<{data: object, codes: Array<{name: string, code: string}>, loaded: string[], disabled: string[], errors: string[], hooks: object}>} 结果
+// @returns {Promise<{data: object, codes: Array<{name: string, code: string}>, loaded: string[], disabled: string[], errors: string[], hooks: object, assetReader: object, assetSource: object}>} 结果
 export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enabled, log, store } = {}) {
   // 钩子总线（一次游戏一个：所有 Mod 共享，Life 也注入它）。
   const hooks = createHookBus()
@@ -429,6 +615,11 @@ export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enable
     requires,
     // blob URL 释放器（页面/Mod 卸载时调用）。
     disposeModules: moduleLoader.dispose,
+    // **资源读取能力**（2026-10 能力补齐 ②）：阶段二据此为每个 Mod 建资源桥。
+    // 惰性的 —— 这里不读任何字节（见 createSourceAssetReader）。
+    assetReader: createSourceAssetReader(source, log),
+    // 原始文件源（界面侧解析 `{{asset:路径}}` 时要用同一份源去读字节）。
+    assetSource: source,
     // 实际加载的 Mod（按拓扑顺序）。
     loaded: [...loader.order],
     // 被启用开关挡掉的。
@@ -450,12 +641,21 @@ export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enable
 // @param {object} [params.data] - 合并后的游戏数据
 // @param {object} [params.aiConfig] - createBrowserAIConfig 的结果
 // @param {Record<string, Function>} [params.requires] - 每个 Mod 的 require（阶段一产出）
+// @param {object} [params.assetReader] - 阶段一的 `assetReader`（资源读取能力，惰性）
+// @param {object} [params.assetRegistry] - 外部注册表（**界面侧解析 `{{asset:...}}` 要用同一份**）；
+//   不传则本函数自建一个并随返回值带出
+// @param {object} [params.assetUrlApi] - 注入的 URL 原语 `{ Blob, createObjectURL, revokeObjectURL }`；
+//   缺省取全局（测试在 Node 环境里注入假实现，才能测到 blob URL 的缓存与释放 ——
+//   Node 18 的 `URL.createObjectURL` 并不存在，不注入就只会走"绝对路径"那条降级分支）
 // @param {object} [params.log] - 日志器
-// @returns {{executed: string[], errors: string[]}} 结果
-export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig = null, requires = null, log } = {}) {
+// @returns {{executed: string[], errors: string[], assetRegistry: object}} 结果
+export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig = null, requires = null, assetReader = null, assetRegistry = null, assetUrlApi = null, log } = {}) {
   // 结果。
   const executed = []
   const errors = []
+  // 资源注册表：外部给了就用它（界面与 Mod 代码必须操作**同一份**桥，
+  // 否则界面拿到的 blob URL 与 Mod 拿到的不是同一个，且 dispose 会各管一半）。
+  const registry = assetRegistry || createAssetRegistry({ log })
   // 逐个执行（异常隔离：单个 Mod 崩掉不影响其它，也不影响游戏）。
   for (const { name, code } of codes) {
     // 为该 Mod 构造 gameAPI（与 Life 共享参数注册表 + 钩子总线）。
@@ -475,6 +675,22 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
       // 钩子观察引擎内部的属性变化（事件/天赋效果、年龄自增、成就记账）。
       // 传 Life 本体即可（createPropertyBridge 会取它的 .property 模块）。
       property: life,
+      // 资源桥（2026-10 能力补齐 ②）：把 gameAPI.asset 接到这个 Mod 自己的包内资源。
+      // ⚠️ 桥是**按 Mod 隔离**的（`readBytes(mod, path)` 只读本 Mod 的路径）——
+      // 所以每个 Mod 造一份，同时登记进注册表供界面侧按路径查找。
+      //
+      // `assetReader.available === false` 时直接给降级桥：否则会出现一种很难查的
+      // 半通状态 —— `gameAPI.asset.available` 是 true，但任何读取都失败。
+      asset: createAssetBridge({
+        // Mod 名（错误信息 + 读哪个包）。
+        modName: name,
+        // 清单（惰性：调 list/has 时才读）。
+        listFiles: assetReader && assetReader.available !== false ? (m) => assetReader.listFiles(m) : null,
+        // 字节（惰性：调 bytes/url/text 时才读）。
+        readBytes: assetReader && assetReader.available !== false ? (m, p) => assetReader.readBytes(m, p) : null,
+        // URL 原语（缺省全局；测试注入假实现）。
+        urlApi: assetUrlApi || undefined,
+      }),
       // 跨局存储桥（命名空间 mod:<Mod 名>:）：与引擎同一份 storage。
       storage: life?.storage,
       // Mod 名（storage 命名空间与日志前缀）。
@@ -482,6 +698,8 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
       // 日志。
       log,
     })
+    // 登记资源桥（界面侧解析 `{{asset:...}}` 时按路径查找；跨 Mod 时按注册顺序命中）。
+    registry.register(name, gameAPI.asset)
     // 执行。
     try {
       // 该 Mod 的 require（阶段一已把它的运行时模块加载好；没声明则是 deny 版）。
@@ -500,5 +718,5 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
     }
   }
   // 返回。
-  return { executed, errors }
+  return { executed, errors, assetRegistry: registry }
 }
