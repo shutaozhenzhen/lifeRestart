@@ -21,13 +21,19 @@ import { downloadBytes } from '../utils/log-export.js'
 import { getModStore } from '../utils/mod-store.js'
 // 游戏 store（页面操作行为日志：进入页面/按钮操作都记入日志面板）。
 import { useGameStore } from '../stores/game.js'
+// 界面扩展注册表（Mod 加的面板/页面；启停后要跟着刷新）。
+import { useExtensionsStore } from '../stores/extensions.js'
 // Mod 启停/删除状态持久化（纯函数，可测试）。
 import { loadModsState, saveModsState, applyModsState, addRemoved, dropRemoved } from '../utils/mods-state.js'
+// Mod 面板（slot = mods；Mod 通过 manifest.ui.panels / gameAPI.ui.addPanel 插入）。
+import ModPanels from '../components/ModPanels.vue'
 
 // 路由。
 const router = useRouter()
 // 游戏 store。
 const gameStore = useGameStore()
+// 界面扩展注册表（启停/移除/安装后重新装载 —— 见 refreshUiExtensions）。
+const extensionsStore = useExtensionsStore()
 
 // 页面挂载：记录进入 + **发现服务器上的真实 Mod**（有 code.js/数据的才算能跑）。
 // 发现失败（离线/没跑 sync-mods）时目录仍由原型清单兜底，界面不会空。
@@ -162,6 +168,8 @@ async function afterInstall(r, from, { setMessage = true } = {}) {
   for (const w of r.errors) gameStore.pushLog('warn', `[UI][mods] ${w}`)
   // 刷新目录。
   await refreshCatalog()
+  // 新装的 Mod 可能带界面扩展（manifest.ui）——跟着刷新。
+  refreshUiExtensions()
 }
 
 // #installFromGitHub
@@ -322,6 +330,8 @@ async function uninstall(mod) {
   gameStore.pushLog('info', `[UI][mods] 已卸载本地 Mod ${mod.name}`)
   // 刷新。
   await refreshCatalog()
+  // 界面扩展跟着走（卸载掉的 Mod 的面板不能还挂着）。
+  refreshUiExtensions()
 }
 
 // #download
@@ -602,6 +612,25 @@ function toggle(mod) {
   gameStore.pushLog('info', `[UI][mods] ${mod.name} ${mod.enabled ? '启用' : '禁用'}`)
   // 保存状态（刷新后保留，纯函数）。
   saveModsState({ mods: mods.value, removed: removedMods.value })
+  // 界面扩展跟着启停走（2026-10 能力补齐 ③）：**禁用即消失**，不是在下次刷新才消失。
+  refreshUiExtensions()
+}
+
+// #refreshUiExtensions
+// 重新装载 Mod 界面扩展（启停/移除/安装/恢复之后都要调）。
+//
+// 为什么需要它：界面扩展的静态声明来自各 Mod 的 manifest.ui，装载时按"启用集合"过滤；
+// 不同步的话会看到"这个 Mod 已禁用，但它的面板还挂在主页上"。
+//
+// 失败只记日志（Mod 管理页的主功能不该被界面扩展拖垮）。
+//
+// @returns {void}
+function refreshUiExtensions() {
+  // 重新装载（内部全兜底，不抛）。
+  extensionsStore.reload({ log: { warn: (m) => gameStore.pushLog('warn', m) } }).catch((e) => {
+    // 兜底（reload 自身不该抛，但别让未处理的 rejection 冒到全局）。
+    gameStore.pushLog('warn', `[UI][mod-ui] 重新装载界面扩展失败：${e?.message || e}`)
+  })
 }
 
 // #remove
@@ -647,6 +676,8 @@ async function remove(mod) {
   gameStore.pushLog('info', `[UI][mods] 已完全移除 Mod ${mod.name}（服务器文件未删，可恢复/重新上传）`)
   // 刷新目录（本地已安装列表也要跟着更新）。
   await refreshCatalog()
+  // 界面扩展跟着走：**移除 = 它的页面/面板一起消失**（与"移除即不加载"同一语义）。
+  refreshUiExtensions()
 }
 
 // #restore
@@ -665,6 +696,8 @@ async function restore(name) {
   gameStore.pushLog('info', `[UI][mods] 已恢复 Mod ${name}`)
   // 刷新（重新出现在目录里）。
   await refreshCatalog()
+  // 界面扩展跟着回来。
+  refreshUiExtensions()
 }
 
 // #restoreAll
@@ -686,6 +719,8 @@ async function restoreAll() {
   gameStore.pushLog('info', `[UI][mods] 已恢复全部被移除的 Mod：${names.join(', ')}`)
   // 刷新。
   await refreshCatalog()
+  // 界面扩展跟着回来。
+  refreshUiExtensions()
 }
 
 // 授权弹窗：首次加载需授权权限。
@@ -717,6 +752,10 @@ function back() {
   <div class="modmanage">
     <h2 class="title">Mod 管理</h2>
     <button class="btn back" @click="back">← 返回</button>
+
+    <!-- Mod 面板（slot = mods；2026-10 能力补齐 ③）：Mod 通过 manifest.ui.panels
+         或 gameAPI.ui.addPanel 往管理页插卡片。没有声明时什么都不渲染。 -->
+    <ModPanels slot="mods" />
 
     <!-- 文档入口：写 Mod 的人先看这里（两份文档都是纯前端页面，可深链） -->
     <div class="doc-bar">

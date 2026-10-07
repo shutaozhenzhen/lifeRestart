@@ -32,6 +32,8 @@ import { executeModCodes, createAssetRegistry, createSourceAssetReader } from '.
 import { createHookBus } from 'game-engine/src/mod/gameapi.js'
 // 轨迹文本里的受控资源占位符（`{{asset:相对路径}}`；纯函数 + 异步解析）。
 import { collectAssetPaths } from '../utils/asset-text.js'
+// Mod 界面扩展注册表（2026-10 能力补齐 ③）：`gameAPI.ui.*` 的落点（运行期注册）。
+import { useExtensionsStore } from './extensions.js'
 
 // 日志缓冲上限：1000 条在 trace 级下也够覆盖一次完整复现（每条约 100 字节）。
 const LOG_BUFFER_LIMIT = 1000
@@ -125,6 +127,9 @@ export const useGameStore = defineStore('game', {
     modRequires: null,
     // 本局的 Mod 文件源（界面侧按路径读资源字节；markRaw）。
     assetSource: null,
+    // 本局各 Mod 的**界面桥**（2026-10 能力补齐 ③；markRaw）。
+    // 渲染 `{ t: 'action', id }` 按钮时按 id 查"谁注册过这个动作"（`hasAction` / `trigger`）。
+    modUiBridges: null,
   }),
 
   // 计算属性。
@@ -144,15 +149,16 @@ export const useGameStore = defineStore('game', {
       return state.life.getPropertyPoints()
     },
     // 已分配点数。
-    allocatedTotal: (state) => state.allocation.CHR + state.allocation.INT + state.allocation.STR + state.allocation.MNY,
+    // Mod 声明的额外属性（`manifest.ui.properties`）也要算进去 —— 否则"分配了却不扣点数"。
+    allocatedTotal: (state) => Object.values(state.allocation).reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0),
     // 剩余点数。
     leftPoints: (state) => {
       // 可用点数（见 propertyPoints）。
       const total = state.mode === 'celebrity' && state.character && state.life
         ? state.characterExtraPoints
         : (state.life ? state.life.getPropertyPoints() : 0)
-      // 已分配。
-      const used = state.allocation.CHR + state.allocation.INT + state.allocation.STR + state.allocation.MNY
+      // 已分配（含 Mod 声明的额外属性；非有限值按 0 算，防 NaN 一路传下去）。
+      const used = Object.values(state.allocation).reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0)
       // 剩余。
       return total - used
     },
@@ -262,8 +268,12 @@ export const useGameStore = defineStore('game', {
         const reader = assetReader || (assetSource ? createSourceAssetReader(assetSource) : null)
         // 本局的资源注册表（界面解析 `{{asset:...}}` 与 Mod 代码操作**同一份**桥）。
         const assetRegistry = createAssetRegistry({ log: logger })
+        // 界面扩展注册表（2026-10 能力补齐 ③）：**运行期注册**的落点。
+        // 每次开局先清掉上一局的运行期注册（静态声明 manifest.ui 由 App.vue 的 load() 装载，保留）。
+        const extStore = useExtensionsStore()
+        extStore.beginRuntime(logger)
         // 执行（异常隔离：单个 Mod 失败不影响游戏）。
-        const { executed, errors } = executeModCodes({
+        const { executed, errors, uiBridges } = executeModCodes({
           // 代码。
           codes: modCodes,
           // 钩子总线（与 Life **同一条**：见上面 hookBus 的说明）。
@@ -282,12 +292,17 @@ export const useGameStore = defineStore('game', {
           assetRegistry,
           // URL 原语（缺省全局；测试注入假实现才能测到 blob URL 的缓存与释放）。
           assetUrlApi: assetUrlApi || null,
+          // 界面注册表（`gameAPI.ui.*` → stores/extensions.js 的 append；
+          // `gameAPI.ui.addStatistic` → Life 的统计登记，让 Mod 统计键真的产生）。
+          uiSink: extStore.uiSink({ life: this.life }),
         })
         // 记下注册表 + 清空 URL 缓存（旧缓存指向上一局的 blob）。
         // ⚠️ Map 必须 markRaw：Vue 会深度代理 Map 的**值**，而我们往里面存的是 Promise
         //    （代理 Promise 会让 `await` 拿到一个被包过的 thenable，行为不可预期）。
         this.assetRegistry = markRaw(assetRegistry)
         this.assetUrlCache = markRaw(new Map())
+        // 各 Mod 的界面桥（动作按钮的查找源；同样 markRaw）。
+        this.modUiBridges = markRaw(uiBridges || {})
         // 记运行信息（日志报告里能看到"这局跑了哪些 Mod"）。
         this.modsRuntime = { loaded: executed, errors }
         // 日志。
@@ -788,7 +803,11 @@ export const useGameStore = defineStore('game', {
     // @returns {{ok: boolean, message?: string}} 结果
     adjustAllocation(key, delta) {
       // 计算新值。
-      const newValue = this.allocation[key] + delta
+      // ⚠️ 键可能不属于内置四项：Mod 通过 `manifest.ui.properties` 声明的**额外可分配属性**
+      //    （2026-10 能力补齐 ③）走的是同一个 store。`this.allocation[key]` 为 undefined 时
+      //    必须先归一成 0，否则 `undefined + 1` = NaN 会一路写进开局分配。
+      const cur = Number.isFinite(this.allocation[key]) ? this.allocation[key] : 0
+      const newValue = cur + delta
       // 单属性边界 [0, max]。
       const [, max] = this.allocLimit
       // 超出单属性上限。

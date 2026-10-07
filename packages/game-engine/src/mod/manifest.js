@@ -13,11 +13,18 @@
  *     // === Mod 架构 v2（均可选；不写 = 与旧版逐位一致）===
  *     "targets": ["browser", "node"],          // 缺省 ["browser"]
  *     "entry": { "browser": "code.js", "node": "server.js" },
- *     "deterministic": false                    // 缺省由 targets 推导
+ *     "deterministic": false,                   // 缺省由 targets 推导
+ *     // === 界面扩展（2026-10 能力补齐 ③；schema 见 mod/ui-schema.js）===
+ *     "ui": {
+ *       "pages":      [{ "id": "...", "title": "...", "blocks": [...] }],
+ *       "panels":     [{ "id": "...", "slot": "home", "title": "...", "blocks": [...] }],
+ *       "properties": [{ "key": "LUCK", "label": "幸运" }],
+ *       "stats":      [{ "key": "RKEY", "label": "…", "kind": "count" }]
+ *     }
  *   }
  *
  * 功能：
- *   1. validateManifest：校验 manifest 合法/非法。
+ *   1. validateManifest：校验 manifest 合法/非法（含 `ui` 段，见 mod/ui-schema.js）。
  *   2. resolveOrder：拓扑排序（含循环依赖检测、缺失依赖报错）。
  *   3. 3 个取值助手（manifestTargets / manifestEntry / manifestDeterministic）：
  *      **默认值只在这里定义一次**，loader / 宿主桥 / consistency 全部从这里读，
@@ -41,6 +48,8 @@ export const DEFAULT_BROWSER_ENTRY = 'code.js'
 
 // 合法权限集合（共享常量）。
 import { VALID_PERMISSIONS } from './permissions.js'
+// 界面扩展的 schema 校验（2026-10 能力补齐 ③）：manifest.ui 的合法值/上限/唯一性都在那里。
+import { validateUiDeclaration } from './ui-schema.js'
 
 // #isSafeRelativePath
 // 判断 entry 里的文件名是否安全（不含路径穿越、不是绝对路径）。
@@ -197,6 +206,18 @@ export function validateManifest(manifest) {
         }
       }
     }
+  }
+  // === 界面扩展（2026-10 能力补齐 ③）===
+  // `ui` 存在就校验（schema 与上限见 mod/ui-schema.js），错误信息与上面几条同样是
+  // **可操作**的（例如 `ui.panels[0].slot "sidebar" 不是合法 slot（可用：home/mods/property/game/summary/settings）`）。
+  //
+  // 为什么不"新增字段就放过"：Mod 作者写错 slot 名/超上限时，表现是"面板不出现、也没有任何
+  // 提示"（最难查的一类问题）。这里直接让 manifest 校验失败，加载链路上就会报出来。
+  if (manifest.ui !== undefined) {
+    // 校验（错误逐条并入）。
+    const uiResult = validateUiDeclaration(manifest.ui)
+    // 逐条。
+    for (const e of uiResult.errors) errors.push(e)
   }
   // 返回结果。
   return { ok: errors.length === 0, errors }

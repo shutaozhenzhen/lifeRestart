@@ -21,6 +21,224 @@ import { createHostBridge, createDenyHost } from './host.js'
 import { createPropertyBridge, createUnavailablePropertyBridge } from './property-bridge.js'
 // 资源桥（Mod 包内二进制资源；2026-10 能力补齐 ②）。
 import { createAssetBridge, createUnavailableAssetBridge } from './asset-bridge.js'
+// 界面扩展的 schema 常量与空声明（2026-10 能力补齐 ③）。
+import { UI_SLOTS, UI_LIMITS, emptyUiDeclaration } from './ui-schema.js'
+
+// #UNAVAILABLE_UI_ERROR
+// 没有注入 `uiSink` 时，注册类调用的统一错误文案（**出声**：静默丢弃注册是最难查的问题）。
+const UNAVAILABLE_UI_ERROR = '当前宿主没有界面注册能力（gameAPI.ui 需要宿主注入 uiSink：浏览器侧由 executeModCodes 接 stores/extensions.js）。要让界面扩展在所有时段都能看到，请改用 manifest.ui 静态声明（启动时收集，不需要先开一局）。'
+
+// #createUiBridge
+// 造 `gameAPI.ui`（2026-10 能力补齐 ③：**Mod 能加界面**）。
+//
+// 这条能力以前是硬边界（`AGENTS.md` 边界 ①：没有页面/组件/路由/属性面板注册 API）。
+// 两种注册源的关系（**必须记住的差异**，文档里也写了）：
+//   · `manifest.ui`（静态声明）→ 应用**启动时**收集，主页 / Mod 管理页也看得到；
+//   · `gameAPI.ui.*`（运行期注册）→ `code.js` 执行时才可用（= 一局游戏已经建好），用于按条件显示。
+//   两者产物在前端**汇进同一个注册表**。
+//
+// 降级行为（与 `property` / `asset` / `storage` 同一风格）：
+//   · 没注入 `uiSink` → `available: false`；
+//   · 读操作（`list()` / `hasAction()`）给空 / false；
+//   · **注册操作抛可读错误**（不是静默丢弃 —— 那会表现成"界面里没有我加的东西，也没有任何提示"）；
+//   · `onAction` 仍可用（动作表在本地，点击时由前端渲染器调用），返回注销函数。
+//
+// @param {object} params
+// @param {object} [params.sink] - 宿主注册表（需有 `add(kind, item, modName)`；可选 `onAction` / `offAction`）
+// @param {string} [params.modName] - 来源 Mod 名（宿主据此知道是谁注册的）
+// @param {object} [params.log] - 日志器
+// @returns {object} gameAPI.ui
+export function createUiBridge({ sink, modName = 'anonymous', log } = {}) {
+  // 有没有注册能力（**先判断 available 再用**是本项目的既有约定）。
+  const hasSink = Boolean(sink && typeof sink === 'object')
+  // 本实例注册过的动作（id → 回调）；dispose 时清空。
+  const actions = new Map()
+  // 本实例成功注册过的声明（`list()` 用；降级时给空）。
+  const declared = emptyUiDeclaration()
+
+  // #push
+  // 把一条声明交给宿主（降级时抛可读错误）。
+  //
+  // @param {string} kind - 类别（pages/panels/properties/stats）
+  // @param {object} item - 规范化的条目
+  // @returns {object} 条目本身（便于链式使用）
+  function push(kind, item) {
+    // 降级：出声（抛可读错误）。
+    if (!hasSink || typeof sink.add !== 'function') throw new Error(UNAVAILABLE_UI_ERROR)
+    // 记进本地视图（便于 `list()` 与排障）。
+    declared[kind].push(item)
+    // 交给宿主（宿主内部做去重/上限，冲突规则见前端 utils/ui-extensions.js）。
+    sink.add(kind, item, modName)
+    // 返回条目。
+    return item
+  }
+
+  // #requireObject
+  // 校验注册内容是不是对象（形状错误**立即**抛可读错误，别塞进注册表里等到渲染时才炸）。
+  //
+  // @param {string} method - 方法名（错误信息定位用）
+  // @param {*} decl - 声明
+  // @returns {object} 声明本身
+  function requireObject(method, decl) {
+    // 必须是普通对象。
+    if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
+      // 抛可读错误。
+      throw new Error(`gameAPI.ui.${method} 的声明必须是对象（收到：${Array.isArray(decl) ? '数组' : typeof decl}）`)
+    }
+    // 返回。
+    return decl
+  }
+
+  // 返回门面。
+  return {
+    // 有没有界面注册能力（宿主没注入 sink 时为 false）。
+    available: hasSink,
+    // 合法 slot 白名单（Mod 作者可以据此在运行期自查，避免写错）。
+    slots: [...UI_SLOTS],
+    // 数量上限（超限由宿主/引擎 schema 报错）。
+    limits: { ...UI_LIMITS },
+
+    // #addPage：注册一个页面 → 路由 `/mods/page/:id`。
+    addPage(decl) {
+      // 形状。
+      requireObject('addPage', decl)
+      // 交给宿主。
+      return push('pages', { id: decl.id, title: decl.title, blocks: Array.isArray(decl.blocks) ? decl.blocks : [] })
+    },
+
+    // #addPanel：注册一个面板 → 插到指定 slot 的一张卡片。
+    addPanel(decl) {
+      // 形状。
+      requireObject('addPanel', decl)
+      // slot 白名单在这里也拦一道（作者能立刻看到"写错了"，而不是等宿主校验）。
+      if (!UI_SLOTS.includes(decl.slot)) {
+        // 抛可读错误（列出合法值）。
+        throw new Error(`gameAPI.ui.addPanel 的 slot "${decl.slot}" 不是合法 slot（可用：${UI_SLOTS.join('/')}）`)
+      }
+      // 交给宿主。
+      return push('panels', { id: decl.id, slot: decl.slot, title: decl.title, blocks: Array.isArray(decl.blocks) ? decl.blocks : [] })
+    },
+
+    // #addProperty：注册一个属性项 → 属性分配面板多一行。
+    // ⚠️ 只有该属性在**引擎参数注册表里真实存在**时界面才会渲染它（否则会显示成 NaN）——
+    //    通常要先 `gameAPI.param.define(key, { type: 'local', label: '…' })`。
+    addProperty(decl) {
+      // 形状。
+      requireObject('addProperty', decl)
+      // 交给宿主。
+      return push('properties', { key: decl.key, label: decl.label })
+    },
+
+    // #addStat：注册一个统计项 → 总结页统计多一项。
+    // ⚠️ 只有 key 在 `life.statistics` 里**真实存在**时界面才会渲染（否则跳过并记 warn）。
+    addStat(decl) {
+      // 形状。
+      requireObject('addStat', decl)
+      // 交给宿主（kind 缺省 count）。
+      return push('stats', { key: decl.key, label: decl.label, kind: decl.kind === 'ratio' ? 'ratio' : 'count' })
+    },
+
+    // #addStatistic：**真的产生一个统计键**（配合 `addStat` 用）。
+    //
+    // 为什么需要它：总结页只渲染"键真的出现在 `life.statistics` 里"的 Mod 统计声明
+    // （否则会渲染成一行永远的 `—`，界面干脆跳过并记 warn）。所以"Mod 加统计"要两步：
+    //   ① `gameAPI.ui.addStat({ key, label, kind })` —— 告诉界面怎么显示；
+    //   ② `gameAPI.ui.addStatistic(key, value, judge?)` —— 让引擎真的产生这个键。
+    //
+    // 内置键（TMS/CACHV/RACHV/RTLT/REVT）不允许覆盖（返回 false + 一条 warn）。
+    //
+    // @param {string} key - 统计键
+    // @param {number} value - 数值
+    // @param {string} [judge] - 评价键（如 J_Good）
+    // @returns {boolean} 是否登记成功；宿主没有该能力时抛可读错误
+    addStatistic(key, value, judge) {
+      // 降级：出声。
+      if (typeof sink?.addStatistic !== 'function') throw new Error(UNAVAILABLE_UI_ERROR)
+      // 交给宿主（宿主再转给 Life）。
+      return sink.addStatistic(key, value, judge)
+    },
+
+    // #list：本次注册过的声明（降级时给空）。
+    list() {
+      // 浅拷贝一层（别让调用方改到内层）。
+      return {
+        // 页面。
+        pages: declared.pages.map((x) => ({ ...x })),
+        // 面板。
+        panels: declared.panels.map((x) => ({ ...x })),
+        // 属性。
+        properties: declared.properties.map((x) => ({ ...x })),
+        // 统计。
+        stats: declared.stats.map((x) => ({ ...x })),
+      }
+    },
+
+    // #onAction：注册一个动作按钮的处理函数（配合块类型 `{ t: 'action', id, label }`）。
+    //
+    // 与 `on()` 不同：**动作表由需要它的那一侧持有**（浏览器侧是前端渲染器按 id 查找），
+    // 这里只保证"注册过就是可点、没注册就是禁用"。宿主若提供 `sink.onAction`，同时告知宿主。
+    //
+    // @param {string} id - 动作 id
+    // @param {Function} fn - 回调（payload = 动作块本身；可返回 Promise）
+    // @returns {Function} 注销函数（幂等）
+    onAction(id, fn) {
+      // 形状校验。
+      if (typeof id !== 'string' || id.length === 0) throw new Error('gameAPI.ui.onAction 的 id 必须是非空字符串')
+      // 回调校验。
+      if (typeof fn !== 'function') throw new Error('gameAPI.ui.onAction 的第二个参数必须是函数')
+      // 登记（同 id 覆盖：后注册者胜，与注册表合并规则一致）。
+      actions.set(id, fn)
+      // 告知宿主（可选能力；宿主没提供就只留在本地）。
+      try {
+        // 通知。
+        sink?.onAction?.(id, fn, modName)
+      } catch (e) {
+        // 宿主失败不影响本地登记（但出声）。
+        log?.warn?.(`[UI][mod-ui] 宿主的 onAction 注册失败（本地仍然有效）：${e?.message || e}`)
+      }
+      // 注销函数（幂等）。
+      return () => {
+        // 只删自己那一个（后注册者已经覆盖时不要误删）。
+        if (actions.get(id) === fn) actions.delete(id)
+        // 通知宿主。
+        try {
+          // 通知。
+          sink?.offAction?.(id, modName)
+        } catch {
+          // 忽略。
+        }
+      }
+    },
+
+    // #hasAction：某个动作 id 有没有注册过（渲染器据此决定按钮是否禁用）。
+    hasAction(id) {
+      // 判断。
+      return actions.has(id)
+    },
+
+    // #trigger：调用某个动作（渲染器点击时用；异常隔离由调用方负责，这里透传）。
+    trigger(id, payload) {
+      // 取回调。
+      const fn = actions.get(id)
+      // 没注册。
+      if (!fn) throw new Error(`gameAPI.ui：动作 ${id} 没有注册处理函数`)
+      // 调用（返回 Promise 时调用方 await）。
+      return fn(payload)
+    },
+
+    // #dispose：清掉本实例的动作表（幂等，返回清掉的动作数）。
+    // 注意：**已经交给宿主的界面声明不会因此消失**（宿主注册表由宿主管理）——
+    // 这是刻意的：页面/面板是"静态结构"，不像钩子那样一局一变。
+    dispose() {
+      // 数量。
+      const n = actions.size
+      // 清空。
+      actions.clear()
+      // 返回。
+      return n
+    },
+  }
+}
 
 // #createHookBus
 // 创建钩子总线：注册/触发/移除，支持执行顺序与异常隔离。
@@ -162,9 +380,12 @@ export function createHookBus() {
 //   缺省用降级桥（`available: false`、写操作报错）—— 见 `mod/property-bridge.js`
 // @param {object} [deps.asset] - **资源桥**（`createAssetBridge({ modName, listFiles, readBytes })`
 //   的结果）；缺省用降级桥（`available: false`、读操作报错）—— 见 `mod/asset-bridge.js`
+// @param {object} [deps.uiSink] - **界面注册表**（宿主注入；需有 `add(kind, item, modName)`，
+//   可选 `onAction` / `offAction`）。缺省 → `gameAPI.ui.available === false`、
+//   注册调用抛可读错误 —— 见 `createUiBridge`
 // @param {object} [deps.log] - 日志器
 // @returns {object} gameAPI
-export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, property, asset, storage, modName: _modName, log }) {
+export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, property, asset, storage, uiSink, modName: _modName, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, error: () => {} }
   // Mod 名（storage 命名空间 + 日志前缀用）。
@@ -195,6 +416,11 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, pro
   const assetBridge = asset
     ? (typeof asset.list === 'function' ? asset : createAssetBridge({ modName, ...asset }))
     : createUnavailableAssetBridge(modName)
+  // 界面桥（2026-10 能力补齐 ③）：把 `gameAPI.ui.*` 的注册交给宿主注册表（前端是
+  // stores/extensions.js）。没注入 → 降级桥（`available: false`，注册调用抛可读错误）。
+  //
+  // 历史：这个键**以前根本不存在** —— `AGENTS.md` 边界 ① 写着"不能加界面"。
+  const uiBridge = createUiBridge({ sink: uiSink, modName, log: logger })
   // 共享总线自检：属性变更通知是从 **Life 的总线**广播的（Property 由 Life 构造）。
   // 若调用方给 Life 传的不是这条总线，Mod 注册的 `propertyChange` 会**静默收不到**通知 ——
   // 这是很难查的一类问题，所以这里直接出声（不改语义：照样各用各的）。
@@ -363,6 +589,14 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, pro
     // 历史：以前这个键**不存在** —— zip 安装只收文本，二进制被丢弃并给警告；
     // 想用图片只能靠宿主桥 `fs` 读本地文件（见 `AGENTS.md` 边界 ④ 的旧写法）。
     asset: assetBridge,
+
+    // 界面扩展（**Mod 能加界面**，2026-10 能力补齐 ③）。
+    // 注入 `uiSink`（前端是 stores/extensions.js）→ `addPage/addPanel/addProperty/addStat`
+    // 真的出现在界面上；没注入 → `available: false`、注册调用**抛可读错误**（不静默丢弃）。
+    //
+    // ⚠️ 运行期注册只有"一局游戏已经建好"之后才可能发生（启动时不执行 code.js）。
+    //    要"所有时段都可见"就用 `manifest.ui` 静态声明（启动时收集）。
+    ui: uiBridge,
 
     // 天赋 CRUD。
     addTalent: (talent) => {

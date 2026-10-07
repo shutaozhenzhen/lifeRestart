@@ -125,6 +125,38 @@ describe('Mod 文档路由（顺序回归）', () => {
     expect(r2.currentRoute.value.name).toBe('mod-api')
   })
 
+  test('/mods/page/:id 命中 Mod 自定义页面（**也必须排在 /mods/:name 之前**）', async () => {
+    // 2026-10 能力补齐 ③：Mod 注册的页面走这条路由。
+    const r = createTestRouter('/mods/page/my-guide')
+    // 等导航完成。
+    await r.isReady()
+    // 命中 mod-page（不是 mod-detail）。
+    expect(r.currentRoute.value.name).toBe('mod-page')
+    // 参数还在（页面 id）。
+    expect(r.currentRoute.value.params.id).toBe('my-guide')
+  })
+
+  test('四条 /mods/* 路由各归各位（顺序回归：docs / api / page 都不会被 :name 吃掉）', async () => {
+    // 逐条核对（这一组是"路由顺序"这个坑的完整回归）。
+    const cases = [
+      ['/mods/docs', 'mod-docs'],
+      ['/mods/api', 'mod-api'],
+      ['/mods/page/abc', 'mod-page'],
+      ['/mods/lifeRestart-data', 'mod-detail'],
+      // 只写到 /mods 也仍然是管理页。
+      ['/mods', 'mods'],
+    ]
+    // 逐个。
+    for (const [path, name] of cases) {
+      // 建路由。
+      const r = createTestRouter(path)
+      // 等导航完成。
+      await r.isReady()
+      // 断言。
+      expect(r.currentRoute.value.name, `${path} 应命中 ${name}`).toBe(name)
+    }
+  })
+
   test('/mods/<目录名> 仍然命中 Mod 详情页（文档路由没有把它挤掉）', async () => {
     // Mod 详情。
     const r = createTestRouter('/mods/lifeRestart-data')

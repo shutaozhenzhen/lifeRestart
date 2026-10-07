@@ -10,6 +10,8 @@ import { useGameStore } from '../stores/game.js'
 import { loadGameData } from '../utils/game-data.js'
 // 重置本地数据（存档 / Mod 状态 / AI Key / 界面偏好 + 已安装 Mod）。
 import { resetAppData, resetSummary } from '../utils/reset-data.js'
+// Mod 面板（slot = home；Mod 通过 manifest.ui.panels / gameAPI.ui.addPanel 插入）。
+import ModPanels from '../components/ModPanels.vue'
 
 // 路由。
 const router = useRouter()
@@ -166,6 +168,10 @@ async function startGame() {
       <button class="btn ghost" @click="router.push('/mods')">Mod 管理</button>
       <button class="btn ghost" @click="router.push('/simulate')">模拟统计</button>
     </div>
+
+    <!-- Mod 面板（slot = home；2026-10 能力补齐 ③）：Mod 通过 manifest.ui.panels
+         或 gameAPI.ui.addPanel 往主页插卡片。没有声明时这个组件什么都不渲染。 -->
+    <ModPanels slot="home" />
 
     <!-- 重置数据（危险操作：两步确认；只清本应用自己的键，不做 localStorage.clear()） -->
     <div class="reset-zone">

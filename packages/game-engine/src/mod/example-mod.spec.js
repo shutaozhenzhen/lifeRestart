@@ -21,6 +21,9 @@ import { readFileSync, existsSync } from 'node:fs'
 import { createModLoader, scanMods } from './loader.js'
 import { createNodeSource } from './source-node.js'
 import { createGameAPI, createHookBus } from './gameapi.js'
+// manifest 校验与界面扩展取值助手（2026-10 能力补齐 ③）。
+import { validateManifest } from './manifest.js'
+import { manifestUi, uiPanels, uiPages, uiProperties, uiStats } from './ui-schema.js'
 // 资源桥（Mod 包内二进制资源；2026-10 能力补齐 ②）。
 import { createAssetBridge } from './asset-bridge.js'
 import { createParamRegistry } from '../params/param-registry.js'
@@ -187,7 +190,9 @@ describe('example-mod - code.js 执行与钩子', () => {
     expect(names).toContain('onEventRender')
     expect(names).toContain('propertyChange')
     // gameAPI.hooks() 是同一个视图。
-    expect(api.hooks().onYearAdvance).toBe(1)
+    // ⚠️ onYearAdvance 是 **2 个**回调：一个在 §2 演示逐岁注入，另一个在 §9 维护界面统计项
+    //    （2026-10 能力补齐 ③ 加的那一段）。
+    expect(api.hooks().onYearAdvance).toBe(2)
   })
 
   test('运行时增删数据：addTalent/addEvent/addAchievement 立即生效', () => {
@@ -357,6 +362,111 @@ describe('example-mod - code.js 执行与钩子', () => {
     hooks.emitSync('onTalentPoolGenerate', { pool }, { error: () => {}, debug: () => {} })
     // 只塞了一个。
     expect(pool.filter((t) => t.id === '90001').length).toBe(1)
+  })
+})
+
+describe('example-mod - 界面扩展（2026-10 能力补齐 ③）', () => {
+  // manifest / 代码。
+  let manifest
+  let code
+  let hooks
+  let data
+
+  beforeEach(async () => {
+    // 直接读 manifest（不必走加载器：本组只关心 ui 段）。
+    manifest = JSON.parse(readFileSync(join(MODS_DIR, 'example-mod', 'manifest.json'), 'utf8'))
+    // 加载（拿数据与代码）。
+    const loader = await createModLoader({ source: createNodeSource(MODS_DIR), only: ['lifeRestart-data', 'example-mod'] })
+    const r = await loader.loadAll()
+    data = r.data
+    code = r.codeList.find((c) => c.name === 'example-mod').code
+    hooks = createHookBus()
+  })
+
+  test('manifest.ui 通过校验，且规范化后四类都拿到了预期内容', () => {
+    // 校验（**示例 Mod 必须自己先过校验**：它是文档里让人照抄的样板）。
+    const result = validateManifest(manifest)
+    expect(result.errors).toEqual([])
+    expect(result.ok).toBe(true)
+    // 规范化。
+    const ui = manifestUi(manifest)
+    // 1 个页面 + 1 个面板 + 1 个属性 + 1 个统计。
+    expect(ui.pages).toHaveLength(1)
+    expect(ui.pages[0].id).toBe('example-guide')
+    expect(ui.pages[0].title).toBe('示例 Mod 的页面')
+    // 块真的是数组，且块类型都在渲染器支持的那几种里（写错会显示"未知内容块类型"）。
+    const blockTypes = ui.pages[0].blocks.map((b) => b.t)
+    expect(blockTypes.length).toBeGreaterThan(0)
+    for (const t of blockTypes) expect(['p', 'sub', 'note', 'list', 'table', 'code', 'link', 'api', 'action']).toContain(t)
+    // 面板：slot 在白名单里 + 有标题。
+    expect(ui.panels).toHaveLength(1)
+    expect(ui.panels[0]).toMatchObject({ id: 'example-home', slot: 'home' })
+    expect(ui.panels[0].blocks.length).toBeGreaterThan(0)
+    // 属性项（key = 内置的 CHR；`addProperty` 对已存在属性是幂等注册 —— 界面不重复加行）。
+    expect(ui.properties).toEqual([{ key: 'CHR', label: '颜值' }])
+    // 统计项：kind 缺省补齐成 count。
+    expect(ui.stats).toEqual([{ key: 'EXAMPLE_YEARS', label: '示例 · 走过的年头', kind: 'count' }])
+    // 取值助手（与 getTargets/getEntry 同样的风格）。
+    expect(uiPanels(manifest)).toHaveLength(1)
+    expect(uiPages(manifest)[0].id).toBe('example-guide')
+    expect(uiProperties(manifest)).toHaveLength(1)
+    expect(uiStats(manifest)).toHaveLength(1)
+  })
+
+  test('没有注入 uiSink（= CLI 这类宿主）：available 为 false，注册调用抛可读错误', () => {
+    // 执行 code.js（不注入 uiSink）。
+    const api = createGameAPI({ data, hooks, params: createParamRegistry({ data: {}, storage: memoryStorage() }) })
+    // 不抛（示例代码有 available 守卫）。
+    expect(() => new Function('gameAPI', 'require', '"use strict";\n' + code)(api, () => {})).not.toThrow()
+    // 能力探测：明确不可用（而不是"看着能用、实际什么都没发生"）。
+    expect(api.ui.available).toBe(false)
+    // 注册调用抛**可读错误**（消息里说清了怎么办）。
+    expect(() => api.ui.addPanel({ id: 'x', slot: 'home', title: 'x', blocks: [] })).toThrow(/界面注册能力/)
+    expect(() => api.ui.addPanel({ id: 'x', slot: 'home', title: 'x', blocks: [] })).toThrow(/manifest\.ui/)
+    // 读操作是安全的。
+    expect(api.ui.list().panels).toEqual([])
+    // 动作表由桥自己持有 → onAction 在没有 sink 时**也能注册**（界面侧另有渲染器按 id 查）。
+    const off = api.ui.onAction('act', () => {})
+    expect(api.ui.hasAction('act')).toBe(true)
+    // 注销后不可点。
+    off()
+    expect(api.ui.hasAction('act')).toBe(false)
+  })
+
+  test('注入 uiSink 后：示例 Mod 的**运行期注册**真的落到宿主（1 面板 + 1 统计 + 1 动作）', () => {
+    // 宿主注册表替身。
+    const added = []
+    const stats = []
+    // sink（与 stores/extensions.js 同形）。
+    const sink = {
+      // 收声明。
+      add: (kind, item, mod) => { added.push({ kind, item, mod }) },
+      // 收统计键（转给 Life 的形态）。
+      addStatistic: (key, value) => { stats.push([key, value]); return true },
+    }
+    // 执行 code.js。
+    const api = createGameAPI({ data, hooks, params: createParamRegistry({ data: {}, storage: memoryStorage() }), uiSink: sink, modName: 'example-mod' })
+    new Function('gameAPI', 'require', '"use strict";\n' + code)(api, () => {})
+    // available 为 true。
+    expect(api.ui.available).toBe(true)
+    // 运行期注册了一个 summary 面板（**刻意用已挂载的 slot**，这样启用示例 Mod 后总结页真的能看到）。
+    const panel = added.find((x) => x.kind === 'panels')
+    expect(panel).toBeTruthy()
+    expect(panel.item).toMatchObject({ id: 'example-runtime-panel', slot: 'summary' })
+    expect(panel.mod).toBe('example-mod')
+    // 面板里有一个动作块（注册过 → 可点）。
+    expect(panel.item.blocks.some((b) => b.t === 'action' && b.id === 'example-hello')).toBe(true)
+    // 动作注册到了本地桥（界面渲染器据此决定按钮可点/禁用）。
+    expect(api.ui.hasAction('example-hello')).toBe(true)
+    // 统计：addStatistic（引擎产生键）+ addStat（界面怎么显示）两步都发生了。
+    expect(stats).toContainEqual(['EXAMPLE_YEARS', 0])
+    const statDecl = added.find((x) => x.kind === 'stats')
+    expect(statDecl.item).toMatchObject({ key: 'EXAMPLE_YEARS', label: '示例 · 走过的年头', kind: 'count' })
+    // 逐年维护那个统计项：推一年 → 值变 1。
+    hooks.emitSync('onYearAdvance', { age: 1, content: [], isEnd: false })
+    expect(stats).toContainEqual(['EXAMPLE_YEARS', 1])
+    // 非法 slot 会被桥拦下（可读错误，而不是静默不显示）。
+    expect(() => api.ui.addPanel({ id: 'bad', slot: 'sidebar', title: 'x', blocks: [] })).toThrow(/不是合法 slot/)
   })
 })
 

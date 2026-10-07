@@ -98,13 +98,14 @@ export const MOD_GUIDE = {
           t: 'table',
           head: ['能做', '不能做'],
           rows: [
-            ['**加/改数据**：天赋、事件、成就、名人、年龄表（后加载覆盖先加载）', '**加界面**：没有页面/组件/路由/面板注册 API（唯一例外：轨迹文本里的 `{{asset:路径}}` 会渲染成图片，见 §10）'],
-            ['挂**钩子**：抽卡池、每一年、事件文本渲染，以及**观察任何属性变化**（`propertyChange`，带 `source` 区分来源）', '**异步介入逐岁流程**：`life.next()` 是同步的'],
-            ['**注册新参数**：条件里立刻能用的 `params.XXX`', '**私有仓库 / 任意 URL 安装**：只支持 zip 与 GitHub 公开仓库'],
-            ['**带资源文件**：包里放图片 / 音频 / 字体（`assets/`），用 `gameAPI.asset` 读出来（2026-10 起）', '**Mod 之间没有正式 API**：只能自定义钩子名互发消息，或共享 `gameAPI.data`'],
-            ['**运行期改数据**：`addTalent` / `addEvent` / `addAchievement` 等', '**发布到应用商店/被审核**：没有中心化分发，也没有访问控制'],
-            ['**改游戏属性**：`gameAPI.property.change/set/effect` 直接读写真实属性（2026-10 起）', '**加音频/动画的系统级能力**：资源能读出来，但播放要自己在浏览器里做（没有音频通道 API）'],
-            ['**调用 AI**（需用户配 Key）与**本 Mod 的后端**（需 `server.js`）', '**超 8 MB 的单个资源 / 超 32 MB 的整包**：会被跳过（不是拒绝安装）'],
+            ['**加/改数据**：天赋、事件、成就、名人、年龄表（后加载覆盖先加载）', '**异步介入逐岁流程**：`life.next()` 是同步的'],
+            ['**加界面**（2026-10 起，见 §14）：页面（`/mods/page/:id`）、面板卡片（插到 home / mods / property / game / summary / settings 六个 slot）、属性分配面板多一行、总结页统计多一项', '**私有仓库 / 任意 URL 安装**：只支持 zip 与 GitHub 公开仓库'],
+            ['挂**钩子**：抽卡池、每一年、事件文本渲染，以及**观察任何属性变化**（`propertyChange`，带 `source` 区分来源）', '**Mod 之间没有正式 API**：只能自定义钩子名互发消息，或共享 `gameAPI.data`'],
+            ['**注册新参数**：条件里立刻能用的 `params.XXX`', '**发布到应用商店/被审核**：没有中心化分发，也没有访问控制'],
+            ['**带资源文件**：包里放图片 / 音频 / 字体（`assets/`），用 `gameAPI.asset` 读出来（2026-10 起）', '**加音频/动画的系统级能力**：资源能读出来，但播放要自己在浏览器里做（没有音频通道 API）'],
+            ['**运行期改数据**：`addTalent` / `addEvent` / `addAchievement` 等', '**往任意位置插组件**：只有下面这四种扩展点与六个 slot，没有通用 DOM/组件注册'],
+            ['**改游戏属性**：`gameAPI.property.change/set/effect` 直接读写真实属性（2026-10 起）', '**超 8 MB 的单个资源 / 超 32 MB 的整包**：会被跳过（不是拒绝安装）'],
+            ['**调用 AI**（需用户配 Key）与**本 Mod 的后端**（需 `server.js`）', '**还没挂界面的 slot**：`game` / `settings` 两个 slot 能校验、能注册，但页面上暂时没有挂载点（见 §14 的"哪些 slot 真的挂了"）'],
           ],
         },
         {
@@ -136,6 +137,7 @@ export const MOD_GUIDE = {
             ['`deterministic`', 'boolean', '否', '由 targets 推导', '声明"行为可复现"。**目前只有界面/文档在用**（consistency 尚未消费）'],
             ['`modules`', 'object', '否', '`{}`', '运行时依赖：`{ 模块名: 包内相对路径 }`，见第 10 节'],
             ['`ai`', 'object', '否', '—', '**引擎从不读取**（历史字段）。AI 配置实际来自用户设置页 / CLI 环境变量'],
+            ['`ui`', 'object', '否', '—', '**界面扩展**（2026-10 起）：`{ pages, panels, properties, stats }` 四类，每类 ≤ 8 项，见 §14。**写错会拒绝加载**（未知 slot、超上限、同 Mod 重复 id 都是硬错误）'],
           ],
         },
         {
@@ -172,6 +174,12 @@ targets 必须是数组 / targets 不能是空数组（缺省为 ["browser"]） 
 entry 必须是对象 / entry 含未知目标键: web（合法键：browser / node） / entry.node 必须是不含路径穿越的相对文件名
 deterministic 必须是布尔值
 modules 必须是对象（{ 模块名: 相对路径 }） / modules.fflate 必须是不含路径穿越的相对路径
+ui 必须是对象（{ pages, panels, properties, stats }） / ui 含未知字段: page（支持：pages / panels / properties / stats）
+ui.panels[0].slot "sidebar" 不是合法 slot（可用：home/mods/property/game/summary/settings）
+ui.pages[0].title 必须是非空字符串（页面要有个标题）
+ui.pages[0].blocks 必须是非空的内容块数组（块类型见文档页：p/sub/note/list/table/code/link/api/action）
+ui.stats[0].kind "percent" 不是合法类型（可用：count/ratio）
+ui.pages 最多 8 项（当前 9 项） / ui.pages[1].id "p1" 与前面某个扩展项重复（id 在同一个 Mod 内必须唯一）
 
 （外层还会包一层：Mod X manifest 非法: <上面若干条用 "; " 连接>）`,
         },
@@ -703,6 +711,175 @@ gameAPI.on('onYearAdvance', (p) => {
       ],
     },
 
+    // ---------- 界面扩展 ----------
+    {
+      id: 'ui',
+      title: '14. 加界面：四种扩展点（2026-10 起）',
+      blocks: [
+        {
+          t: 'p',
+          text: 'Mod 可以让界面上多出东西，一共**四种扩展点**（没有第五种，也没有通用的"插一个组件到任意位置"）。内容一律用**文档页那套块类型**渲染：`p`（段落）/ `sub`（小标题）/ `note`（提示条）/ `list`（列表）/ `table`（表格）/ `code`（带复制按钮的代码块）/ `link`（站内链接）/ `api`（API 条目）/ `action`（动作按钮）。',
+        },
+        {
+          t: 'table',
+          head: ['扩展点', '声明', '效果'],
+          rows: [
+            ['`pages`', '`[{ id, title, blocks }]`', '多出一个页面 `/mods/page/<id>`（深链可用、可分享）'],
+            ['`panels`', '`[{ id, slot, title, blocks }]`', '往某个 slot 插一张卡片（标题 + 内容块 + 来源 Mod 名）'],
+            ['`properties`', '`[{ key, label }]`', '属性分配面板多一行（`key` 必须先是引擎里真实的参数）'],
+            ['`stats`', '`[{ key, label, kind }]`', '总结页「收集统计」多一项（`kind` = `count` 或 `ratio`）'],
+          ],
+        },
+        {
+          t: 'sub',
+          text: '两种注册源：manifest（启动即可见）vs 运行期（开局后可见）',
+        },
+        {
+          t: 'table',
+          head: ['', '`manifest.ui`（静态声明）', '`gameAPI.ui.*`（运行期注册）'],
+          rows: [
+            ['什么时候生效', '应用**启动时**收集（不需要先开一局）', '`code.js` 执行时（= 一局游戏已经建好）'],
+            ['主页 / Mod 管理页看得到吗', '**看得到**', '看不到（那时还没有 code.js 执行过）'],
+            ['换一局会怎样', '不变（它来自 manifest）', '**每局重来**（注册发生在那一局的 code.js 里）'],
+            ['典型用途', '固定页面与说明卡片', '按条件显示（例如"今年属性达标才多一块提示"）'],
+            ['产物去哪', '两者**汇进同一张注册表**（同 id 时后注册者胜）', '同左'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '**为什么启动时不执行 `code.js`**：它需要 Life（`param.define` 要参数注册表），而且重复执行会让钩子与数据重复注册。所以"manifest 写的"与"code.js 里注册的"天然有上面这条差异 —— 想要**任何时段都可见**，就写在 manifest 里。',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          label: 'manifest.json：1 个页面 + 1 个首页面板 + 1 个属性 + 1 个统计',
+          code: `{
+  "name": "my-mod",
+  "version": "1.0.0",
+  "ui": {
+    "pages": [
+      {
+        "id": "guide",
+        "title": "我的指南",
+        "blocks": [
+          { "t": "p", "text": "这一页是 Mod 加的。" },
+          { "t": "note", "kind": "tip", "text": "块类型与文档页完全一样。" }
+        ]
+      }
+    ],
+    "panels": [
+      { "id": "hello", "slot": "home", "title": "来自我的 Mod", "blocks": [{ "t": "p", "text": "你好" }] }
+    ],
+    "properties": [{ "key": "LUCK", "label": "幸运" }],
+    "stats": [{ "key": "MY_YEARS", "label": "走过的年头", "kind": "count" }]
+  }
+}`,
+        },
+        {
+          t: 'code',
+          lang: 'js',
+          label: 'code.js：运行期注册（按条件显示）',
+          code: `// ⚠️ 先判断 available：CLI 之类的宿主没有界面注册能力（注册调用会抛可读错误）
+if (gameAPI.ui.available) {
+  gameAPI.ui.addPanel({
+    id: 'runtime-panel',
+    slot: 'game',                       // 六个合法 slot 之一
+    title: '运行期加的面板',
+    blocks: [{ t: 'p', text: '这一局才有的内容' }],
+  })
+
+  // 属性面板多一行：**先注册参数**，否则界面不会显示它（见下）
+  gameAPI.param.define('LUCK', { type: 'local', label: '幸运' })
+  gameAPI.ui.addProperty({ key: 'LUCK', label: '幸运' })
+
+  // 统计项：**两步** —— 先让引擎产生这个键，再告诉界面怎么显示。
+  // 顺序反了也能显示，但键不存在时总结页会跳过它（并记一条 warn）。
+  gameAPI.ui.addStatistic('MY_YEARS', 0)
+  gameAPI.ui.addStat({ key: 'MY_YEARS', label: '走过的年头', kind: 'count' })
+}
+
+// 动作按钮：块里写 { t: 'action', id, label }，这里注册处理函数。
+// 没注册的按钮在界面上是**禁用**的，并给出可读提示（不是"点了没反应"）。
+if (gameAPI.ui.available) {
+  gameAPI.ui.onAction('roll', (block) => {
+    gameAPI.log.info('点了动作按钮：', block.id)
+  })
+}`,
+        },
+        {
+          t: 'sub',
+          text: '六个 slot 里，哪些**真的挂了界面**（如实说）',
+        },
+        {
+          t: 'table',
+          head: ['slot', '页面', '状态'],
+          rows: [
+            ['`home`', '主页 `/`', '**已挂**'],
+            ['`mods`', 'Mod 管理页 `/mods`', '**已挂**'],
+            ['`property`', '属性分配页 `/property`', '**已挂**'],
+            ['`summary`', '人生总结页 `/summary`', '**已挂**'],
+            ['`game`', '人生轨迹页 `/game`', '能校验、能注册，但**页面上暂时没有挂载点**（面板不会出现）'],
+            ['`settings`', '设置页 `/settings`', '同上'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'info',
+          text: '上表是"当前实情"，不是承诺：六个 slot 全部**能校验、能注册**，界面按需逐个挂载（以后挂 `game`/`settings` 不需要改 manifest schema）。',
+        },
+        {
+          t: 'sub',
+          text: '两条硬要求（不满足时界面**不会显示**它，而不是显示成一行 NaN）',
+        },
+        {
+          t: 'list',
+          items: [
+            '**属性**：`key` 必须先在引擎里存在（通常 `gameAPI.param.define(key, { type: \'local\', label: \'…\' })`）。属性面板是"分配"语义，分配一个引擎不认识的键会得到 `NaN` —— 所以拿不到就**不渲染，并记一条 warn**（日志面板里能看到）',
+            '**统计**：`key` 必须真的出现在 `life.statistics` 里 —— 用 `gameAPI.ui.addStatistic(key, value, judge?)` 让引擎产生它，再用 `gameAPI.ui.addStat({ key, label, kind })` 告诉界面怎么显示。缺了第一步 → 总结页**跳过它并记 warn**（不会留一行永远显示 `—`）',
+          ],
+        },
+        {
+          t: 'sub',
+          text: '上限与错误行为（**超限/写错是硬错误**，不是静默忽略）',
+        },
+        {
+          t: 'table',
+          head: ['项', '限制', '违反时'],
+          rows: [
+            ['每类扩展点', '≤ 8 项', '`ui.panels 最多 8 项（当前 9 项）` → **manifest 校验失败**，Mod 不加载'],
+            ['单个页面/面板的块数', '≤ 64 块', '同上'],
+            ['`slot`', '六个白名单值', '`ui.panels[0].slot "sidebar" 不是合法 slot（可用：home/mods/property/game/summary/settings）`'],
+            ['`id` / `key`', '同一个 Mod 内唯一', '`ui.pages[1].id "p1" 与前面某个扩展项重复（id 在同一个 Mod 内必须唯一）`'],
+            ['跨 Mod 同 id', '—', '**后加载者胜**（与数据合并语义一致）；重复会记一条 warn'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '**为什么写错 slot 要报错而不是忽略**：忽略的表现是"面板没出现，也没有任何提示"——这是最难查的一类问题。写错就报出来，并且在日志面板里能看到。',
+        },
+        {
+          t: 'sub',
+          text: '动作按钮（`{ t: \'action\', id, label }`）',
+        },
+        {
+          t: 'list',
+          items: [
+            '块里写 `{ t: \'action\', id: \'roll\', label: \'点我\' }` → 渲染成一个按钮',
+            '`gameAPI.ui.onAction(\'roll\', fn)` 注册过 → 点击调用（**异步、异常隔离**：回调抛错只记一条日志，不会炸页面）',
+            '**没注册过 → 按钮禁用**并显示"未注册的动作：roll（Mod 需在 code.js 里 gameAPI.ui.onAction 注册）"',
+            '动作是**运行期**能力：manifest 里的静态声明在启动时就渲染，那时还没人注册 → 按钮是禁用的（正确表现）',
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '未知块类型仍然会**显式显示**成 `⚠ 未知内容块类型：xxx`（与文档页同一行为）——所以块类型写错时你在页面上就能看见，而不是少了一段。',
+        },
+      ],
+    },
+
     // ---------- 自检清单 ----------
     {
       id: 'checklist',
@@ -722,6 +899,9 @@ gameAPI.on('onYearAdvance', (p) => {
             '成就与名人条目自带 `id`；名人的 `talent` 是数组',
             '依赖放 `vendor/` 单文件并在 `manifest.modules` 登记（没带 `node_modules/`）',
             '带了资源（图片/音频/字体）→ 放在包内相对路径下（约定 `assets/`），并用 `gameAPI.asset` 读；单个 ≤ 8 MB、整包 ≤ 32 MB',
+            '加了界面（`manifest.ui`）→ 每类 ≤ 8 项、`slot` 只在六个白名单值里、同 Mod 内 id 唯一；属性/统计的 key 必须在引擎侧真实存在（否则界面会跳过它并记 warn）',
+            '界面里要用动作按钮 → 在 `code.js` 里 `gameAPI.ui.onAction(id, fn)` 注册（没注册的按钮是禁用的）',
+            '加了**统计项** → 先用 `gameAPI.ui.addStatistic` 让引擎产生那个键，再 `addStat` 声明显示方式（少了第一步 → 总结页跳过并记 warn）',
             '在页面里真跑了一局，确认数据与轨迹都对（不是只看"能加载"）',
             '有条件就加一条测试：跑一局断言你的数据/钩子真的生效（例：`example-mod.spec.js`）',
           ],

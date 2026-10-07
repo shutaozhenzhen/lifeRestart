@@ -14,6 +14,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import SummaryView from './SummaryView.vue'
 import { useGameStore } from '../stores/game.js'
+import { useExtensionsStore } from '../stores/extensions.js'
 import { resetApp, mountView, stubFetchOk, buildFixtureData } from '../test-utils/setup.js'
 
 // 每个用例前重置。
@@ -231,5 +232,80 @@ describe('SummaryView', () => {
     expect(store.history).toEqual([])
     // 回到天赋页（同种子下抽卡顺序与上一局一致）。
     expect(router.currentRoute.value.path).toBe('/talent')
+  })
+})
+
+describe('SummaryView - Mod 声明的统计项（2026-10 能力补齐 ③）', () => {
+  // 每个用例前清掉外部统计登记（模块级状态，避免用例之间串味）。
+  beforeEach(async () => {
+    // 动态导入（保持文件顶部 import 最小）。
+    const mod = await import('../utils/statistics-view.js')
+    // 清。
+    mod.clearExternalStatistics()
+  })
+
+  test('key 在 life.statistics 里真实存在 → 多出一项（用 Mod 给的标签与 kind）', async () => {
+    // 造一局。
+    const store = await playedStore()
+    // 引擎侧**真的产生**两个统计键（Mod 走 `gameAPI.ui.addStatistic` → `Life.addStatistic`）。
+    store.life.addStatistic('MCOUNT', 3, 'J_Normal')
+    store.life.addStatistic('MRATIO', 0.5, 'J_Normal')
+    // Mod 声明两项（count + ratio）。
+    const ext = useExtensionsStore()
+    ext.base = {
+      pages: [],
+      panels: [],
+      properties: [],
+      stats: [
+        { key: 'MCOUNT', label: '我的计数', kind: 'count', mod: 'my-mod' },
+        { key: 'MRATIO', label: '我的比率', kind: 'ratio', mod: 'my-mod' },
+      ],
+    }
+    ext.rebuild()
+    // 挂载。
+    const { wrapper } = mountView(SummaryView)
+    await flushPromises()
+    // 统计区。
+    const statsText = wrapper.find('.statistics').text()
+    // 两项都渲染，且用 Mod 的标签。
+    expect(statsText).toContain('我的计数')
+    expect(statsText).toContain('我的比率')
+    // 3 原样；0.5 → 50.0%。
+    expect(statsText).toContain('3')
+    expect(statsText).toContain('50.0%')
+    // 没有 warn。
+    expect(store.logBuffer.join('\n')).not.toContain('不在 life.statistics 里')
+  })
+
+  test('key 不在 life.statistics 里 → 跳过并记 warn（不留一行永远显示 —）', async () => {
+    // 造一局。
+    const store = await playedStore()
+    // Mod 声明一个引擎不会产生的键。
+    const ext = useExtensionsStore()
+    ext.base = { pages: [], panels: [], properties: [], stats: [{ key: 'GHOST', label: '幽灵统计', kind: 'count', mod: 'my-mod' }] }
+    ext.rebuild()
+    // 挂载。
+    const { wrapper } = mountView(SummaryView)
+    await flushPromises()
+    // 没渲染。
+    expect(wrapper.find('.statistics').text()).not.toContain('幽灵统计')
+    // 有 warn（点名了键与 Mod）。
+    const logs = store.logBuffer.join('\n')
+    expect(logs).toContain('GHOST')
+    expect(logs).toContain('my-mod')
+  })
+
+  test('没有 Mod 声明时统计区不变，且不渲染 summary slot 的空壳', async () => {
+    // 造一局。
+    await playedStore()
+    // 挂载。
+    const { wrapper } = mountView(SummaryView)
+    await flushPromises()
+    // 原有四项还在。
+    const statsText = wrapper.find('.statistics').text()
+    expect(statsText).toContain('成就达成数')
+    expect(statsText).toContain('事件收集率')
+    // 没有 Mod 面板容器。
+    expect(wrapper.find('.mod-panels').exists()).toBe(false)
   })
 })

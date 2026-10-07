@@ -28,6 +28,62 @@ export const STATISTICS_VIEW = {
   REVT: { label: '事件收集率', kind: 'ratio' },
 }
 
+// #EXTERNAL_STATISTICS
+// **外部登记**（2026-10 能力补齐 ③：Mod 通过 `manifest.ui.stats` / `gameAPI.ui.addStat`
+// 声明自己的统计项）。键 → 展示定义，与内置的 STATISTICS_VIEW 同形。
+//
+// ⚠️ 与内置表分开存：内置表是"引擎统计项 ↔ 界面"的**编译期契约**（有覆盖性守卫），
+//    外部登记是**运行期**来的，混进 STATISTICS_VIEW 会让那条守卫失去意义（它核对的
+//    应该是"引擎有哪些键"，不是"这一局注册了哪些键"）。
+const EXTERNAL_STATISTICS = {}
+
+// #registerExternalStatistics
+// 登记一批外部统计项（幂等；重复登记同 key 以后者为准）。
+//
+// 只有 Mod 声明的 key 在 `life.statistics` 里**真实存在**时才该调这里（SummaryView 负责
+// 这个判断并给出 warn）—— 否则页面上会出现一行永远显示 `—` 的假统计。
+//
+// @param {Array<{key: string, label: string, kind?: string}>} items - 声明项
+// @returns {number} 实际登记的条数
+export function registerExternalStatistics(items = []) {
+  // 计数。
+  let n = 0
+  // 逐项。
+  for (const item of items || []) {
+    // 形状/键非法跳过（不抛：运行期数据不该让总结页崩）。
+    if (!item || typeof item.key !== 'string' || item.key.length === 0) continue
+    // 标签（缺失退回键名，与内部登记一致）。
+    const label = typeof item.label === 'string' && item.label.length > 0 ? item.label : item.key
+    // kind 白名单（缺省 count）。
+    const kind = item.kind === 'ratio' ? 'ratio' : 'count'
+    // 登记。
+    EXTERNAL_STATISTICS[item.key] = { label, kind }
+    // 计数。
+    n++
+  }
+  // 返回。
+  return n
+}
+
+// #clearExternalStatistics
+// 清掉全部外部登记（重开一局 / 测试用）。
+//
+// @returns {void}
+export function clearExternalStatistics() {
+  // 清。
+  for (const key of Object.keys(EXTERNAL_STATISTICS)) delete EXTERNAL_STATISTICS[key]
+}
+
+// #statisticsDef
+// 取某个键的展示定义（内置优先；内置没有则看外部登记）。
+//
+// @param {string} key - 统计键
+// @returns {object|undefined} 定义
+function statisticsDef(key) {
+  // 内置优先（引擎自己的统计项永远是权威定义）。
+  return STATISTICS_VIEW[key] || EXTERNAL_STATISTICS[key]
+}
+
 // #statisticsLabel
 // 取中文标签（未登记的键原样返回，并会被覆盖性测试拦住）。
 //
@@ -35,17 +91,18 @@ export const STATISTICS_VIEW = {
 // @returns {string} 标签
 export function statisticsLabel(key) {
   // 已登记用标签，否则回退键名。
-  return STATISTICS_VIEW[key]?.label || key
+  return statisticsDef(key)?.label || key
 }
 
 // #isKnownStatistic
-// 是否已登记展示定义。
+// 是否已登记展示定义（内置或外部）。
 //
 // @param {string} key - 统计键
 // @returns {boolean} 是否登记
 export function isKnownStatistic(key) {
   // 判断。
   return Object.prototype.hasOwnProperty.call(STATISTICS_VIEW, key)
+    || Object.prototype.hasOwnProperty.call(EXTERNAL_STATISTICS, key)
 }
 
 // #formatStatistic
@@ -59,8 +116,8 @@ export function isKnownStatistic(key) {
 export function formatStatistic(key, item, { totalAchievements } = {}) {
   // 缺项。
   if (!item) return '—'
-  // 定义。
-  const def = STATISTICS_VIEW[key]
+  // 定义（内置优先，其次外部登记 —— 见 statisticsDef）。
+  const def = statisticsDef(key)
   // 比率 → 百分比（一位小数）。
   if (def?.kind === 'ratio') return `${(Number(item.value || 0) * 100).toFixed(1)}%`
   // 成就达成数：有总数就显示 n / 总（比单看一个数字有用）。
@@ -78,7 +135,7 @@ export function formatStatistic(key, item, { totalAchievements } = {}) {
 export function visibleStatistics(statistics, options = {}) {
   // 逐项。
   return Object.entries(statistics || {})
-    // 跳过页头已展示的项。
+    // 跳过页头已展示的项（内置表里的 hidden；外部登记没有 hidden 这个概念）。
     .filter(([key]) => !STATISTICS_VIEW[key]?.hidden)
     // 转成展示行。
     .map(([key, item]) => ({

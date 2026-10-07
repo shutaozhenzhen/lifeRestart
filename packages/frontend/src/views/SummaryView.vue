@@ -16,12 +16,18 @@ import { loadLocale, t } from 'game-engine/src/i18n/index.js'
 // 复制文本（剪贴板 API + 回退）。
 import { copyText } from '../utils/log-export.js'
 // 统计项的标签与格式化（集中定义，见该模块头部说明：RACHV 曾因两份手写清单漏配而裸展示）。
-import { visibleStatistics } from '../utils/statistics-view.js'
+import { visibleStatistics, registerExternalStatistics } from '../utils/statistics-view.js'
+// 扩展注册表（Mod 声明的统计项；2026-10 能力补齐 ③）。
+import { useExtensionsStore } from '../stores/extensions.js'
+// Mod 面板（slot = summary）。
+import ModPanels from '../components/ModPanels.vue'
 
 // 路由。
 const router = useRouter()
 // 游戏 store。
 const store = useGameStore()
+// 扩展注册表。
+const ext = useExtensionsStore()
 
 // 总结数据（各属性分档评价）。
 const summary = ref({})
@@ -79,6 +85,27 @@ onMounted(() => {
   achievements.value = store.life.achievements || []
   // 统计信息。
   statistics.value = store.life.statistics || {}
+  // Mod 声明的统计项（2026-10 能力补齐 ③）：**只有 key 在 life.statistics 里真实存在**才登记渲染，
+  // 否则记一条 warn 并跳过（否则页面上会出现一行永远是 `—` 的假统计）。
+  const stats = statistics.value
+  // 能渲染的。
+  const usable = []
+  // 逐个声明项。
+  for (const item of ext.merged.stats) {
+    // 形状。
+    if (!item || typeof item.key !== 'string') continue
+    // 引擎里真的统计了这个键吗。
+    if (Object.prototype.hasOwnProperty.call(stats, item.key)) {
+      // 收下。
+      usable.push(item)
+      // 下一个。
+      continue
+    }
+    // 出声（Mod 作者排障的第一手信息）。
+    store.pushLog('warn', `[UI][mod-ui] Mod 统计项「${item.label || item.key}」（${item.key}，来自 Mod ${item.mod || '?'}）不在 life.statistics 里，总结页不显示它（引擎侧要先产生这个统计键）`)
+  }
+  // 登记（visibleStatistics 会用它格式化）。
+  registerExternalStatistics(usable)
 })
 
 // 重开次数（引擎 TMS：storage 持久化，跨局累积）。
@@ -182,6 +209,9 @@ async function copySeed() {
       <button class="btn primary" @click="remake">↻ 重开</button>
       <button class="btn" @click="router.push('/')">回主页</button>
     </div>
+
+    <!-- Mod 面板（slot = summary；2026-10 能力补齐 ③）。没有声明时什么都不渲染。 -->
+    <ModPanels slot="summary" />
   </div>
 </template>
 

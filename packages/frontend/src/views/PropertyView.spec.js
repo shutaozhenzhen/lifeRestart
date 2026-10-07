@@ -17,7 +17,22 @@ import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import PropertyView from './PropertyView.vue'
 import { useGameStore } from '../stores/game.js'
+import { useExtensionsStore } from '../stores/extensions.js'
 import { resetApp, mountView, stubFetchOk, buildFixtureData } from '../test-utils/setup.js'
+
+// #fillModProperties
+// 往扩展注册表里塞一个 Mod 声明的属性项（等价于 manifest.ui.properties 被装载之后）。
+//
+// @param {object} decl - { key, label }
+// @returns {void}
+function fillModProperties(decl) {
+  // store。
+  const ext = useExtensionsStore()
+  // 填静态注册表。
+  ext.base = { pages: [], panels: [], properties: [{ ...decl, mod: 'my-mod' }], stats: [] }
+  // 重建合并表。
+  ext.rebuild()
+}
 
 // 每个用例前重置。
 beforeEach(() => {
@@ -185,8 +200,7 @@ describe('PropertyView', () => {
     expect(router.currentRoute.value.path).toBe('/game')
   })
 
-  test('名人模式：显示名人基础属性 + 额外点数，且 0 点也能直接走', async () => {
-    // 准备：名人模式 + 选定一位名人。
+  test('名人模式：显示名人基础属性 + 额外点数，且 0 点也能直接走', async () => {    // 准备：名人模式 + 选定一位名人。
     const store = useGameStore()
     store.setMode('celebrity')
     await store.init(buildFixtureData())
@@ -216,5 +230,53 @@ describe('PropertyView', () => {
     await findButton(wrapper, '下一步').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/game')
+  })
+})
+
+describe('PropertyView - Mod 声明的额外属性行（2026-10 能力补齐 ③）', () => {
+  test('属性在引擎参数注册表里真实存在 → 多出一行，且能分配并扣点数', async () => {
+    // 准备引擎（先注册一个 Mod 参数，模拟 code.js 里的 gameAPI.param.define）。
+    const store = await readyStore()
+    store.life.params.define('LUCK', { type: 'local', label: '幸运' })
+    // Mod 声明这个属性项。
+    fillModProperties({ key: 'LUCK', label: '幸运' })
+    // 挂载。
+    const { wrapper } = mountView(PropertyView)
+    // 五行 = 内置 4 + Mod 1。
+    expect(wrapper.findAll('.row').length).toBe(5)
+    expect(wrapper.text()).toContain('幸运')
+    // 能分配：点一次 ＋ → allocation.LUCK 从 0 变 1，剩余点数 -1。
+    const before = store.leftPoints
+    await rowButton(wrapper, '幸运', '＋').trigger('click')
+    expect(store.allocation.LUCK).toBe(1)
+    expect(store.leftPoints).toBe(before - 1)
+    // 再点 − 回到 0。
+    await rowButton(wrapper, '幸运', '−').trigger('click')
+    expect(store.allocation.LUCK).toBe(0)
+  })
+
+  test('属性**不在**引擎参数注册表里 → 不渲染那一行，并记一条 warn（不静默塞进去）', async () => {
+    // 准备引擎，但**不注册**这个参数。
+    const store = await readyStore()
+    // Mod 声明一个引擎不认识的键。
+    fillModProperties({ key: 'NOPE', label: '不存在' })
+    // 挂载。
+    const { wrapper } = mountView(PropertyView)
+    // 仍然只有 4 行。
+    expect(wrapper.findAll('.row').length).toBe(4)
+    expect(wrapper.text()).not.toContain('不存在')
+    // 有 warn（够排障）。
+    expect(store.logBuffer.join('\n')).toContain('NOPE')
+    expect(store.logBuffer.join('\n')).toContain('gameAPI.param.define')
+  })
+
+  test('没有 Mod 声明时行为不变（仍是内置 4 行）', async () => {
+    // 准备。
+    await readyStore()
+    // 挂载。
+    const { wrapper } = mountView(PropertyView)
+    // 4 行，且没有 Mod 面板（slot=property 没声明）。
+    expect(wrapper.findAll('.row').length).toBe(4)
+    expect(wrapper.find('.mod-panels').exists()).toBe(false)
   })
 })

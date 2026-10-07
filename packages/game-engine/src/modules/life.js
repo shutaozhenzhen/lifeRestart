@@ -138,6 +138,11 @@ class Life {
   #propertyAllocateLimit // 属性分配范围
   #defaultPropertys    // 默认属性
   #specialThanks       // 特别鸣谢
+  // Mod 登记的**外部统计项**（2026-10 能力补齐 ③）：键 → { value, judge? }。
+  // 与内置五项一起由 `get statistics` 返回（内置键优先，不允许被覆盖）。
+  #extraStatistics = {}
+  // 内置统计键（不允许被 `addStatistic` 覆盖 —— 它们是引擎 ↔ 界面的编译期契约）。
+  #builtinStatistics = ['TMS', 'CACHV', 'RACHV', 'RTLT', 'REVT']
   // 初始数据：**构造即具备可读基线**，因为属性分配页要在 remake 之前就计算可用点数
   // （原实现只在 remake() 里赋值，导致重建前读取 TLT 抛 TypeError）。
   // config() 会用默认属性重建，remake(talents) 再写入实际选择的天赋。
@@ -660,12 +665,71 @@ class Life {
   }
 
   // 统计信息。
+  //
+  // 2026-10 能力补齐 ③：Mod 可以经 `gameAPI.addStatistic(key, value, judge)` 往这里加自己的
+  // 统计项（界面侧只有"这个键真的在 statistics 里"才会渲染它 —— 见前端 `statistics-view.js`）。
+  // 内置的五个键（TMS/CACHV/RACHV/RTLT/REVT）永远在，且**不会被 Mod 覆盖**。
   get statistics() {
     // 读取统计属性评价（含成就达成率 RACHV —— 模拟/总结都要用）。
-    return this.#getJudges(this.PropertyTypes.TMS,
-      this.PropertyTypes.CACHV, this.PropertyTypes.RACHV,
-      this.PropertyTypes.RTLT, this.PropertyTypes.REVT)
+    return {
+      // 先铺 Mod 加的（内置键随后覆盖，保证内置语义不被顶掉）。
+      ...this.#extraStatistics,
+      // 内置五项。
+      ...this.#getJudges(this.PropertyTypes.TMS,
+        this.PropertyTypes.CACHV, this.PropertyTypes.RACHV,
+        this.PropertyTypes.RTLT, this.PropertyTypes.REVT),
+    }
   }
+
+  // #addStatistic
+  // 登记一个**外部统计项**（Mod 用；2026-10 能力补齐 ③ 配套）。
+  //
+  // 为什么要有它：总结页只渲染"键真的出现在 `life.statistics` 里"的 Mod 统计声明 ——
+  // 没有这个入口，Mod 声明的统计项**永远显示不出来**（声明会渲染成一行 `—`，所以界面
+  // 干脆跳过它并记 warn）。有了它，"Mod 加统计"这条链路才闭环。
+  //
+  // ⚠️ 内置键（TMS/CACHV/RACHV/RTLT/REVT）**不允许被覆盖**（写它们会被忽略并记一条 warn）：
+  //    那几个键是引擎与界面的编译期契约（`statistics-view.spec.js` 有覆盖性守卫）。
+  //
+  // @param {string} key - 统计键（非空字符串）
+  // @param {number} value - 数值
+  // @param {string} [judge] - 评价键（如 J_Good；可省）
+  // @returns {boolean} 是否登记成功
+  addStatistic(key, value, judge) {
+    // 键必须是非空字符串。
+    if (typeof key !== 'string' || key.length === 0) {
+      // 出声（不静默）。
+      this.#log.warn?.('addStatistic: 统计键必须是非空字符串，已忽略')
+      // 失败。
+      return false
+    }
+    // 内置键不可覆盖（它们是引擎 ↔ 界面的编译期契约）。
+    if (this.#builtinStatistics.includes(key)) {
+      // 出声（这种"写了不生效"最该报出来）。
+      this.#log.warn?.(`addStatistic: ${key} 是引擎内置统计键，不能被 Mod 覆盖（已忽略）`)
+      // 失败。
+      return false
+    }
+    // 写入（键名原样保留 —— 界面按它匹配 Mod 声明）。
+    this.#extraStatistics[key] = judge ? { value, judge } : { value }
+    // 成功。
+    return true
+  }
+
+  // #clearStatistics
+  // 清掉全部**外部**统计项（换局/测试用；内置五项不受影响）。
+  //
+  // @returns {number} 清掉的条数
+  clearStatistics() {
+    // 计数。
+    const n = Object.keys(this.#extraStatistics).length
+    // 清空。
+    for (const key of Object.keys(this.#extraStatistics)) delete this.#extraStatistics[key]
+    // 返回。
+    return n
+  }
+
+  // #getJudges
 
   // 成就列表（按达成时间排序）。
   get achievements() {

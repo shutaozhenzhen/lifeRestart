@@ -9,12 +9,12 @@
 
 | 文件 | 演示的内容 |
 |------|-----------|
-| `manifest.json` | 必填字段（`name` / `version`）、`permissions`、**`dependencies`**（为什么必须依赖 `lifeRestart-data`，见下）、`targets` / `deterministic` 这类可选字段 |
+| `manifest.json` | 必填字段（`name` / `version`）、`permissions`、**`dependencies`**（为什么必须依赖 `lifeRestart-data`，见下）、**`ui`（界面扩展：1 个页面 + 1 个 home 面板 + 1 个属性项 + 1 个统计项）**、`targets` / `deterministic` 这类可选字段 |
 | `talents.json` | 天赋表的字段：`effect`（属性效果）与 `condition`（**触发时**才判定的门槛，不是入池条件） |
 | `events.json` | 事件表的字段：`event`（正文，注意字段名不叫 description）、`effect`、`include` / `exclude`（能否随机触发）、`branch`（**顺序**匹配的条件分支）、`postEvent`（后续文本）、`NoRandom`（禁止随机触发，只能被 branch 链到） |
 | `achievements.json` | 成就表的字段：`condition` + `opportunity`（在哪个时机判定：START / TRAJECTORY / SUMMARY / END）+ `hide` |
 | `age.json` | 年龄表怎么"加事件"，以及最容易踩的坑：**age 是整键替换，不是追加** |
-| `code.js` | 代码入口：能力探测、`param.define` 注册新参数、4 个钩子、**改真实游戏属性**（`property.change`，20 岁精神 +3）、**观察属性变化**（`propertyChange` + 用 `source` 过滤自己造成的噪声）、运行时增删数据、**读包内资源**（`gameAPI.asset`，见下）、随包依赖 `require()`、宿主桥降级 |
+| `code.js` | 代码入口：能力探测、`param.define` 注册新参数、4 个钩子、**改真实游戏属性**（`property.change`，20 岁精神 +3）、**观察属性变化**（`propertyChange` + 用 `source` 过滤自己造成的噪声）、运行时增删数据、**读包内资源**（`gameAPI.asset`，见下）、**运行期注册界面**（`gameAPI.ui.addPanel` / `addStat` / `onAction`，用 `available` 守卫）、随包依赖 `require()`、宿主桥降级 |
 | `assets/logo.png` | **包内的二进制资源**（1×1 的极小 PNG，70 字节）。它证明 Mod 包能带图片/音频/字体，并且**逐字节**保留（zip 装出来也一样）。资源只能经 `gameAPI.asset` 读 —— 不允许任何"凭路径直接取文件"的旁路 |
 
 ## 两个必须知道的坑（本示例刻意踩了一遍）
@@ -49,6 +49,13 @@
   （浏览器是 `blob:…`，Node 是绝对文件路径）
 - 带「示例事件」字样的文本会被加上 ✨ 前缀（`onEventRender` 是唯一返回值生效的钩子）
 - 成就「示例·活到十岁」会在总结/结束时判定
+- **界面上多出四样东西**（2026-10 起）：
+  - 主页一张卡片「示例 Mod · 主页卡片」（`manifest.ui.panels` 的 `slot: home` —— **禁用即消失**）
+  - 一个页面 `/mods/page/example-guide`（`manifest.ui.pages`；**默认禁用所以打不开**，
+    看到的是「这个页面属于 Mod example-mod，它当前未启用」的空态）
+  - 总结页一张「示例 Mod · 运行期面板」卡片，带一个可点的动作按钮和一个统计项
+    （这三样都是 **code.js 运行期注册**的：`gameAPI.ui.addPanel` / `onAction` / `addStat` +
+    `addStatistic` —— 所以它们**只在开了一局之后**才存在，主页上看不到）
 - 日志里能看到能力探测与降级信息（没有后端时那段代码被安全跳过）
 
 ## 自己做一个

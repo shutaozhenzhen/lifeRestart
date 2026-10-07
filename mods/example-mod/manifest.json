@@ -2,7 +2,62 @@
   "name": "example-mod",
   "version": "1.0.0",
   "author": "lifeRestart 示例",
-  "description": "示例 Mod（教学）：演示 5 张数据表、三个钩子、参数注册与 gameAPI 的用法",
+  "description": "示例 Mod（教学）：演示 5 张数据表、三个钩子、参数注册、界面扩展与 gameAPI 的用法",
   "permissions": ["hooks", "storage"],
-  "dependencies": ["lifeRestart-data"]
+  "dependencies": ["lifeRestart-data"],
+  "ui": {
+    "pages": [
+      {
+        "id": "example-guide",
+        "title": "示例 Mod 的页面",
+        "blocks": [
+          { "t": "p", "text": "这一页是示例 Mod 通过 manifest.ui.pages 声明的：应用**启动时**就被收集（不需要先开一局），路由是 /mods/page/example-guide。" },
+          { "t": "note", "kind": "tip", "text": "内容块类型与「Mod 制作文档」页完全一样（同一个渲染器）：p / sub / note / list / table / code / link / api / action。" },
+          { "t": "sub", "text": "它演示了三件事" },
+          {
+            "t": "list",
+            "items": [
+              "页面：manifest.ui.pages（启动即可见，主页 / Mod 管理页也能进）",
+              "面板：manifest.ui.panels 往 home slot 插一张卡片",
+              "运行期注册：code.js 里用 gameAPI.ui.addPanel 追加（只在开局后可见）"
+            ]
+          },
+          {
+            "t": "table",
+            "head": ["扩展点", "声明位置", "可见时机"],
+            "rows": [
+              ["页面 / 面板 / 属性 / 统计", "manifest.ui", "应用启动后（不需要开局）"],
+              ["面板 / 属性 / 统计", "code.js 里的 gameAPI.ui.*", "开局之后（那时才有 code.js 执行）"]
+            ]
+          },
+          {
+            "t": "code",
+            "lang": "js",
+            "label": "运行期注册的样子（这段就在本 Mod 的 code.js 里）",
+            "code": "if (gameAPI.ui.available) {\n  gameAPI.ui.addPanel({\n    id: 'example-runtime-panel',\n    slot: 'game',\n    title: '运行期加的面板',\n    blocks: [{ t: 'p', text: '这一局才有的内容' }],\n  })\n}"
+          },
+          { "t": "note", "kind": "warn", "text": "示例 Mod **默认禁用**（教学样板不该悄悄改变所有人的游戏数据）——所以这一页默认打不开：你会看到「这个页面属于 Mod example-mod，它当前未启用」的空态。去「Mod 管理」页启用它就能进来。" },
+          { "t": "link", "to": "/mods/docs", "text": "打开 Mod 制作文档（§14 讲界面扩展）" }
+        ]
+      }
+    ],
+    "panels": [
+      {
+        "id": "example-home",
+        "slot": "home",
+        "title": "示例 Mod · 主页卡片",
+        "blocks": [
+          { "t": "p", "text": "这张卡片来自 mods/example-mod/manifest.json 的 ui.panels（slot = home）。" },
+          { "t": "note", "kind": "info", "text": "它和内容 Mod 一样受启停控制：禁用示例 Mod，这张卡片立刻消失。" },
+          { "t": "link", "to": "/mods/page/example-guide", "text": "看示例 Mod 的完整页面" }
+        ]
+      }
+    ],
+    "properties": [
+      { "key": "CHR", "label": "颜值" }
+    ],
+    "stats": [
+      { "key": "EXAMPLE_YEARS", "label": "示例 · 走过的年头", "kind": "count" }
+    ]
+  }
 }

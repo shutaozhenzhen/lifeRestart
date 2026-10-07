@@ -153,3 +153,56 @@ if (gameAPI.host && gameAPI.host.has && gameAPI.host.has('example-mod')) {
 } else {
   gameAPI.log.info('[example-mod] 没有可用的后端：这段代码在静态站上被安全跳过')
 }
+
+// ── 9. 加界面（2026-10 能力补齐 ③）────────────────────────────────
+// 两种注册源，**职责不同**（这是这一节最重要的一句话）：
+//   ① manifest.ui（静态声明）——应用**启动时**收集，主页 / Mod 管理页也能看到；
+//      本 Mod 的 manifest 里就有一段（1 个页面 + 1 个 home 面板 + 1 个属性项 + 1 个统计）。
+//   ② gameAPI.ui.*（运行期注册）——只有 code.js 执行时才可用（= 一局游戏已经建好），
+//      适合"按条件显示"。**启动时不执行 code.js**（它需要 Life，重复执行还会重复注册钩子），
+//      所以运行期注册的东西在开局前是不存在的。
+//
+// ⚠️ 必须先判断 `available`：CLI 之类的宿主没有界面注册能力，注册调用会抛**可读错误**
+//    （不静默丢弃 —— 静默丢弃会表现成"界面里没有我加的东西，也没有任何提示"）。
+if (gameAPI.ui && gameAPI.ui.available) {
+  // 运行期加一个面板（插到 `game` slot）。
+  // ⚠️ 目前真的挂了界面的 slot 是 home / mods / property / summary；`game` 与 `settings`
+  //    能校验、能注册，但页面上暂时没有挂载点 —— 这里的演示刻意用一个**已挂载**的 slot，
+  //    这样启用示例 Mod 后你在总结页就能看到它。
+  gameAPI.ui.addPanel({
+    id: 'example-runtime-panel',
+    slot: 'summary',
+    title: '示例 Mod · 运行期面板',
+    blocks: [
+      { t: 'p', text: '这张卡片是 code.js 在**开局之后**用 gameAPI.ui.addPanel 注册的。' },
+      { t: 'note', kind: 'tip', text: '对比一下：主页那张卡片来自 manifest.ui（启动即可见），这张只在开了一局之后才存在。' },
+      // 动作按钮：注册过就是可点的，没注册就是**禁用** + 可读提示。
+      { t: 'action', id: 'example-hello', label: '点我（示例动作）' }
+    ],
+  })
+  // 动作处理函数（异常隔离：这里抛错只会记一条日志，不会炸页面）。
+  gameAPI.ui.onAction('example-hello', function (block) {
+    gameAPI.log.info('[example-mod] 动作按钮被点了：', block && block.id)
+  })
+  // 让「统计」里真的多出一项：**两步**
+  //   ① addStatistic 让引擎产生这个键；② addStat 告诉界面怎么显示它。
+  //   （顺序反了也能显示，但统计键不存在时界面会跳过它并记 warn。）
+  gameAPI.ui.addStatistic('EXAMPLE_YEARS', 0)
+  gameAPI.ui.addStat({ key: 'EXAMPLE_YEARS', label: '示例 · 走过的年头', kind: 'count' })
+  gameAPI.log.info('[example-mod] 已注册界面扩展（1 个运行期面板 + 1 个统计项 + 1 个动作）')
+} else {
+  // 降级分支：这句日志让"为什么界面上没有它"变得可查。
+  gameAPI.log.info('[example-mod] 当前宿主没有界面注册能力（gameAPI.ui.available === false）：界面扩展被安全跳过（用 manifest.ui 声明的那些仍然可见）')
+}
+
+// 每年把那个统计项 +1（演示"统计项的值由 Mod 自己维护"）。
+// 注意：`addStatistic` 是**覆盖**语义，所以这里自己累计一份计数。
+var exampleYears = 0
+gameAPI.on('onYearAdvance', function () {
+  // 累计（与界面能力无关：引擎侧的统计键登记在宿主没有界面能力时是安全的空操作）。
+  exampleYears += 1
+  // 写回（宿主没有界面能力时 `available` 为 false，整段跳过）。
+  if (gameAPI.ui && gameAPI.ui.available) {
+    gameAPI.ui.addStatistic('EXAMPLE_YEARS', exampleYears)
+  }
+})

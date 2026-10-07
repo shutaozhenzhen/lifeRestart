@@ -1,23 +1,89 @@
 <script setup>
 // 属性分配页（对应原版 property.js）。
 // 四个属性（颜值/智力/体质/家境）通过 ± 按钮分配，可随机分配，剩余点数实时显示。
+//
+// 2026-10 能力补齐 ③：Mod 可以在 `manifest.ui.properties` / `gameAPI.ui.addProperty` 里
+// 声明**额外的可分配属性行**（内置 4 项 + Mod 声明项）。一条硬要求：
+// **只有该属性在引擎参数注册表里真实存在时才能加**（属性面板是"分配"语义，
+// 分配一个引擎不认识的键 → 开局时写进去、属性读取得 NaN）。
+// 拿不到 → **不渲染并记一条 warn**（不静默塞进去）。
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game.js'
+// 扩展注册表（Mod 声明的属性项）。
+import { useExtensionsStore } from '../stores/extensions.js'
 // 名人天赋详情（与名人选择页同一个组件，保证两处文案一致）。
 import TalentDetailList from '../components/TalentDetailList.vue'
+// Mod 面板（slot = property）。
+import ModPanels from '../components/ModPanels.vue'
 
 // 路由。
 const router = useRouter()
 // 游戏 store。
 const store = useGameStore()
+// 扩展注册表。
+const ext = useExtensionsStore()
 
-// 可分配属性列表。
-const allocKeys = [
+// 内置可分配属性（**引擎 params.js 里真实存在的四项**；顺序就是界面顺序）。
+const BUILTIN_ALLOC_KEYS = [
   { key: 'CHR', label: '颜值' },
   { key: 'INT', label: '智力' },
   { key: 'STR', label: '体质' },
   { key: 'MNY', label: '家境' },
 ]
+
+// #paramNames
+// 引擎参数注册表里的全部参数名（MOD 属性必须在这里面才允许渲染）。
+//
+// 为什么读 `life.params.names` 而不是 `getAll()`：names 是键列表，getAll 会展开
+// 全部参数值（含参数定义的公式求值），代价大且可能有副作用。
+//
+// @returns {Set<string>} 参数名集合（引擎未初始化时为空集）
+function paramNames() {
+  // 引擎没建好 → 空集（此时 Mod 属性一律不渲染，并记 warn）。
+  const names = store.life?.params?.names
+  // 非数组 → 空集。
+  if (!Array.isArray(names)) return new Set()
+  // 集合。
+  return new Set(names)
+}
+
+// 可分配属性行 = 内置 4 项 + Mod 声明项（**只保留引擎里真实存在的**）。
+// 已警告过的键（computed 会被反复求值，同一条 warn 不该刷屏 —— 每个键只出声一次）。
+const warnedKeys = new Set()
+const allocKeys = computed(() => {
+  // 参数名。
+  const known = paramNames()
+  // 内置优先（同名不重复加；Mod 想改内置项的标签时以 Mod 为准，但键不变）。
+  const rows = [...BUILTIN_ALLOC_KEYS]
+  // 已见键。
+  const seen = new Set(rows.map((r) => r.key))
+  // 逐个 Mod 声明项。
+  for (const p of ext.merged.properties) {
+    // 键非法跳过。
+    if (!p || typeof p.key !== 'string' || p.key.length === 0) continue
+    // 重复键跳过（同名以内置项为准 —— 位置/语义都别乱）。
+    if (seen.has(p.key)) continue
+    // 标记已见。
+    seen.add(p.key)
+    // **引擎里不存在这个参数 → 不渲染 + 记 warn**（分配它是 NaN，不如不显示）。
+    if (!known.has(p.key)) {
+      // 同一条只记一次（computed 会被反复求值）。
+      if (!warnedKeys.has(p.key)) {
+        // 记下。
+        warnedKeys.add(p.key)
+        // 出声。
+        store.pushLog('warn', `[UI][mod-ui] Mod 属性「${p.label || p.key}」（${p.key}，来自 Mod ${p.mod || '?'}）没有对应的引擎参数，属性面板不显示它（请先用 gameAPI.param.define 注册）`)
+      }
+      // 下一个。
+      continue
+    }
+    // 收下（标签用 Mod 声明的）。
+    rows.push({ key: p.key, label: p.label || p.key })
+  }
+  // 返回。
+  return rows
+})
 
 // 加减属性。
 function adjust(key, delta) {
@@ -89,6 +155,9 @@ function next() {
       :talents="store.character.talent"
       :heading="`${store.character.name} 的天赋（额外点数来源）`"
     />
+
+    <!-- Mod 面板（slot = property；2026-10 能力补齐 ③）。没有声明时什么都不渲染。 -->
+    <ModPanels slot="property" />
   </div>
 </template>
 

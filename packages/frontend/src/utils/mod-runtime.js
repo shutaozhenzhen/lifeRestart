@@ -611,6 +611,9 @@ export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enable
     data,
     // 待执行代码。
     codes,
+    // **每个 Mod 的 manifest**（按拓扑顺序）——界面扩展的**静态声明源**（`manifest.ui`）
+    // 就是从这里读的：不执行 code.js 也能在启动时收集（2026-10 能力补齐 ③）。
+    manifests: loader.order.map((name) => ({ name, manifest: loader.mods.find((m) => m.name === name)?.manifest || {} })),
     // 每个 Mod 的 require（阶段二注入给 code.js）。
     requires,
     // blob URL 释放器（页面/Mod 卸载时调用）。
@@ -647,12 +650,17 @@ export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enable
 // @param {object} [params.assetUrlApi] - 注入的 URL 原语 `{ Blob, createObjectURL, revokeObjectURL }`；
 //   缺省取全局（测试在 Node 环境里注入假实现，才能测到 blob URL 的缓存与释放 ——
 //   Node 18 的 `URL.createObjectURL` 并不存在，不注入就只会走"绝对路径"那条降级分支）
+// @param {object} [params.uiSink] - **界面注册表**（2026-10 能力补齐 ③）：`gameAPI.ui.*`
+//   的注册落点。前端传 `stores/extensions.js` 的 append + Life 的统计登记（见 stores/game.js）。
+//   不传 → `gameAPI.ui.available === false`，注册调用**抛可读错误**（不静默丢弃）
 // @param {object} [params.log] - 日志器
-// @returns {{executed: string[], errors: string[], assetRegistry: object}} 结果
-export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig = null, requires = null, assetReader = null, assetRegistry = null, assetUrlApi = null, log } = {}) {
+// @returns {{executed: string[], errors: string[], assetRegistry: object, uiBridges: object}} 结果
+export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig = null, requires = null, assetReader = null, assetRegistry = null, assetUrlApi = null, uiSink = null, log } = {}) {
   // 结果。
   const executed = []
   const errors = []
+  // 每个 Mod 的界面桥（Mod 名 → 桥）：渲染动作按钮时要按 id 问"谁注册过这个动作"。
+  const uiBridges = {}
   // 资源注册表：外部给了就用它（界面与 Mod 代码必须操作**同一份**桥，
   // 否则界面拿到的 blob URL 与 Mod 拿到的不是同一个，且 dispose 会各管一半）。
   const registry = assetRegistry || createAssetRegistry({ log })
@@ -693,6 +701,9 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
       }),
       // 跨局存储桥（命名空间 mod:<Mod 名>:）：与引擎同一份 storage。
       storage: life?.storage,
+      // 界面注册表（2026-10 能力补齐 ③）：`gameAPI.ui.addPage/addPanel/...` 的落点。
+      // 界面与 Mod 代码必须操作**同一份**注册表（与 assetRegistry 同一个道理）。
+      uiSink,
       // Mod 名（storage 命名空间与日志前缀）。
       modName: name,
       // 日志。
@@ -700,6 +711,8 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
     })
     // 登记资源桥（界面侧解析 `{{asset:...}}` 时按路径查找；跨 Mod 时按注册顺序命中）。
     registry.register(name, gameAPI.asset)
+    // 登记界面桥（界面渲染动作按钮时按 id 查"谁注册过"）。
+    uiBridges[name] = gameAPI.ui
     // 执行。
     try {
       // 该 Mod 的 require（阶段一已把它的运行时模块加载好；没声明则是 deny 版）。
@@ -718,5 +731,5 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
     }
   }
   // 返回。
-  return { executed, errors, assetRegistry: registry }
+  return { executed, errors, assetRegistry: registry, uiBridges }
 }

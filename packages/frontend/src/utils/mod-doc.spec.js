@@ -22,10 +22,11 @@ import { createGameAPI, createHookBus } from 'game-engine/src/mod/gameapi.js'
 import { createParamRegistry } from 'game-engine/src/params/param-registry.js'
 
 // 允许展开到第二层的命名空间（其余键当叶子处理）。
-const NAMESPACES = ['ai', 'param', 'property', 'host', 'asset']
+// `ui` 是 2026-10 能力补齐 ③ 新增的（Mod 能加界面）—— 它的每个键都必须在文档里有条目。
+const NAMESPACES = ['ai', 'param', 'property', 'host', 'asset', 'ui']
 
-// 合法的块类型（DocPage.vue 里实现了这几种）。
-const BLOCK_TYPES = ['p', 'sub', 'note', 'list', 'table', 'code', 'link', 'api']
+// 合法的块类型（DocBlocks.vue 里实现了这几种；`action` 是 2026-10 能力补齐 ③ 新增的动作按钮）。
+const BLOCK_TYPES = ['p', 'sub', 'note', 'list', 'table', 'code', 'link', 'api', 'action']
 
 // #collectApiPaths
 // 从一个文档里收集所有 `api` 块的 path。
@@ -173,7 +174,7 @@ describe('mod-doc - API 覆盖性（与引擎真实键双向核对）', () => {
     expect(documented, `文档与引擎不一致：缺 ${real.filter((k) => !documented.includes(k)).join(',') || '无'}；多 ${documented.filter((k) => !real.includes(k)).join(',') || '无'}`).toEqual(real)
   })
 
-  test('二级键：ai / param / property / host 的每个 key 都被文档覆盖', () => {
+  test('二级键：ai / param / property / host / asset / ui 的每个 key 都被文档覆盖', () => {
     // 真实的二级 path。
     const api = realApi()
     const real = []
