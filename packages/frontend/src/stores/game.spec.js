@@ -614,6 +614,26 @@ describe('gameStore 随机种子与复现（真实数据）', () => {
     expect(again.signature).toBe(first.signature)
   }, 120000)
 
+  test('生命周期钩子：init 会依次触发 onBeforeLife（建 Life 之前）与 onAfterLife（Mod 代码之后）', async () => {
+    // 记录。
+    const seen = []
+    // 全新 pinia + store。
+    setActivePinia(createPinia())
+    const store = useGameStore()
+    // 钩子总线。
+    const { createHookBus } = await import('../../../game-engine/src/mod/gameapi.js')
+    const hooks = createHookBus()
+    // 注册两个生命周期钩子。
+    hooks.on('onBeforeLife', (p) => seen.push(['before', typeof p.data]))
+    hooks.on('onAfterLife', (p) => seen.push(['after', typeof p.life, !!p.life?.propertys]))
+    // 初始化（无 Mod 代码）。
+    await store.init(buildData(), { seed: 1, hooks })
+    // 两个都触发了，且 after 拿到的是**已经可用**的 Life（能读 propertys）。
+    expect(seen.map((s) => s[0])).toEqual(['before', 'after'])
+    expect(seen[1][1]).toBe('object')
+    expect(seen[1][2]).toBe(true)
+  })
+
   test('T：restartWithSeed 用同一颗种子重开（总结页「复现此局」）', async () => {
     // 先跑一局并记录签名（真实数据）。
     const first = await playRealLife(777)

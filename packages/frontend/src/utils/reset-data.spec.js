@@ -181,4 +181,30 @@ describe('reset-data - 清单不许漏（守卫）', () => {
     // 反向：清单里也不该有引擎已不存在的键。
     expect([...known].filter((k) => !engineKeys.includes(k))).toEqual([])
   })
+
+  test('Mod 自带存储（mod: 前缀）也会被清掉（2026-10：键是运行期写的，清单追不上，只能按前缀扫）', async () => {
+    // 假 localStorage（带 keys 枚举）。
+    const m = new Map()
+    // 引擎存档键 + Mod 键 + 无关键。
+    m.set('lifeRestart:TMS', '3')
+    m.set('lifeRestart:mod:demo:score', '100')
+    m.set('lifeRestart:mod:other:k', '1')
+    m.set('unrelated', 'keep')
+    // 适配器。
+    const storage = {
+      getItem: (k) => (m.has(k) ? m.get(k) : null),
+      setItem: (k, v) => m.set(k, String(v)),
+      removeItem: (k) => m.delete(k),
+      keys: () => [...m.keys()],
+    }
+    // 跑清空（不注入 modStore：用空实现避免碰 IndexedDB）。
+    const res = await resetAppData({ storage, modStore: { list: async () => [], delete: async () => {} }, log: { info: () => {}, warn: () => {} } })
+    // Mod 键被清（两个 Mod 的都被清）。
+    expect(m.has('lifeRestart:mod:demo:score')).toBe(false)
+    expect(m.has('lifeRestart:mod:other:k')).toBe(false)
+    // 无关键不动（**不做 localStorage.clear()**）。
+    expect(m.get('unrelated')).toBe('keep')
+    // 记账里有这两个键。
+    expect(res.cleared.some((k) => k.includes('mod:demo:score'))).toBe(true)
+  })
 })

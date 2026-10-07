@@ -160,9 +160,15 @@ export function createHookBus() {
 //   缺省用降级桥（`available: false`、写操作报错）—— 见 `mod/property-bridge.js`
 // @param {object} [deps.log] - 日志器
 // @returns {object} gameAPI
-export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, property, log }) {
+export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, property, storage, modName: _modName, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, error: () => {} }
+  // Mod 名（storage 命名空间 + 日志前缀用）。
+  const modName = _modName || 'anonymous'
+  // 本实例注册过的钩子（dispose 用）。
+  const registrations = []
+  // storage 键名：`mod:<Mod 名>:<键>`（与引擎自己的键隔离）。
+  const storageKey = (key) => `mod:${modName}:${key}`
   // 钩子总线：注入外部实例（与 Life 共享）或自建。
   const bus = hooks || createHookBus()
   // 数据引用。
@@ -187,11 +193,96 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, pro
   // 返回 API。
   const api = {
     // 钩子系统（委托外部总线）。
-    on: (name, fn) => bus.on(name, fn),
-    off: (name, fn) => bus.off(name, fn),
+    // `on` 会**记下本实例注册过的回调**，供 `dispose()` 一次性摘掉 —— 2026-10 能力补齐：
+    // 以前 Mod 想卸载只能自己保存注销函数，漏摘就留下"幽灵钩子"。
+    on: (name, fn) => {
+      // 登记（便于 dispose）。
+      registrations.push([name, fn])
+      // 委托总线。
+      return bus.on(name, fn)
+    },
+    // 注销钩子（同步从登记表里去掉）。
+    off: (name, fn) => {
+      // 从登记表移除。
+      const i = registrations.findIndex(([n, f]) => n === name && f === fn)
+      // 命中则删。
+      if (i !== -1) registrations.splice(i, 1)
+      // 委托总线。
+      return bus.off(name, fn)
+    },
     emit: (name, payload) => bus.emit(name, payload, logger),
     emitSync: (name, payload) => bus.emitSync(name, payload, logger),
     hooks: () => bus.list(),
+
+    // 日志：接宿主日志器（别再只能 console.log —— Node/打包环境里 console 不进日志面板）。
+    // 级别与引擎一致：debug / info / warn / error（缺省实现只保证 debug/error 存在，故都用可选调用）。
+    log: {
+      // 调试。
+      debug: (...args) => logger.debug?.(`[mod:${modName}] ${args.join(' ')}`),
+      // 信息。
+      info: (...args) => (logger.info || logger.debug)?.(`[mod:${modName}] ${args.join(' ')}`),
+      // 警告。
+      warn: (...args) => (logger.warn || logger.debug)?.(`[mod:${modName}] ${args.join(' ')}`),
+      // 错误。
+      error: (...args) => (logger.error || logger.debug)?.(`[mod:${modName}] ${args.join(' ')}`),
+    },
+
+    // 跨局存储：命名空间 `mod:<Mod 名>:<键>`，与引擎自己的键（TMS/ACHV/…）互不干扰。
+    // 需注入 storage 适配器（与引擎同一份，浏览器侧是 localStorage 适配器）。
+    // ⚠️ 键名仍受「重置数据」管辖：见 `frontend/src/utils/reset-data.js` 的 `mod:` 前缀清理。
+    storage: {
+      // 读（JSON 解析；缺失 / 解析失败返回 fallback）。
+      get: (key, fallback) => {
+        // 无 storage：给 fallback（不抛，Mod 可以无脑读）。
+        if (!storage) return fallback
+        // 读原始串。
+        const raw = storage.getItem(storageKey(key))
+        // 缺失 / 'undefined'。
+        if (raw === null || raw === undefined || raw === 'undefined') return fallback
+        // 解析。
+        try {
+          // JSON 解析。
+          return JSON.parse(raw)
+        } catch {
+          // 坏数据给 fallback（不炸）。
+          return fallback
+        }
+      },
+      // 写（JSON 序列化）。
+      set: (key, value) => {
+        // 无 storage → 明确报错（静默丢弃是最难查的）。
+        if (!storage) throw new Error('当前宿主没有可用的 storage（gameAPI.storage 需要注入 storage 适配器）')
+        // 写。
+        storage.setItem(storageKey(key), JSON.stringify(value))
+      },
+      // 删。
+      remove: (key) => {
+        // 无 storage → 无事可做。
+        if (!storage) return
+        // 删除。
+        storage.removeItem?.(storageKey(key))
+      },
+      // 列出本 Mod 的全部键（去掉命名空间前缀）。
+      keys: () => {
+        // 无 storage / 不支持枚举 → 空数组。
+        if (!storage || typeof storage.keys !== 'function') return []
+        // 前缀。
+        const p = `mod:${modName}:`
+        // 过滤 + 去前缀。
+        return storage.keys().filter((k) => k.startsWith(p)).map((k) => k.slice(p.length))
+      },
+    },
+
+    // 卸载：摘掉本 Mod 通过 gameAPI.on 注册的**全部**钩子（返回摘掉的数量）。
+    // 用于"换局 / 禁用 Mod / 重新加载"时避免幽灵钩子重复生效。
+    dispose: () => {
+      // 取出并清空登记表。
+      const list = registrations.splice(0)
+      // 逐个摘。
+      for (const [name, fn] of list) bus.off(name, fn)
+      // 返回摘掉的数量（调用方可观测）。
+      return list.length
+    },
 
     // AI 客户端（Mod 代码通过 gameAPI.ai 调用；需 manifest 声明 ai 权限）。
     ai: {
@@ -291,6 +382,54 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, pro
       return ach.id
     },
     getAchievement: (id) => store.achievements?.[id],
+    // 删除成就（2026-10 补齐：以前只有 add/get，没有 remove）。
+    removeAchievement: (id) => {
+      // 删除。
+      delete store.achievements?.[id]
+    },
+
+    // 名人 CRUD（2026-10 补齐：以前只能直接操作 `gameAPI.data.characters`，没有专用接口）。
+    // ⚠️ 名人表主键 = 条目自己的 `id`（与事件表不同：事件不读对象里的 id）。
+    addCharacter: (ch) => {
+      // 初始化。
+      if (!store.characters) store.characters = {}
+      // 写入（同名 id 覆盖）。
+      store.characters[ch.id] = ch
+      // 返回 id。
+      return ch.id
+    },
+    getCharacter: (id) => store.characters?.[id],
+    removeCharacter: (id) => {
+      // 删除。
+      delete store.characters?.[id]
+    },
+
+    // 年龄表操作（2026-10 补齐）。键是**年龄字符串**，值是 `{ age, event: [[id, weight]], talent: [] }`。
+    // ⚠️ `addAge` 是**整个年龄键替换**：想给某一岁追加事件，必须把原条目的 id 一起抄进来。
+    addAge: (age, entry) => {
+      // 初始化。
+      if (!store.age) store.age = {}
+      // 写入（整键替换）。
+      store.age[String(age)] = entry
+      // 返回键（字符串）。
+      return String(age)
+    },
+    getAge: (age) => store.age?.[String(age)],
+    removeAge: (age) => {
+      // 删除。
+      delete store.age?.[String(age)]
+    },
+
+    // 列举某张表的全部条目（2026-10 补齐：以前只能自己 `Object.keys(gameAPI.data.xxx)`）。
+    // 表名：`talents` / `events` / `achievements` / `characters` / `age`；未知表名 → 空数组（不抛）。
+    list: (table) => {
+      // 取表。
+      const t = store[table]
+      // 非对象 → 空数组。
+      if (!t || typeof t !== 'object') return []
+      // 条目数组（浅拷贝：别让调用方顺手改到原表结构）。
+      return Object.values(t).slice()
+    },
 
     // 数据访问（只读视图）。
     data: store,

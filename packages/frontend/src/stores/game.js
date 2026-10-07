@@ -197,6 +197,9 @@ export const useGameStore = defineStore('game', {
       // 创建 Life 实例：经 create-life 统一装配（数据 + 日志 + **持久化 storage** + 种子随机源 + 事件总线）。
       // emit：引擎在成就达成时广播 'achievement'（带成就对象），这里转成界面提示。
       // markRaw 防止被 reactive 代理（Life 含 # 私有字段，被代理会崩）。
+      // 生命周期钩子 onBeforeLife（Phase A 语义：这个点**可以异步**，Mod 能在这里等后端 / 预取数据）。
+      // 位置在建 Life 之前 —— 钩子总线此时已由 loadModBundle 建好并传入。
+      if (hooks && typeof hooks.emit === 'function') await hooks.emit('onBeforeLife', { data }, logger)
       this.life = markRaw(createAppLife({
         // 数据。
         data,
@@ -227,6 +230,8 @@ export const useGameStore = defineStore('game', {
         // 失败逐条记（便于按报告排障）。
         errors.forEach((e) => this.pushLog('warn', `[UI][mods] ${e}`))
       }
+      // 生命周期钩子 onAfterLife（Life 已就绪 + Mod 代码已执行完）：适合做「开局后一次性」的异步准备。
+      if (hooks && typeof hooks.emit === 'function') await hooks.emit('onAfterLife', { life: this.life, data }, logger)
       // 标记完成。
       this.initialized = true
       // 同步属性。

@@ -200,11 +200,10 @@ describe('example-mod - code.js 执行与钩子', () => {
     expect(typeof data.talents['90004'].grade).toBe('number')
     expect(data.events['90005'].event).toContain('写 Mod')
     expect(data.achievements['90002'].condition).toBe('params.AGE > 0')
-    // 反向删除也存在。
+    // 反向删除也存在（成就的 remove 已于 2026-10 补齐 —— 这条断言以前钉的是"没有 remove"）。
     expect(typeof api.removeTalent).toBe('function')
     expect(typeof api.removeEvent).toBe('function')
-    // 成就没有 remove（这是能力边界，别在文档里写错）。
-    expect(api.removeAchievement).toBeUndefined()
+    expect(typeof api.removeAchievement).toBe('function')
   })
 
   test('propertyChange：能观察到引擎内部的属性变化，且能改真属性（2026-10 能力补齐）', async () => {

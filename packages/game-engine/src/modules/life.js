@@ -76,6 +76,8 @@ class Life {
     // onChange：**任何**真实属性变更（事件/天赋效果、年龄自增、成就记账、Mod 自己改）都会
     // 同步广播 `propertyChange` 钩子 —— 2026-10 起 Mod 才能真正"观察游戏内属性变化"。
     // 用 emitSync（不是 emit）：这样回调里读到的就是变更后的值，且顺序确定。
+    // 保存 storage（gameAPI.storage 桥用）。
+    this.#storage = storage
     this.#property = new Property({
       clone: cloneUtil,
       storage,
@@ -118,6 +120,7 @@ class Life {
   }
 
   // 私有字段。
+  #storage      // 存储适配器（gameAPI.storage 用）
   #property
   #event
   #talent
@@ -717,6 +720,8 @@ class Life {
   // 属性模块本体：**给 Mod 层的桥用**（`mod/property-bridge.js` 拿它构造 `gameAPI.property`），
   // 以及测试直接驱动。Mod 代码不直接拿到这个对象，只拿到桥（`gameAPI.property`）。
   get property() { return this.#property }
+  // 存储适配器：给 Mod 的 `gameAPI.storage` 用（与引擎同一份 → 同一套前缀与清理规则）。
+  get storage() { return this.#storage }
   // 参数注册表（Mod 的 gameAPI.param 用；浏览器侧构造 gameAPI 需要它）。
   get params() { return this.#property.registry }
   // 钩子总线（只读引用，供外部查询已注册的钩子）。

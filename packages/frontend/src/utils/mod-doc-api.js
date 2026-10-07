@@ -47,7 +47,7 @@ export const MOD_API = {
           code: `// code.js —— 注意：没有 export、没有 import、不能用顶层 await
 // 引擎实际执行的是： new Function('gameAPI', 'require', '"use strict";\\n' + 这段文本)(gameAPI, requireFn)
 
-console.log('[my-mod] 加载了')          // 想打日志就用 console.log（gameAPI 没有 log 方法）
+gameAPI.log.info('[my-mod] 加载了')      // 接宿主日志器（Node/打包环境里 console 不进日志面板）
 gameAPI.on('onYearAdvance', (p) => {    // 注册钩子
   p.content.push({ type: 'EVT', description: '自定义的一年' })
 })`,
@@ -458,6 +458,48 @@ gameAPI.on('onYearAdvance', (p) => {
       ],
     },
 
+    // ---------- log / storage / dispose（2026-10 能力补齐） ----------
+    {
+      id: 'extras',
+      title: '13. log / storage / dispose：补齐的三个小能力',
+      blocks: [
+        {
+          t: 'p',
+          text: '这三个是 2026-10 补的"以前只能绕路"的能力。共同点：**环境探测用 `available` 之类的前置判断，缺能力时给可读错误而不是静默**。',
+        },
+        {
+          t: 'api',
+          path: 'log',
+          sig: 'gameAPI.log → { debug, info, warn, error }',
+          params: [],
+          returns: '接了宿主日志器的四个方法（每条自动加 `[mod:<Mod 名>]` 前缀）',
+          side: '无',
+          note: '以前只能 `console.log` —— 在 Node / 打包环境里，console 的输出**不进**日志面板与日志报告，排障时等于没有。缺级别实现的日志器会自动回落到 `debug`。',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'storage',
+          sig: 'gameAPI.storage → { get(key, fallback), set(key, value), remove(key), keys() }',
+          params: [['key', 'string', '键名（会加命名空间，见下）'], ['fallback', 'any', '缺失/坏数据时返回的值']],
+          returns: '读：JSON 解析后的值；`keys()`：本 Mod 的键数组（已去前缀）',
+          side: '写入宿主 storage（跨局持久化）',
+          note: '键名一律变成 **`mod:<Mod 名>:<键>`**，与引擎自己的键（TMS/ACHV/…）互不干扰，也不会被别的 Mod 读到。没有注入 storage 时：**读给 fallback、写抛可读错误**（静默丢弃是最难查的问题）。⚠️ 「重置数据」按 `mod:` 前缀清理这些键（`utils/reset-data.js`），所以 Mod 的数据也会被一起清掉。',
+          platform: '两端（需注入 storage）',
+        },
+        {
+          t: 'api',
+          path: 'dispose',
+          sig: 'gameAPI.dispose() → number',
+          params: [],
+          returns: '摘掉的钩子数量',
+          side: '**摘掉本 Mod 通过 `gameAPI.on` 注册的全部钩子**（幂等，重复调用返回 0）',
+          note: '用于"换局 / 禁用 Mod / 重新加载"时避免**幽灵钩子**（漏摘 → 同一个 Mod 的逻辑生效两次）。它只影响本 Mod 的注册，别的 Mod 与引擎自己的钩子不受影响。',
+          platform: '两端',
+        },
+      ],
+    },
+
     // ---------- 数据 CRUD ----------
     {
       id: 'crud',
@@ -546,7 +588,83 @@ gameAPI.on('onYearAdvance', (p) => {
           params: [['id', 'string', '成就 id']],
           returns: '成就对象（引用）',
           side: '无',
-          note: '**成就没有 remove**（能力缺口，见 §11）。',
+          note: '配套 `removeAchievement`（2026-10 补齐，见下）。',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'removeAchievement',
+          sig: 'gameAPI.removeAchievement(id: string) → void',
+          params: [['id', 'string', '成就 ID']],
+          returns: 'undefined',
+          side: '从成就表删除（**2026-10 补齐**：以前只有 add/get，没有 remove）',
+          note: '删除不存在的 ID 不报错。',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'addCharacter',
+          sig: 'gameAPI.addCharacter(ch: object) → string',
+          params: [['ch', 'object', '{ id, name, property, talent, … }']],
+          returns: '写入的 id',
+          side: '写入名人表（同名 id 覆盖）',
+          note: '⚠️ 名人表主键 = 条目**自己的 `id`**（与事件表不同：事件不读对象里的 id）。**2026-10 补齐**。',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'getCharacter',
+          sig: 'gameAPI.getCharacter(id: string) → object | undefined',
+          params: [['id', 'string', '名人 ID']],
+          returns: '名人条目（引用）',
+          side: '无',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'removeCharacter',
+          sig: 'gameAPI.removeCharacter(id: string) → void',
+          params: [['id', 'string', '名人 ID']],
+          returns: 'undefined',
+          side: '从名人表删除',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'addAge',
+          sig: 'gameAPI.addAge(age: number|string, entry: object) → string',
+          params: [['age', 'number|string', '年龄'], ['entry', 'object', '{ age, event: [[id, weight]], talent: [] }']],
+          returns: '写好的年龄键（字符串）',
+          side: '写入年龄表',
+          note: '⚠️ **整键替换**：想给某一岁追加事件，必须把原条目的 id 一起抄进来，否则那些事件就没了（引擎的真实语义，不是 bug）。**2026-10 补齐**。',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'getAge',
+          sig: 'gameAPI.getAge(age: number|string) → object | undefined',
+          params: [['age', 'number|string', '年龄']],
+          returns: '该年龄的条目（引用）',
+          side: '无',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'removeAge',
+          sig: 'gameAPI.removeAge(age: number|string) → void',
+          params: [['age', 'number|string', '年龄']],
+          returns: 'undefined',
+          side: '从年龄表删除该年龄',
+          platform: '两端',
+        },
+        {
+          t: 'api',
+          path: 'list',
+          sig: 'gameAPI.list(table: string) → Array',
+          params: [['table', 'string', "talents / events / achievements / characters / age"]],
+          returns: '条目数组（浅拷贝）',
+          side: '无',
+          note: '以前只能自己 `Object.keys(gameAPI.data.xxx)`。未知表名 → **空数组**（不抛）。**2026-10 补齐**。',
           platform: '两端',
         },
         {
@@ -777,8 +895,8 @@ if (gameAPI.host.has('my-mod')) {
           rows: [
             ['**加界面**', '没有页面/组件/路由/属性面板/统计项的注册 API。Mod 定义的新参数与新统计**不会自动出现在界面上**（统计项还必须在 `statistics-view.js` 里登记，那是前端源码）'],
             ['**订阅成就达成**', '成就广播走 Life 自己的 emit，与 Mod 钩子总线是两条通道（见 §3 末）'],
-            ['**storage / network API**', '`permissions` 里的 `storage` / `network` 只是声明字符串，**没有对应 API**（也没有强制）'],
-            ['**log / utils**', 'gameAPI 没有 `log`、没有工具函数。打日志用 `console.log`'],
+            ['**network API**', '`permissions` 里的 `network` 只是声明字符串，**没有对应 API**（也没有强制）。`storage` 已于 2026-10 有对应 API：见 §13 的 `gameAPI.storage`'],
+            ['**utils（工具函数）**', 'gameAPI 不提供工具函数（没有深拷贝 / 格式化 / 随机数）；`log` 已于 2026-10 提供（见 §13）'],
             ['**成就删除**', '只有 `addAchievement` / `getAchievement`'],
             ['**characters / age 的专用 API**', '只能直接操作 `gameAPI.data.characters` / `.age`（引用，改了立即生效）'],
             ['**逐岁异步介入**', '`life.next()` 是同步函数，三个逐岁钩子走 `emitSync` → async 回调的 Promise 被丢弃。"每年调一次后端"必须先付"把 next() 改成 async"的代价'],

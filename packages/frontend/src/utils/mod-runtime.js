@@ -475,6 +475,10 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
       // 钩子观察引擎内部的属性变化（事件/天赋效果、年龄自增、成就记账）。
       // 传 Life 本体即可（createPropertyBridge 会取它的 .property 模块）。
       property: life,
+      // 跨局存储桥（命名空间 mod:<Mod 名>:）：与引擎同一份 storage。
+      storage: life?.storage,
+      // Mod 名（storage 命名空间与日志前缀）。
+      modName: name,
       // 日志。
       log,
     })

@@ -39,6 +39,13 @@ export const APP_STORAGE_KEYS = [
   { key: 'playSpeed', label: '自动播放速度' },
 ]
 
+// #MOD_STORAGE_NAMESPACE
+// Mod 自带存储的命名空间（`gameAPI.storage` 写的键 = `<引擎前缀>mod:<Mod 名>:<键>`）。
+//
+// 为什么单独列出来：Mod 的键是**运行期**写的（源码里没有字面量），所以"逐键清单"永远追不上它们 ——
+// 只能按**前缀**清理。漏了这段的表现是"重置完了某个 Mod 的数据还在"（与漏键同一类问题）。
+export const MOD_STORAGE_NAMESPACE = 'mod:'
+
 // #resetPlan
 // 生成"要清哪些键"的清单（最终键名，供删除与界面显示）。
 //
@@ -108,6 +115,26 @@ export async function resetAppData({ storage, modStore, prefix = DEFAULT_PREFIX,
         // 记错（不中断）。
         errors.push(`清空 ${item.key} 失败：${e.message}`)
       }
+    }
+    // Mod 自带存储（`gameAPI.storage`）：键是运行期生成的，清单追不上 → 按前缀扫。
+    try {
+      // 有枚举能力才扫（测试替身可能没有）。
+      if (typeof store.keys === 'function' && typeof store.removeItem === 'function') {
+        // 目标前缀（引擎前缀 + Mod 命名空间）。
+        const modPrefix = `${prefix}${MOD_STORAGE_NAMESPACE}`
+        // 命中的键。
+        const modKeys = store.keys().filter((k) => typeof k === 'string' && k.startsWith(modPrefix))
+        // 逐个删。
+        for (const k of modKeys) {
+          // 删除。
+          store.removeItem(k)
+          // 记账。
+          cleared.push(k)
+        }
+      }
+    } catch (e) {
+      // 记错（不中断）。
+      errors.push(`清空 Mod 存储失败：${e.message}`)
     }
   }
   // 已安装的 Mod（IndexedDB / 内存）——一并卸载，否则"重置"后 Mod 管理页还留着旧 Mod。
