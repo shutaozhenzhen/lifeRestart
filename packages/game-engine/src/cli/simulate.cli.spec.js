@@ -304,11 +304,16 @@ describe('simulate.cli - runCli（输出与导出）', () => {
 describe('simulate.cli - 真实数据路径', () => {
   test('loadModData：加载 mods/ 得到真实规模数据', async () => {
     // 加载（异步：加载器为两个平台共用而统一成 async）。
-    const data = await loadModData({ modsDir: MODS_DIR })
+    // 2026-10 能力补齐 ④：返回值多了 `skipped`（异步/不确定 Mod 的跳过清单，理由一路带到报告）。
+    const { data, skipped } = await loadModData({ modsDir: MODS_DIR })
     // 规模与 README 描述一致（Data Mod：age 501 / talents 184 / events 1720）。
     expect(Object.keys(data.age).length).toBeGreaterThan(400)
     expect(Object.keys(data.talents).length).toBeGreaterThan(150)
     expect(Object.keys(data.events).length).toBeGreaterThan(1000)
+    // 仓库 mods/ 里唯一被跳过的是教学样板 example-async-mod（`async: true`，不可逐位复现）——
+    // 判据是 manifest，所以"跳过了谁、为什么"是可断言的（不许静默丢）。
+    expect(skipped.map((x) => x.name)).toEqual(['example-async-mod'])
+    expect(skipped[0].reasons.join()).toContain('async: true')
   })
 
   test('真实数据跑 2 局：能结束且寿命合理', async () => {

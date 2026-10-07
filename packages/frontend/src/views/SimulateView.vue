@@ -73,6 +73,9 @@ const stats = ref(null)
 const results = ref([])
 // 数据源描述。
 const dataSource = ref('')
+// 被**跳过策略**挡掉的 Mod（`async: true` / `deterministic: false` 不可逐位复现；
+// 2026-10 能力补齐 ④：跳过了谁、为什么都要看得见，不许静默丢）。
+const skippedMods = ref([])
 // 内容数据（进入页面时加载一次；引擎不内置内容，只能来自 Data Mod）。
 const realData = ref(null)
 // 内容不可用提示（没有数据 Mod 时明确指向 /mods）。
@@ -225,6 +228,8 @@ async function start() {
     strategy: strategy.value,
     // 取消判定。
     shouldStop: () => cancelled.value,
+    // 被跳过策略挡掉的 Mod（理由并进 stats.warnings → 页面警告块与导出报告都带上）。
+    skipped: skippedMods.value,
     // 进度回调。
     onProgress: (d, total, last) => {
       // 更新进度。
@@ -276,11 +281,18 @@ function exportResult(format) {
 
 // 挂载：加载内容数据（与主页同一实现）。
 onMounted(async () => {
-  // 加载。
-  const { data, dataSource: source } = await loadGameData()
+  // 加载（**跳过异步 Mod**：批量模拟要可逐位复现，见 2026-10 能力补齐 ④）。
+  const { data, dataSource: source, mods } = await loadGameData({ skipAsync: true })
   // 记录。
   realData.value = data
   dataSource.value = source
+  // 被跳过的 Mod（报告里要说明；页面上的警告块会显示）。
+  skippedMods.value = (mods?.skippedAsync || []).map((x) => ({
+    // 名字。
+    name: x.name,
+    // 理由（可读）。
+    reasons: [`声明了 async: true（异步逐岁钩子：${(x.hooks || []).join('/') || '全部'}）`],
+  }))
   // 无内容时明确提示（引擎不内置内容，没有"演示数据"可退）。
   if (Object.keys(data.talents || {}).length === 0) {
     loadError.value = NO_CONTENT_HINT
@@ -389,6 +401,12 @@ function back() {
         <label>数据源</label>
         <span class="source">{{ dataSource || '（未就绪）' }}</span>
       </div>
+
+      <!-- 跳过说明（2026-10 能力补齐 ④）：异步 / 非确定的 Mod 不参与批量模拟
+           （它们不可逐位复现），**必须写出来** —— 否则报告里的数字少了一块却没人知道。 -->
+      <p v-for="m in skippedMods" :key="m.name" class="warn">
+        ⚠ 已跳过 Mod {{ m.name }}（{{ m.reasons.join('；') }}）—— 它的数据与代码未参与本次模拟
+      </p>
 
       <div class="actions">
         <button v-if="!running" class="btn primary" @click="start">▶ 开始模拟</button>

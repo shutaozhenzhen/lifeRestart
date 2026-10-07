@@ -25,8 +25,9 @@ import { createNodeModuleLoader } from './modules-node.js'
 // @param {string} params.modsDir - mods 目录
 // @param {object} [params.log] - 日志器
 // @param {string[]} [params.only] - 只加载这些 Mod
+// @param {string[]} [params.skip] - 不加载这些 Mod（批量场景的跳过策略：async / 非确定性）
 // @returns {Promise<object>} 加载器（见 loader.js）
-export async function createNodeModLoader({ modsDir, log, only } = {}) {
+export async function createNodeModLoader({ modsDir, log, only, skip } = {}) {
   // 建源 + 建加载器（带运行时模块适配器）。
   return createModLoader({
     // 文件源。
@@ -35,6 +36,8 @@ export async function createNodeModLoader({ modsDir, log, only } = {}) {
     log,
     // 启用过滤。
     only,
+    // 跳过名单（sim / consistency 用）。
+    skip,
     // 运行时模块：用原生 import() 加载 Mod 目录下的模块文件。
     moduleLoader: createNodeModuleLoader({ modsDir }),
   })

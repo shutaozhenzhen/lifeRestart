@@ -1,0 +1,10 @@
+{
+  "name": "example-async-mod",
+  "version": "1.0.0",
+  "author": "lifeRestart",
+  "description": "教学样板：Mod 异步介入逐岁流程（async: true + onBeforeYear / onAfterYear）",
+  "permissions": ["hooks"],
+  "dependencies": ["lifeRestart-data"],
+  "async": true,
+  "asyncHooks": ["onBeforeYear", "onAfterYear"]
+}

@@ -14,6 +14,9 @@
  *     "targets": ["browser", "node"],          // 缺省 ["browser"]
  *     "entry": { "browser": "code.js", "node": "server.js" },
  *     "deterministic": false,                   // 缺省由 targets 推导
+ *     // === 异步逐岁介入（2026-10 能力补齐 ④）===
+ *     "async": true,                            // 缺省 false：**必须显式 opt-in** 才走 nextAsync()
+ *     "asyncHooks": ["onBeforeYear"],           // 可选细化：只等这几个逐岁钩子（缺省 = 全部逐岁钩子）
  *     // === 界面扩展（2026-10 能力补齐 ③；schema 见 mod/ui-schema.js）===
  *     "ui": {
  *       "pages":      [{ "id": "...", "title": "...", "blocks": [...] }],
@@ -26,12 +29,15 @@
  * 功能：
  *   1. validateManifest：校验 manifest 合法/非法（含 `ui` 段，见 mod/ui-schema.js）。
  *   2. resolveOrder：拓扑排序（含循环依赖检测、缺失依赖报错）。
- *   3. 3 个取值助手（manifestTargets / manifestEntry / manifestDeterministic）：
- *      **默认值只在这里定义一次**，loader / 宿主桥 / consistency 全部从这里读，
+ *   3. 取值助手（manifestTargets / manifestEntry / manifestDeterministic /
+ *      manifestModules / manifestAsync / manifestAsyncHooks / hooksToAwait）：
+ *      **默认值只在这里定义一次**，loader / 宿主桥 / consistency / sim 全部从这里读，
  *      避免"缺省语义"散落在多处而互相不一致。
+ *   4. modsToSkip：批量场景（sim / consistency）的**跳过策略**与**理由**（不静默丢）。
  *
  * 为什么要"缺省 = 旧语义"：现有 4 个内置 Mod 的 manifest 一个字都不改，
- * 行为必须逐位相同（有回归用例钉住）。
+ * 行为必须逐位相同（有回归用例钉住）。`async` 缺省 false 也是这条原则的一部分 ——
+ * 没有异步 Mod 时引擎/前端/批量模拟的一切行为与以前逐位相同。
  */
 
 // #REQUIRED_FIELDS
@@ -45,6 +51,15 @@ export const VALID_TARGETS = ['browser', 'node']
 // #DEFAULT_BROWSER_ENTRY
 // 浏览器侧入口的缺省文件名（与 loader.js 的 CODE_FILE 一致）。
 export const DEFAULT_BROWSER_ENTRY = 'code.js'
+
+// #YEAR_HOOKS
+// **逐岁钩子**：异步逐岁介入只认这三个名字。
+//
+// 为什么另两个逐岁相关钩子（`onTalentPoolGenerate` / `onEventRender`）**不在这里**：
+// 它们是"抽卡时机"与"渲染时机" —— 都在 `next()` 的一次性流程里，异步没有意义
+// （卡池要当场返回给调用方；事件文本要当场返回给渲染器），所以 `nextAsync()` 里
+// 它们仍然走 `emitSync`。写进 `asyncHooks` 会被 manifest 校验拒掉（见下）。
+export const YEAR_HOOKS = ['onBeforeYear', 'onYearAdvance', 'onAfterYear']
 
 // 合法权限集合（共享常量）。
 import { VALID_PERMISSIONS } from './permissions.js'
@@ -176,6 +191,41 @@ export function validateManifest(manifest) {
     // 报错。
     errors.push('deterministic 必须是布尔值')
   }
+  // === 异步逐岁介入（2026-10 能力补齐 ④）===
+  //
+  // 为什么非法值要**硬错误**（而不是"当成 false 静默忽略"）：这两种错法的表现是
+  //   · `async: "true"`（字符串）写成这样 → 引擎按 falsy 处理 → 作者的异步钩子被丢弃、
+  //     后端永远不生效，而日志里一个字都没有；
+  //   · `asyncHooks: ['onYear']`（名字写错）→ 那一年的注入永远不到，同样静默。
+  // 所以这里照 `ui` 那条的先例：**manifest 校验直接失败**，加载链路上就会报出来。
+  if (manifest.async !== undefined && typeof manifest.async !== 'boolean') {
+    // 报错。
+    errors.push('async 必须是布尔值')
+  }
+  if (manifest.asyncHooks !== undefined) {
+    // 必须是数组。
+    if (!Array.isArray(manifest.asyncHooks)) {
+      // 报错。
+      errors.push('asyncHooks 必须是数组')
+    } else if (manifest.asyncHooks.length === 0) {
+      // 空数组没有意义（缺省即"全部逐岁钩子"）。
+      errors.push('asyncHooks 不能是空数组（缺省表示"本 Mod 用到的逐岁钩子都按异步等"）')
+    } else {
+      // 逐项必须是已知的逐岁钩子名。
+      for (const h of manifest.asyncHooks) {
+        // 未知钩子名（列出合法值，便于作者直接改）。
+        if (!YEAR_HOOKS.includes(h)) {
+          // 报错。
+          errors.push(`asyncHooks 含未知钩子名: ${h}（合法值：${YEAR_HOOKS.join(' / ')}）`)
+        }
+      }
+      // 重复项。
+      if (new Set(manifest.asyncHooks).size !== manifest.asyncHooks.length) {
+        // 报错。
+        errors.push('asyncHooks 不能有重复项')
+      }
+    }
+  }
   // === 运行时模块（依赖随包分发）===
   if (manifest.modules !== undefined) {
     // 必须是对象（非数组）。
@@ -281,6 +331,94 @@ export function manifestDeterministic(manifest) {
   if (typeof manifest?.deterministic === 'boolean') return manifest.deterministic
   // 缺省推导。
   return !manifestTargets(manifest).includes('node')
+}
+
+// #manifestAsync
+// 该 Mod 是否**显式声明**要用异步逐岁流程（`async: true`）。
+//
+// 缺省 false —— **这是本能力 opt-in 的开关**：
+//   没有 `async: true` 的 Mod 时，前端仍走同步 `life.next()`，一切与以前逐位相同。
+//
+// @param {object} manifest - manifest 对象
+// @returns {boolean} 是否异步 Mod
+export function manifestAsync(manifest) {
+  // 只有显式 true 才算（非法值由 validateManifest 拦下）。
+  return manifest?.async === true
+}
+
+// #manifestAsyncHooks
+// 取该 Mod 在 `asyncHooks` 里声明的钩子名（**原样**，不补缺省）。
+//
+// 语义：`async: true` + 不写 `asyncHooks` = 本 Mod 用到的逐岁钩子都按异步等；
+//       写了就是"只等这几个"（必须都是 YEAR_HOOKS 里的名字，否则校验报错）。
+//
+// @param {object} manifest - manifest 对象
+// @returns {string[]|null} 钩子名数组；未声明返回 null
+export function manifestAsyncHooks(manifest) {
+  // 未声明。
+  if (!Array.isArray(manifest?.asyncHooks) || manifest.asyncHooks.length === 0) return null
+  // 拷贝一层。
+  return [...manifest.asyncHooks]
+}
+
+// #hooksToAwait
+// `nextAsync()` 的**等待策略**：哪些逐岁钩子要 await 这个 Mod 的回调。
+//
+// 为什么需要它（而不是"异步模式下全部 await"）：`asyncHooks` 的价值在于**精确控制**。
+// 例如一个 Mod 只在 `onBeforeYear` 里取后端数据，它的 `onYearAdvance` 就可以是同步的
+// （少一次 await，也少一次超时风险）。
+//
+// @param {object} manifest - manifest 对象
+// @returns {string[]} 要 await 的钩子名（非异步 Mod 返回空数组）；空数组 / null → 全部逐岁钩子
+export function hooksToAwait(manifest) {
+  // 非异步 Mod：一个都不等（保证"同步 Mod 在 nextAsync 里也是同步调用"）。
+  if (!manifestAsync(manifest)) return []
+  // 声明了细化的名单。
+  const declared = manifestAsyncHooks(manifest)
+  // 声明了就用它。
+  if (declared) return declared
+  // 缺省：三个逐岁钩子全等。
+  return [...YEAR_HOOKS]
+}
+
+// #modsToSkip
+// **批量场景的跳过策略**（sim / consistency 共用一处实现）。
+//
+// 为什么跳过：批量模拟要"同 seed + 同输入 → 可逐位复现"，而异步逐岁钩子（调后端、等定时器）
+// 天然不满足这一点；`deterministic: false` 的 Mod 同理（例如面向 node 的宿主调用）。
+// 跳过而不是"照样跑"：否则报告里的分布会混进不可复现的样本，且没人看得出来。
+//
+// **不许静默丢**（`_准则_Mod设计.md` §5 / AGENTS 模拟系统那条）：这里返回的
+// `notReproducible` / `skipped` 必须一路带到 `stats.warnings` / consistency 的脚注。
+//
+// @param {Array<{name: string, manifest?: object}>} manifests - Mod 元信息（`{ name, manifest }` 形态）
+// @returns {{notReproducible: Array<{name: string, reasons: string[]}>, skipped: string[], async: Array<{name: string, hooks: string[]}>}} 跳过策略
+export function modsToSkip(manifests = []) {
+  // 结果。
+  const notReproducible = []
+  // 异步 Mod（连同它要 await 的钩子；报告里要写清"为什么跳过"）。
+  const asyncMods = []
+  // 逐个。
+  for (const m of manifests || []) {
+    // 名字（元信息形态两种都认：`{ name, manifest }` 是 loader 的形态）。
+    const name = m?.name || m?.manifest?.name
+    // 无名条目跳过。
+    if (!name) continue
+    // manifest。
+    const manifest = m?.manifest || m
+    // 理由。
+    const reasons = []
+    // 异步逐岁介入 = 不可逐位复现（它 await 外部世界）。
+    if (manifestAsync(manifest)) reasons.push(`声明了 async: true（异步逐岁钩子：${hooksToAwait(manifest).join('/')}）`)
+    // 显式声明不确定。
+    if (manifestDeterministic(manifest) === false) reasons.push('deterministic: false（行为不可复现）')
+    // 命中。
+    if (reasons.length > 0) notReproducible.push({ name, reasons })
+    // 记异步清单。
+    if (manifestAsync(manifest)) asyncMods.push({ name, hooks: hooksToAwait(manifest) })
+  }
+  // 返回。
+  return { notReproducible, skipped: notReproducible.map((x) => x.name), async: asyncMods }
 }
 
 // #resolveOrder

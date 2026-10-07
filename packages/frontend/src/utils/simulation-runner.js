@@ -12,7 +12,7 @@
  */
 
 // 引擎模拟内核。
-import { createSimulator } from 'game-engine/src/sim/simulator.js'
+import { createSimulator, skipPolicyWarning } from 'game-engine/src/sim/simulator.js'
 // 种子随机源（可复现）。
 import { createRng } from 'game-engine/src/functions/util.js'
 // 应用侧唯一 Life 构造入口 + 纯内存存储（模拟不落盘，避免写脏玩家存档）。
@@ -38,6 +38,9 @@ function defaultYield() {
 // @param {Function} [params.onProgress] - (done, total, lastResult) => void
 // @param {Function} [params.shouldStop] - 返回 true 则中止（取消）
 // @param {Function} [params.yieldTo] - 让出主线程的实现（测试注入）
+// @param {Array<{name: string, reasons: string[]}>} [params.skipped] - 被**跳过策略**挡掉的 Mod
+//   （2026-10 能力补齐 ④：`async: true` / `deterministic: false` 不可逐位复现）。理由会并进
+//   `stats.warnings`（页面上真的看得见），**不许静默丢**。
 // @param {object} [params.log] - 日志器
 // @returns {Promise<{stats: object, results: Array, elapsedMs: number, cancelled: boolean}>} 结果
 export async function runSimulation({
@@ -49,6 +52,7 @@ export async function runSimulation({
   onProgress,
   shouldStop,
   yieldTo,
+  skipped = [],
   log,
 } = {}) {
   // 随机源：给种子则可复现；同一个 RNG 同时驱动游戏内随机与策略随机（否则不可复现）。
@@ -85,6 +89,8 @@ export async function runSimulation({
       await (typeof yieldTo === 'function' ? yieldTo() : defaultYield())
     }
   }
+  // 把跳过策略的理由并进逐局结果（summarize 会去重汇总到 stats.warnings → 页面/导出都看得到）。
+  skipPolicyWarning({ skipped, simulator, log })
   // 聚合（含收集统计与种子）。
   const stats = simulator.summarize({ seed })
   // 返回。

@@ -166,7 +166,7 @@ gameAPI.on('onYearAdvance', (p) => {    // 注册钩子
           params: [['name', 'string', '钩子名'], ['payload', 'any', '传给回调的对象']],
           returns: '所有回调返回值的数组 —— **async 回调给到的是 Promise 本身（没人 await）**',
           side: '**同步**：顺序直接调用，不 await',
-          note: '引擎的三个逐岁钩子走的就是它。所以"在逐岁钩子里写异步逻辑再改数据"是**无效**的：改动会晚于引擎读取（详见 §11）。',
+          note: '引擎的抽卡/渲染钩子（`onTalentPoolGenerate` / `onEventRender`）走的就是它 —— 那两个时机调用方当场就要结果（卡池 / 文本），异步没有意义。**逐岁钩子**在声明了 `async: true` 的 Mod 上走的是 await 路径（见 §16），没声明的 Mod 在这里照样是同步调用。',
           perms: 'hooks',
           platform: '两端',
         },
@@ -188,17 +188,24 @@ gameAPI.on('onYearAdvance', (p) => {    // 注册钩子
     // ---------- 四个钩子 ----------
     {
       id: 'hooks',
-      title: '3. 引擎实际会触发的四个钩子',
+      title: '3. 引擎实际会触发的钩子（含两个逐岁异步点）',
       blocks: [
         {
           t: 'table',
           head: ['钩子名', '触发点', 'payload', '能改什么', '同步/异步'],
           rows: [
-            ['`onTalentPoolGenerate`', '`life.talentRandom()`（抽卡时）', '`{ pool }`', '**改 `payload.pool`**（push 天赋对象即可入池）', '`emitSync`'],
-            ['`onYearAdvance`', '`life.next()`（每翻一年）', '`{ age, content, isEnd }`', '**push 进 `payload.content`**（进当年轨迹）', '`emitSync`'],
-            ['`onEventRender`', '`life.format()`（渲染每个事件文本时）', '`{ text }`', '**返回字符串即覆盖文本**（唯一返回值生效的钩子）', '`emitSync`'],
+            ['`onTalentPoolGenerate`', '`life.talentRandom()`（抽卡时）', '`{ pool }`', '**改 `payload.pool`**（push 天赋对象即可入池）', '`emitSync`（永远同步）'],
+            ['`onBeforeYear`', '`nextAsync()`：年龄自增**之前**（2026-10 新增）', '`{ age, nextAge, content, isEnd, pending }`', '**`payload.pending.push(...)`** 进当年轨迹；也可在这时补数据（`age` = 当前年龄，`nextAge` = 这一岁推进后的年龄）', 'await（仅 `async: true` 的 Mod，见 §16）'],
+            ['`onYearAdvance`', '`life.next()`（每翻一年）', '`{ age, content, isEnd }`', '**push 进 `payload.content`**（进当年轨迹）', '同步 `next()` 里 `emitSync`；`nextAsync()` 里 await（仅 `async: true` 的 Mod）'],
+            ['`onAfterYear`', '`nextAsync()`：推进**完成之后**（2026-10 新增）', '`{ age, content, isEnd }`', '**push 进 `payload.content`**（收尾/结算类条目）', 'await（仅 `async: true` 的 Mod，见 §16）'],
+            ['`onEventRender`', '`life.format()`（渲染每个事件文本时）', '`{ text }`', '**返回字符串即覆盖文本**（唯一返回值生效的钩子）', '`emitSync`（永远同步）'],
             ['`propertyChange`', '**任何**属性变化（事件/天赋效果、年龄自增、成就记账、Mod 自己改）', '`{ prop, value, source }`（source: `\'engine\'` / `\'mod\'`）', '不能改（纯观察）；回调里改属性会被重入保护挡掉嵌套通知', '`emitSync`（同步）'],
           ],
+        },
+        {
+          t: 'note',
+          kind: 'info',
+          text: '**默认同步，异步要显式 opt-in**：只有 manifest 里写了 `"async": true` 的 Mod，它的逐岁钩子才会被 await（`nextAsync()`）。没有异步 Mod 时引擎/界面走的还是同步 `life.next()` —— 老行为逐位不变。取舍：`onTalentPoolGenerate` / `onEventRender` **永远同步**（调用方当场要结果），所以它们不进 `asyncHooks` 白名单。详见 §16。',
         },
         {
           t: 'sub',
@@ -902,7 +909,7 @@ if (gameAPI.host.has('my-mod')) {
             ['**utils（工具函数）**', 'gameAPI 不提供工具函数（没有深拷贝 / 格式化 / 随机数）；`log` 已于 2026-10 提供（见 §13）'],
             ['**成就删除**', '只有 `addAchievement` / `getAchievement`'],
             ['**characters / age 的专用 API**', '只能直接操作 `gameAPI.data.characters` / `.age`（引用，改了立即生效）'],
-            ['**逐岁异步介入**', '`life.next()` 是同步函数，三个逐岁钩子走 `emitSync` → async 回调的 Promise 被丢弃。"每年调一次后端"必须先付"把 next() 改成 async"的代价'],
+            ['**逐岁异步介入**', '**默认同步**：`life.next()` 是同步函数。要异步必须显式 `"async": true`（前端随即改用 `life.nextAsync()`）—— 见 §16；`onTalentPoolGenerate` / `onEventRender` **永远同步**（调用方当场要结果），写进 `asyncHooks` 是校验错误'],
             ['**沙箱**', '`new Function` 执行、只注入 gameAPI：浏览器侧 Mod 摸得到 `window`/`document`，Node 侧 `server.js` 是真 ESM（`node:fs`、`child_process` 都能用）。"完全权限"是 Mod 模型的既定前提，不是缺陷'],
             ['**回滚/卸载数据**', '加载并执行过的 Mod 数据与钩子没有"卸载"接口（钩子只能靠 `on` 返回的注销函数手动摘），游戏内数据在重开一局时按原始内容重建'],
             ['**拿到 AI 配置**', '浏览器侧目前不给 Mod 注入 AI 配置（`ai.available` 为 false）；`manifest.ai` 字段引擎**从不读取**'],
@@ -911,7 +918,7 @@ if (gameAPI.host.has('my-mod')) {
         {
           t: 'note',
           kind: 'info',
-          text: '**已经不是"做不到"的三件事**（改文档时最容易漏）：① 资源文件 —— Mod 包能带图片/音频/字体了，用 `gameAPI.asset`（§14；以前 zip "只收文本"，二进制被丢弃）；② 逐岁**同步**介入 + 异步生命周期点（`onBeforeLife` / `onAfterLife`）—— 后者可以 await，前者不行（见上表最后几行）；③ **加界面** —— 2026-10 起有四种扩展点（§15），属性面板与总结统计都能由 Mod 声明（以前这两处是前端源码硬编码）。',
+          text: '**已经不是"做不到"的几件事**（改文档时最容易漏）：① 资源文件 —— Mod 包能带图片/音频/字体了，用 `gameAPI.asset`（§14；以前 zip "只收文本"，二进制被丢弃）；② **逐岁异步介入** —— 声明 `"async": true` 就能在 `onBeforeYear` / `onYearAdvance` / `onAfterYear` 里 await（内容真的进**当年**轨迹，见 §16）；默认仍同步，`onTalentPoolGenerate` / `onEventRender` 永远同步；③ **加界面** —— 2026-10 起有四种扩展点（§15），属性面板与总结统计都能由 Mod 声明（以前这两处是前端源码硬编码）。',
         },
       ],
     },
@@ -941,7 +948,7 @@ if (gameAPI.asset.available) {
   })
 
   gameAPI.on('onYearAdvance', (p) => {
-    // ⚠️ 钩子是**同步**的，而 asset.url() 是异步的 → 先把 URL 读好缓存起来，
+    // ⚠️ 默认情况下钩子是**同步**的，而 asset.url() 是异步的 → 先把 URL 读好缓存起来，
     //    在同步钩子里用缓存值（见下方"异步"一节）。
   })
 }
@@ -1048,7 +1055,7 @@ const url = await gameAPI.asset.url('assets/logo.png')`,
         {
           t: 'note',
           kind: 'tip',
-          text: '占位符只解决"文本里插图"。要在**开局**就把资源准备好（例如拿 URL 设背景音乐、预加载），在 `onAfterLife`（可异步的生命周期钩子）里 await `gameAPI.asset.url(...)` 并把结果存进 `gameAPI.storage`；**三个逐岁钩子是同步的**，里面不能 `await`（回调里 `await` 不会阻塞那一年）。',
+          text: '占位符只解决"文本里插图"。要在**开局**就把资源准备好（例如拿 URL 设背景音乐、预加载），在 `onAfterLife`（可异步的生命周期钩子）里 await `gameAPI.asset.url(...)` 并把结果存进 `gameAPI.storage`；**默认情况下逐岁钩子是同步的**，里面 `await` 不会阻塞那一年 —— 除非本 Mod 声明了 `"async": true`（见 §16），那时 `onBeforeYear` / `onYearAdvance` / `onAfterYear` 里可以 `await`。',
         },
         {
           t: 'sub',
@@ -1346,6 +1353,88 @@ gameAPI.ui.addStatistic('MY_YEARS', 12)`,
           t: 'note',
           kind: 'tip',
           text: '想少踩坑就记住三句话：**块类型与文档页一模一样**（写错会显式显示"未知内容块类型"）；**属性与统计的 key 必须先在引擎里真实存在**（否则界面跳过并记 warn）；**写错 slot / 超上限 / 同 Mod 重复 id 是硬错误**（manifest 校验就拦下，不会静默失效）。',
+        },
+      ],
+    },
+
+    // ---------- 异步逐岁介入（2026-10 能力补齐 ④） ----------
+    {
+      id: 'async-year',
+      title: '16. 异步介入逐岁流程（`async: true` + `onBeforeYear` / `onAfterYear`）',
+      blocks: [
+        {
+          t: 'p',
+          text: '这一节回答一个具体问题：**"某一年去后端取一句剧情，塞进当年轨迹"能不能做到？** 2026-10 起能，但要显式 opt-in。在这之前它是硬边界 —— `life.next()` 是同步函数，逐岁钩子走 `emitSync`，async 回调返回的 Promise 被**直接丢弃**，界面早在 `next()` 返回时就做了轨迹快照，所以晚到的改动永远不进当年。',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          label: 'manifest.json：opt-in 开关（缺省 false，不写就一切照旧）',
+          code: `{
+  "name": "my-mod",
+  "version": "1.0.0",
+  "permissions": ["hooks"],
+  "async": true,
+  "asyncHooks": ["onBeforeYear", "onAfterYear"]
+}`,
+        },
+        {
+          t: 'table',
+          head: ['字段', '类型', '缺省', '语义'],
+          rows: [
+            ['`async`', 'boolean', '`false`', '**必须显式 true** 才走异步路径。写了它，前端推进时改用 `life.nextAsync()`（否则仍是同步 `life.next()`）。'],
+            ['`asyncHooks`', 'string[]', '（省 = 全部逐岁钩子）', '可选细化：只把这些逐岁钩子按异步等。合法值**只有三个**：`onBeforeYear` / `onYearAdvance` / `onAfterYear`。写别的（例如 `onEventRender`）是 **manifest 校验硬错误** —— 那两个时机调用方当场要结果，异步没有意义。'],
+          ],
+        },
+        {
+          t: 'code',
+          lang: 'js',
+          label: 'code.js：某一年去后端取一句剧情（以前做不到的那件事）',
+          code: `// 引擎在"翻年之前"触发 onBeforeYear —— 这时还能 await：
+gameAPI.on('onBeforeYear', async (p) => {
+  // p.age = 当前年龄；p.nextAge = 这一岁推进后的年龄
+  if (p.nextAge !== 1) return
+  // 真 await（比如 gameAPI.host.call / gameAPI.ai.generate）
+  const line = await fetchBackendLine()
+  // 塞进**当年**轨迹（引擎会在天赋/事件之后把它并进 content）
+  p.pending.push({ type: 'EVT', description: line })
+})
+
+// 推进完成之后（收尾/结算类内容走这个时机）：
+gameAPI.on('onAfterYear', async (p) => {
+  // p.content 是当年轨迹（引擎自己的条目 + 你注入的）
+  p.content.push({ type: 'EVT', description: '岁末结算' })
+})`,
+        },
+        {
+          t: 'list',
+          items: [
+            '**`onBeforeYear`（`{ age, nextAge, content, isEnd, pending }`）** —— 年龄自增**之前**。`pending` 里的条目会被引擎在天赋/事件之后并入当年 `content`；也可以在这时改数据（例如按后端结果往事件表里补一条，让这一岁抽到它）。',
+            '**`onYearAdvance`（`{ age, content, isEnd }`）** —— 与同步路径同一个钩子，但在 `nextAsync()` 里被 await（同步 `next()` 里照旧是 `emitSync`）。',
+            '**`onAfterYear`（`{ age, content, isEnd }`）** —— 推进完成之后，可往 `content` 追加收尾内容。',
+          ],
+        },
+        {
+          t: 'table',
+          head: ['边界', '实情'],
+          rows: [
+            ['**超时 3 秒**', '单个异步钩子超过 3000ms（可配）→ 记一条 warn（**带 Mod 名与钩子名**）并**继续推进**。慢后端不会把游戏卡死。'],
+            ['**抛错被隔离**', '异步钩子里 `throw` 只记一条 warn，后面的钩子与这一年照常进行。'],
+            ['**不污染轨迹**', '超时/抛错的那次等待整体被放弃（不会写半截数据），超时回调的返回值也不进结果。已经发生的同步副作用无法回滚（JS 没有事务）→ 钩子里"先取数据、最后再改"。'],
+            ['**随机数顺序不变**', '`nextAsync()` 与 `next()` **共用同一次推进**，随机调用只发生在那里面 → 同种子下两者游戏内容逐字节相同。某 Mod 自己引入的不确定性（网络/时钟）是它自己的事。'],
+            ['**界面有"生成中"**', '异步推进期间轨迹页显示「⏳ 生成中…」，按钮禁用（一次只推进一年）；换局/离开页面时在途结果被丢弃（不留半截轨迹、不留未处理的 Promise）。'],
+            ['**批量模拟 / 一致性检查跳过它**', '`async: true`（以及 `deterministic: false`）的 Mod 在 sim 与 consistency 里**不参与**（异步 = 不可逐位复现），并在 `stats.warnings` / 报告脚注里写明"跳过了谁、为什么"—— 不许静默丢。'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'warn',
+          text: '**没有 `async: true` 的 Mod，回调即使在 `nextAsync()` 里也是同步调用的** —— 所以"我只想拿池子/改文本"的钩子不要声明异步（多了超时风险，也没有收益）。另外：`gameAPI.on(name, fn)` **不会**替你把回调变成异步；异步与否由 manifest 决定，引擎在注册时打标记。',
+        },
+        {
+          t: 'link',
+          to: '/mods/example-mod',
+          text: '可跑样板：`mods/example-mod/`（默认禁用；它演示同步钩子与数据表）',
         },
       ],
     },

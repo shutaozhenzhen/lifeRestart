@@ -110,7 +110,7 @@ export async function fetchOriginalData({ fetchImpl, baseUrl } = {}) {
 // 并给出 dataSource 描述（供日志/报告）。
 //
 // 步骤：
-//   1. 基础数据：原版数据产物（public/data）→ 失败降级 fixture
+//   1. 基础数据：原版数据产品（public/data）→ 失败降级空内容
 //   2. Mod：发现 public/mods/index.json → 合并启停状态 → 加载启用 Mod 的数据与代码
 //      · 数据在这里合并（必须在 Life.initial() 之前）
 //      · 代码**不执行**，随结果返回（要等 Life 建好才能注入 params → 见 store.init）
@@ -120,8 +120,11 @@ export async function fetchOriginalData({ fetchImpl, baseUrl } = {}) {
 // @param {object} [deps.storage] - 存储适配器（读 Mod 启停）
 // @param {string} [deps.baseUrl] - 数据基础路径
 // @param {boolean} [deps.withMods] - 是否加载 Mod（缺省 true；模拟页等可关掉）
+// @param {boolean} [deps.skipAsync] - 是否**跳过** `async: true` 的 Mod（2026-10 能力补齐 ④：
+//   批量模拟要可逐位复现，异步 Mod 一律跳过；被跳过的名字与理由在 `mods.skippedAsync` 里，
+//   **不静默丢**）。缺省 false（正常玩不跳 —— 正常玩要走异步路径）。
 // @returns {Promise<{data: object, dataSource: string, degraded: boolean, hooks: object|null, modCodes: Array, modRequires: object|null, assetReader: object|null, assetSource: object|null, mods: object|null}>} 数据与来源
-export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = true } = {}) {
+export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = true, skipAsync = false } = {}) {
   // 原版数据 Mod 的启停（缺省视为启用：系统内置默认开）。
   const enabled = loadModState('lifeRestart-data', storage)
   // 基础数据与来源描述。
@@ -172,8 +175,8 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
       const catalog = buildModCatalog({ discovered: discovered.mods, saved: loadModsState(storage) })
       // 要加载的 Mod 名（启用且服务器上真的存在）。
       const enabledNames = enabledModNames(catalog)
-      // 加载数据与代码。
-      const bundle = await loadModBundle({ fetchImpl, enabled: enabledNames, store })
+      // 加载数据与代码（`skipAsync` = 批量模拟的跳过策略，见函数头）。
+      const bundle = await loadModBundle({ fetchImpl, enabled: enabledNames, store, skipAsync })
       // 合并 Mod 数据（后加载覆盖；与内核里 Mod 之间的合并规则一致）。
       for (const key of Object.keys(bundle.data)) {
         // 合并一个数据集。
@@ -207,6 +210,14 @@ export async function loadGameData({ fetchImpl, storage, baseUrl, withMods = tru
         errors: [...(discovered.errors || []), ...(bundle.errors || [])],
         // 待执行代码数。
         codes: bundle.codes.length,
+        // 各 Mod 的 manifest（store.init 用它给异步钩子打标记）。
+        manifests: bundle.manifests,
+        // **声明了异步逐岁介入的 Mod**（前端据此选 nextAsync()）。
+        asyncMods: bundle.asyncMods,
+        // 本集合里有没有异步 Mod。
+        hasAsync: bundle.hasAsync,
+        // 被跳过策略挡掉的异步 Mod（`skipAsync` 时非空；报告里要写明理由）。
+        skippedAsync: bundle.skippedAsync,
       }
       // 来源描述追加 Mod 信息（日志报告里一眼可见）。
       if (bundle.loaded.length > 0) dataSource += ` + Mod×${bundle.loaded.length}`

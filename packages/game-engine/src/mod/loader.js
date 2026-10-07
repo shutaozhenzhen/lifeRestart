@@ -149,21 +149,42 @@ export async function loadMod({ mod, source, log } = {}) {
 // @param {object} params.source - 文件源
 // @param {object} [params.log] - 日志器
 // @param {string[]} [params.only] - 只加载这些 Mod（用于"只跑启用的 Mod"；缺省全加载）
+// @param {string[]} [params.skip] - **不加载**这些 Mod（批量场景的跳过策略：sim/consistency
+//   跳过 `async: true` 与 `deterministic: false` 的 Mod，见 mod/manifest.js 的 modsToSkip）。
+//   语义与 `only` 互补：`only` 是允许名单、`skip` 是否决名单；两者都不给 = 全加载。
+//   被 skip 掉的 Mod 与"被用户禁用"走**同一条路径**（不参与依赖解析、数据不合并、code.js 不执行）。
+// @param {Function} [params.skipIf] - 跳过判据 `(mod) => boolean`（`mod` = `{ name, manifest, ... }`）。
+//   为什么要有它（而不是只给名字数组）：跳过判据只能读 manifest，而 manifest 是**扫描结果**，
+//   调用方若用 `skip` 就得先自己扫描一次（前端 loadModBundle 会因此读两遍文件清单）。
+//   给判据就把这件事留在加载器内部一次完成；被判定跳过的名字照样从 `skipped` 带出（不静默）。
 // @param {Function} [params.moduleLoader] - 运行时模块的平台加载适配器
 //   （async ({ id, path, code, modName }) => 命名空间；Node 用 modules-node，浏览器用 blob）。
 //   给了它就自动处理 manifest.modules（Mod 随包分发的依赖），调用方无需手写 createRequire。
-// @returns {Promise<{mods: Array, order: string[], errors: string[], loadAll: Function, disabled: string[]}>} 加载器
-export async function createModLoader({ source, log, only, moduleLoader } = {}) {
+// @returns {Promise<{mods: Array, allMods: Array, order: string[], errors: string[], loadAll: Function, disabled: string[], skipped: Array<{name: string, manifest: object}>}>} 加载器
+export async function createModLoader({ source, log, only, skip, skipIf, moduleLoader } = {}) {
   // 日志器。
   const logger = log || { debug: () => {}, info: () => {}, error: () => {} }
   // 扫描。
   const { mods: scanned, errors: scanErrors } = await scanMods({ source, log: logger })
   // 启用过滤（只跑启用的 Mod；被过滤掉的不参与依赖解析，避免"禁用了依赖项就报缺失"）。
   const enabledFilter = Array.isArray(only) ? new Set(only) : null
+  // 跳过名单（异步 / 不确定的 Mod；见 modsToSkip）。
+  const skipFilter = Array.isArray(skip) && skip.length > 0 ? new Set(skip) : null
+  // 判据式跳过（同一次扫描内判定，见上面 skipIf 的说明）。
+  const isSkipIf = (m) => (typeof skipIf === 'function' ? skipIf(m) === true : false)
+  // **被跳过策略挡掉的**（与"被用户禁用"区分开：报告里要说清是"跳过了不可复现的 Mod"）。
+  // 每条带名字与 manifest：调用方（报告 / 前端）要据此说明"为什么跳过"，不该再去反查。
+  const skipped = scanned
+    .filter((m) => (skipFilter && skipFilter.has(m.name)) || isSkipIf(m))
+    .map((m) => ({ name: m.name, manifest: m.manifest || {} }))
+  // 跳过集合。
+  const skippedSet = new Set(skipped.map((x) => x.name))
+  // 允许判定：`only` 命中（或无 `only`）且不在跳过名单里（两种来源都算）。
+  const isAllowed = (m) => (!enabledFilter || enabledFilter.has(m.name)) && !skippedSet.has(m.name)
   // 过滤后的 Mod。
-  const mods = enabledFilter ? scanned.filter((m) => enabledFilter.has(m.name)) : scanned
-  // 被过滤掉的（信息性）。
-  const disabled = enabledFilter ? scanned.filter((m) => !enabledFilter.has(m.name)).map((m) => m.name) : []
+  const mods = scanned.filter(isAllowed)
+  // 被过滤掉的（信息性；**不含**策略跳过的那些 —— 它们单独在 `skipped` 里）。
+  const disabled = scanned.filter((m) => !isAllowed(m) && !skippedSet.has(m.name)).map((m) => m.name)
   // 依赖解析用的元信息：**把"存在但被用户禁用"的依赖名摘掉**。
   // 为什么要单独做这一步（2026-10）：
   //   · 修掉"`dependencies` 在加载链路上没生效"之后，被禁用的依赖会开始报"缺失依赖"——
@@ -184,8 +205,12 @@ export async function createModLoader({ source, log, only, moduleLoader } = {}) 
   return {
     // 元信息。
     mods,
+    // **全部**扫描到的 Mod（含被 only / skip / 禁用挡掉的；周期报告与"为什么没加载"用它）。
+    allMods: scanned,
     // 被启用开关挡掉的 Mod（没参与加载）。
     disabled,
+    // 被**跳过策略**挡掉的 Mod（异步 / 不确定；报告里要如实说明为什么少了它们）。
+    skipped,
     // 加载顺序。
     order,
     // 错误。

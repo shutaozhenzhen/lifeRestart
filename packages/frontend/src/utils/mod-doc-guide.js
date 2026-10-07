@@ -98,7 +98,8 @@ export const MOD_GUIDE = {
           t: 'table',
           head: ['能做', '不能做'],
           rows: [
-            ['**加/改数据**：天赋、事件、成就、名人、年龄表（后加载覆盖先加载）', '**异步介入逐岁流程**：`life.next()` 是同步的'],
+            ['**加/改数据**：天赋、事件、成就、名人、年龄表（后加载覆盖先加载）', '**默认同步**：不声明 `async: true` 时，逐岁流程里的 async 回调返回的 Promise 会被丢弃（改动晚于引擎读取）'],
+            ['**异步介入逐岁流程**（2026-10 起）：`"async": true` + `onBeforeYear` / `onYearAdvance` / `onAfterYear` 里可以 `await`（内容真的进**当年**轨迹）', '**异步不是免费的**：单个异步钩子超 3 秒 → 记 warn 并继续推进；批量模拟与一致性检查会**跳过** `async: true` 的 Mod（异步 = 不可逐位复现），报告里会写明'],
             ['**加界面**（2026-10 起，见 §14）：页面（`/mods/page/:id`）、面板卡片（插到 home / mods / property / game / summary / settings 六个 slot）、属性分配面板多一行、总结页统计多一项', '**私有仓库 / 任意 URL 安装**：只支持 zip 与 GitHub 公开仓库'],
             ['挂**钩子**：抽卡池、每一年、事件文本渲染，以及**观察任何属性变化**（`propertyChange`，带 `source` 区分来源）', '**Mod 之间没有正式 API**：只能自定义钩子名互发消息，或共享 `gameAPI.data`'],
             ['**注册新参数**：条件里立刻能用的 `params.XXX`', '**发布到应用商店/被审核**：没有中心化分发，也没有访问控制'],
@@ -134,7 +135,9 @@ export const MOD_GUIDE = {
             ['`system`', 'boolean', '否', '—', '标记"系统内置"。**与能否删除无关**（预装 Mod 也能完全移除），也**不**参与安装侧的名字保护（那份名单是硬编码的 `lifeRestart-data` / `ai-mod`）'],
             ['`targets`', 'string[]', '否', '`["browser"]`', '运行目标：`browser`（执行 code.js）/ `node`（加载 server.js）。空数组、重复项、未知值都会被拒绝'],
             ['`entry`', 'object', '否', '`{browser:"code.js"}`', '入口文件名。**只有 `entry.node` 生效**（宿主入口）；浏览器入口固定读 `code.js`，写 `entry.browser` 只影响界面显示'],
-            ['`deterministic`', 'boolean', '否', '由 targets 推导', '声明"行为可复现"。**目前只有界面/文档在用**（consistency 尚未消费）'],
+            ['`deterministic`', 'boolean', '否', '由 targets 推导', '声明"行为可复现"（**已真的被消费**：`false` 的 Mod 会被批量模拟与一致性检查跳过，并在报告里写明理由）'],
+            ['`async`', 'boolean', '否', '`false`', '**异步逐岁介入的 opt-in 开关**（2026-10 起）：写 `true` 后，前端推进改用 `life.nextAsync()`，本 Mod 的逐岁钩子会被 **await**（"某年去后端取一句剧情塞进当年轨迹"因此成立）。不写 = 一切照旧（同步 `life.next()`）。非布尔值是**硬错误**'],
+            ['`asyncHooks`', 'string[]', '否', '（省 = 全部逐岁钩子）', '可选细化：只把列出的逐岁钩子按异步等。合法值**只有** `onBeforeYear` / `onYearAdvance` / `onAfterYear`；写别的（如 `onEventRender`）或空数组/重复项都是**硬错误**。见 §6 与 API 文档 §16'],
             ['`modules`', 'object', '否', '`{}`', '运行时依赖：`{ 模块名: 包内相对路径 }`，见第 10 节'],
             ['`ai`', 'object', '否', '—', '**引擎从不读取**（历史字段）。AI 配置实际来自用户设置页 / CLI 环境变量'],
             ['`ui`', 'object', '否', '—', '**界面扩展**（2026-10 起）：`{ pages, panels, properties, stats }` 四类，每类 ≤ 8 项，见 §14。**写错会拒绝加载**（未知 slot、超上限、同 Mod 重复 id 都是硬错误）'],
@@ -173,6 +176,8 @@ dependencies 必须是数组
 targets 必须是数组 / targets 不能是空数组（缺省为 ["browser"]） / 未知 target: server（合法值：browser / node） / targets 不能有重复项
 entry 必须是对象 / entry 含未知目标键: web（合法键：browser / node） / entry.node 必须是不含路径穿越的相对文件名
 deterministic 必须是布尔值
+async 必须是布尔值 / asyncHooks 必须是数组 / asyncHooks 不能是空数组（缺省表示"本 Mod 用到的逐岁钩子都按异步等"）
+asyncHooks 含未知钩子名: onYear（合法值：onBeforeYear / onYearAdvance / onAfterYear） / asyncHooks 不能有重复项
 modules 必须是对象（{ 模块名: 相对路径 }） / modules.fflate 必须是不含路径穿越的相对路径
 ui 必须是对象（{ pages, panels, properties, stats }） / ui 含未知字段: page（支持：pages / panels / properties / stats）
 ui.panels[0].slot "sidebar" 不是合法 slot（可用：home/mods/property/game/summary/settings）
@@ -434,14 +439,16 @@ gameAPI.addTalent({ id: 'my-t9', name: '运行时天赋', description: '…', gr
     // ---------- 钩子 ----------
     {
       id: 'hooks',
-      title: '6. 钩子：三个逐岁 + 一个观察',
+      title: '6. 钩子：逐岁（同步 / 异步两条路）+ 一个观察',
       blocks: [
         {
           t: 'table',
           head: ['钩子', '什么时候触发', '你怎么影响它'],
           rows: [
             ['`onTalentPoolGenerate`', '抽卡时', '往 `payload.pool` 里 push 天赋对象（注意别重复塞）'],
+            ['`onBeforeYear`', '**翻年之前**（只在 `async: true` 的 Mod 上触发）', '`payload.pending.push(条目)` 进当年轨迹；也可以在这时按后端结果补数据（`age` = 当前年龄，`nextAge` = 这一岁推进后的年龄）'],
             ['`onYearAdvance`', '每翻一年', '往 `payload.content` 里 push 条目（会进当年轨迹、被轨迹页与总结页渲染）'],
+            ['`onAfterYear`', '**翻年之后**（只在 `async: true` 的 Mod 上触发）', '往 `payload.content` 里 push 收尾/结算类条目'],
             ['`onEventRender`', '渲染每段事件文本时', '**返回字符串**即替换文本（唯一返回值生效的钩子）'],
             ['`propertyChange`', '**任何**属性变化：事件/天赋效果、年龄自增、成就记账、Mod 自己改的都算', '观察（不能改）；payload 带 `source`（`\'engine\'`/`\'mod\'`）用来过滤自己造成的噪声'],
           ],
@@ -449,7 +456,7 @@ gameAPI.addTalent({ id: 'my-t9', name: '运行时天赋', description: '…', gr
         {
           t: 'code',
           lang: 'js',
-          label: '三个钩子的可运行写法',
+          label: '三个同步钩子的可运行写法',
           code: `// 抽卡池：只塞一次
 gameAPI.on('onTalentPoolGenerate', (payload) => {
   if (!payload.pool.some((t) => t.id === 'my-t1')) {
@@ -471,7 +478,52 @@ gameAPI.on('onEventRender', (payload) => {
         {
           t: 'note',
           kind: 'warn',
-          text: '**别在逐岁钩子里写异步逻辑再改数据**：三个钩子走的是同步广播，async 回调返回的 Promise 会被丢弃；`life.next()` 返回后引擎/store 立刻做轨迹快照，晚到的改动不会进当年。要"每年调后端"得先把 `next()` 改成 async（那是引擎级改动，见 API 文档 §11）。',
+          text: '**默认同步**：不声明 `async: true` 时，逐岁钩子里写 `async` 再改数据是**无效**的 —— 回调返回的 Promise 会被丢弃，`life.next()` 返回后引擎/界面立刻做轨迹快照，晚到的改动不会进当年。',
+        },
+        {
+          t: 'sub',
+          text: '要"每年调一次后端"：声明 async，然后 await',
+        },
+        {
+          t: 'code',
+          lang: 'json',
+          label: 'manifest.json 的一行开关',
+          code: `{
+  "name": "my-mod",
+  "version": "1.0.0",
+  "async": true,
+  "asyncHooks": ["onBeforeYear", "onAfterYear"]
+}`,
+        },
+        {
+          t: 'code',
+          lang: 'js',
+          label: 'code.js：await 完塞进**当年**轨迹',
+          code: `gameAPI.on('onBeforeYear', async (payload) => {
+  if (payload.nextAge !== 18) return
+  const line = await fetchBackendLine()          // 真的会被等到
+  payload.pending.push({ type: 'EVT', description: line })
+})
+
+gameAPI.on('onAfterYear', async (payload) => {
+  if (payload.age !== 18) return
+  payload.content.push({ type: 'EVT', description: '岁末结算' })
+})`,
+        },
+        {
+          t: 'table',
+          head: ['说清取舍', '实情'],
+          rows: [
+            ['**超时 3 秒**', '单个异步钩子超过 3000ms → 记一条 warn（带 Mod 名与钩子名）并**继续推进**；慢后端不会把游戏卡死'],
+            ['**`onTalentPoolGenerate` / `onEventRender` 永远同步**', '它们是"抽卡时机"与"渲染时机"，调用方当场就要结果（卡池 / 文本）→ 写进 `asyncHooks` 是 manifest 校验硬错误'],
+            ['**随机数顺序不变**', '`nextAsync()` 与 `next()` 共用同一次推进 → 同种子下游戏内容逐字节相同（Mod 自己引入的不确定性除外）'],
+            ['**sim / 一致性会跳过异步 Mod**', '`async: true`（与 `deterministic: false`）的 Mod 不参与批量模拟与一致性检查，理由写进报告的警告/脚注'],
+          ],
+        },
+        {
+          t: 'note',
+          kind: 'info',
+          text: '可跑样板：`mods/example-async-mod/`（**默认禁用**）—— 它的 `code.js` 就是上面这两段，另有一条真跑一局的引擎单测钉住"内容确实进了当年轨迹"。详见 API 文档 §16。',
         },
       ],
     },
@@ -587,7 +639,7 @@ if (gameAPI.asset.available) {
   })
 
   // ② 拿一个可直接用的 URL（浏览器里是 blob:，同路径恒同 URL）
-  //    ⚠️ 这是异步的；逐岁钩子是**同步**的，所以要先把 URL 读好缓存起来。
+  //    ⚠️ 这是异步的；不声明 "async": true 时逐岁钩子是**同步**的，所以要先把 URL 读好缓存起来。
   let logoUrl = null
   gameAPI.asset.url('assets/logo.png').then((u) => { logoUrl = u })
 }

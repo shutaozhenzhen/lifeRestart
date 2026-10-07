@@ -177,6 +177,72 @@ describe('mod-runtime - 发现与加载（浏览器路径）', () => {
     expect(bundle.data.talents.tA).toBeDefined()
     expect(bundle.data.talents.tB).toBeUndefined()
   })
+
+  // ==== 异步逐岁介入（2026-10 能力补齐 ④）====
+  // 这里钉的是**判定**（谁被认成异步 Mod、跳过策略做了什么）；"异步钩子真被 await"由
+  // 引擎的 `async-year-hooks.spec.js` 与 store 的用例钉住（那两处才有真 Life 与真钩子）。
+
+  test('loadModBundle：带出 asyncMods / hasAsync（前端据它选 nextAsync 还是 next）', async () => {
+    // 假服务器：a 普通、b 声明 async。
+    const fetchImpl = makeFetch({
+      '/mods/index.json': '["a","b"]',
+      '/mods/a/files.json': '["manifest.json","code.js"]',
+      '/mods/a/manifest.json': '{"name":"a","version":"1.0.0"}',
+      '/mods/a/code.js': 'gameAPI.on("onYearAdvance", () => {})',
+      '/mods/b/files.json': '["manifest.json","code.js"]',
+      '/mods/b/manifest.json': '{"name":"b","version":"1.0.0","async":true,"asyncHooks":["onBeforeYear","onAfterYear"]}',
+      '/mods/b/code.js': 'gameAPI.on("onBeforeYear", async () => {})',
+    })
+    // 加载（**正常玩**：不跳过异步 Mod）。
+    const bundle = await loadModBundle({ fetchImpl })
+    // 两个都加载了。
+    expect(bundle.loaded).toEqual(['a', 'b'])
+    // 异步判定。
+    expect(bundle.hasAsync).toBe(true)
+    expect(bundle.asyncMods).toEqual([{ name: 'b', hooks: ['onBeforeYear', 'onAfterYear'] }])
+    // 没有跳过任何东西。
+    expect(bundle.skippedAsync).toEqual([])
+  })
+
+  test('loadModBundle：skipAsync 跳过异步 Mod 并给出名字 + 钩子（批量模拟用，不静默丢）', async () => {
+    // 假服务器（同上）。
+    const fetchImpl = makeFetch({
+      '/mods/index.json': '["a","b"]',
+      '/mods/a/files.json': '["manifest.json","code.js"]',
+      '/mods/a/manifest.json': '{"name":"a","version":"1.0.0"}',
+      '/mods/a/code.js': 'gameAPI.on("onYearAdvance", () => {})',
+      '/mods/b/files.json': '["manifest.json","code.js"]',
+      '/mods/b/manifest.json': '{"name":"b","version":"1.0.0","async":true}',
+      '/mods/b/code.js': 'gameAPI.on("onYearAdvance", async () => {})',
+    })
+    // 加载（**批量模拟**：跳过异步）。
+    const bundle = await loadModBundle({ fetchImpl, skipAsync: true })
+    // 只加载了 a。
+    expect(bundle.loaded).toEqual(['a'])
+    // 跳过清单（名字 + 它本来会被 await 的钩子）。
+    expect(bundle.skippedAsync).toEqual([{ name: 'b', hooks: ['onBeforeYear', 'onYearAdvance', 'onAfterYear'] }])
+    // 没被跳过的那个仍然是"非异步集合"。
+    expect(bundle.hasAsync).toBe(false)
+    expect(bundle.asyncMods).toEqual([])
+    // 跳过的 Mod 不算"用户禁用"。
+    expect(bundle.disabled).toEqual([])
+  })
+
+  test('loadModBundle：没有异步 Mod 时 hasAsync 为 false（**同步路径不受影响**的判定依据）', async () => {
+    // 假服务器：全是普通 Mod。
+    const fetchImpl = makeFetch({
+      '/mods/index.json': '["a"]',
+      '/mods/a/files.json': '["manifest.json","code.js"]',
+      '/mods/a/manifest.json': '{"name":"a","version":"1.0.0"}',
+      '/mods/a/code.js': 'gameAPI.on("onYearAdvance", () => {})',
+    })
+    // 加载。
+    const bundle = await loadModBundle({ fetchImpl })
+    // 判定为"没有异步" → store 会走同步 next()。
+    expect(bundle.hasAsync).toBe(false)
+    expect(bundle.asyncMods).toEqual([])
+    expect(bundle.loaded).toEqual(['a'])
+  })
 })
 
 describe('mod-runtime - Mod 包内二进制资源（2026-10 能力补齐 ②）', () => {
@@ -569,7 +635,7 @@ describe('sync-mods - 同步计划与写盘', () => {
     const plan = buildSyncPlan({ modsDir: MODS_DIR })
     // 仓库里的 Mod 全部在计划里，无错误（新加 Mod 时这里要跟着加，**别把断言写成数量**：
     // 数量断言只会报"5 !== 4"，看不出是谁没进计划）。
-    expect(plan.index.sort()).toEqual(['ai-mod', 'base-mod', 'example-mod', 'fun-mod', 'lifeRestart-data'])
+    expect(plan.index.sort()).toEqual(['ai-mod', 'base-mod', 'example-async-mod', 'example-mod', 'fun-mod', 'lifeRestart-data'])
     expect(plan.errors).toEqual([])
     // Data Mod：跳过数据（其数据已在 public/data）。
     const dataMod = plan.mods.find((m) => m.name === 'lifeRestart-data')

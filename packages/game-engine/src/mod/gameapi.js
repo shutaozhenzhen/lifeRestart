@@ -23,6 +23,8 @@ import { createPropertyBridge, createUnavailablePropertyBridge } from './propert
 import { createAssetBridge, createUnavailableAssetBridge } from './asset-bridge.js'
 // 界面扩展的 schema 常量与空声明（2026-10 能力补齐 ③）。
 import { UI_SLOTS, UI_LIMITS, emptyUiDeclaration } from './ui-schema.js'
+// 异步逐岁介入（2026-10 能力补齐 ④）：`async` / `asyncHooks` 的语义只在 manifest.js 定义一次。
+import { manifestAsync, hooksToAwait } from './manifest.js'
 
 // #UNAVAILABLE_UI_ERROR
 // 没有注入 `uiSink` 时，注册类调用的统一错误文案（**出声**：静默丢弃注册是最难查的问题）。
@@ -245,8 +247,29 @@ export function createUiBridge({ sink, modName = 'anonymous', log } = {}) {
 //
 // @returns {object} 钩子总线
 export function createHookBus() {
-  // 钩子映射：名称 → 回调数组。
+  // 钩子映射：名称 → 回调**记录**数组。
+  //
+  // 记录形态（2026-10 能力补齐 ④）：`{ fn, modName, async }`。
+  //   · `fn`      —— 回调本体（`off` 比的是它，所以对外行为与"数组里直接放函数"完全一致）；
+  //   · `modName` —— 注册者（超时警告里要**指名道姓**，否则一句"某钩子超时"没法排查）；
+  //   · `async`   —— 该回调是否走 await（由 `gameAPI.on(name, fn, { async: true })` 标记）。
+  // 以前这里放的是裸函数。改成记录之后，`on/off/emit/emitSync/has/list` 的**对外语义一个字没变**
+  // （既有回归用例原样绿），只是多了一条 `meta()` 给 `nextAsync()` 用。
   const hooks = {}
+
+  // #push
+  // 登记一条回调记录。
+  //
+  // @param {string} name - 钩子名
+  // @param {Function} fn - 回调
+  // @param {object} [opts] - { modName, async }
+  // @returns {void}
+  function push(name, fn, opts) {
+    // 初始化数组。
+    if (!hooks[name]) hooks[name] = []
+    // 追加记录。
+    hooks[name].push({ fn, modName: opts?.modName || '', async: opts?.async === true })
+  }
 
   // 返回总线。
   return {
@@ -255,12 +278,13 @@ export function createHookBus() {
     //
     // @param {string} name - 钩子名
     // @param {Function} fn - 回调
+    // @param {object} [opts] - { modName?: string, async?: boolean }
+    //   `async: true` = 这条回调在 `nextAsync()` 里要 await（由 `gameAPI.on` 按 manifest 的
+    //   `async` / `asyncHooks` 自动标记；手写总线时也可以自己传）。
     // @returns {Function} 移除函数
-    on(name, fn) {
-      // 初始化数组。
-      if (!hooks[name]) hooks[name] = []
-      // 追加回调。
-      hooks[name].push(fn)
+    on(name, fn, opts) {
+      // 登记。
+      push(name, fn, opts)
       // 返回移除函数。
       return () => this.off(name, fn)
     },
@@ -274,8 +298,8 @@ export function createHookBus() {
     off(name, fn) {
       // 无该钩子。
       if (!hooks[name]) return
-      // 过滤移除。
-      hooks[name] = hooks[name].filter(f => f !== fn)
+      // 过滤移除（比的是记录里的 fn —— 与"数组里放函数"时同一套引用语义）。
+      hooks[name] = hooks[name].filter(h => h.fn !== fn)
     },
 
     // #emit
@@ -294,11 +318,11 @@ export function createHookBus() {
       // 结果。
       const results = []
       // 按序执行。
-      for (const fn of hooks[name]) {
+      for (const entry of hooks[name]) {
         // 异常隔离。
         try {
           // 执行并记录（await 支持 async 钩子）。
-          results.push(await fn(payload))
+          results.push(await entry.fn(payload))
         } catch (e) {
           // 记录。
           logger.error(`钩子 ${name} 异常: ${e.message}`)
@@ -325,11 +349,11 @@ export function createHookBus() {
       // 结果。
       const results = []
       // 按序执行。
-      for (const fn of hooks[name]) {
+      for (const entry of hooks[name]) {
         // 异常隔离。
         try {
           // 同步调用（async 钩子的 Promise 直接入数组，不 await）。
-          results.push(fn(payload))
+          results.push(entry.fn(payload))
         } catch (e) {
           // 记录。
           logger.error(`钩子 ${name} 异常: ${e.message}`)
@@ -349,6 +373,20 @@ export function createHookBus() {
       return (hooks[name] || []).length > 0
     },
 
+    // #meta
+    // 某钩子的**逐回调元信息**（按注册顺序）：`[{ fn, modName, async }]`。
+    //
+    // 为什么需要它（2026-10 能力补齐 ④）：`nextAsync()` 只有拿到"这一条回调是不是
+    // 异步 Mod 注册的"，才能决定 await 还是同步调用 —— 这就是 opt-in 的落点：
+    // **没有 `async: true` 的 Mod，`nextAsync()` 里也是同步调用它**。
+    //
+    // @param {string} name - 钩子名
+    // @returns {Array<{fn: Function, modName: string, async: boolean}>} 元信息（新数组）
+    meta(name) {
+      // 未注册 → 空。
+      return (hooks[name] || []).map((h) => ({ fn: h.fn, modName: h.modName, async: h.async }))
+    },
+
     // #list
     // 列出全部钩子与回调数。
     //
@@ -362,6 +400,148 @@ export function createHookBus() {
       return result
     },
   }
+}
+
+// #DEFAULT_ASYNC_TIMEOUT_MS
+// 单个异步钩子的缺省超时（毫秒）。
+//
+// 为什么必须有它：异步逐岁钩子的典型用法是"调一次后端/等一次宿主"，而**慢后端 = 卡死的游戏**。
+// 缺省 3000ms 是"比任何合理首字节时间都宽松、但明显短于人类耐心的放弃阈值"。
+export const DEFAULT_ASYNC_TIMEOUT_MS = 3000
+
+// #resolveWithTimeout
+// 给一个 thenable 套上超时。超时 → `{ timedOut: true }`；正常 → `{ ok: true, value }`；
+// 抛错 → `{ error }`。**永不 reject**（调用方据此继续推进，绝不让慢后端把游戏卡死）。
+//
+// `timer` 是注入的定时器适配器（`{ setTimeout, clearTimeout }`，缺省取全局）：
+// 单测要靠它精确验证"超时后确实继续、且定时器被清掉"。
+//
+// @param {*} value - Promise 或普通值
+// @param {number} timeoutMs - 超时毫秒（<=0 / 非有限数 = 不设超时）
+// @param {object} [params]
+// @param {string} [params.name] - 钩子名（警告里用）
+// @param {string} [params.modName] - Mod 名（警告里用；**要指名道姓**）
+// @param {object} [params.log] - 日志器
+// @param {object} [params.timer] - 定时器适配器
+// @returns {Promise<{ok?: boolean, value?: *, timedOut?: boolean, ms?: number, error?: *}>} 结果
+export async function resolveWithTimeout(value, timeoutMs, { name, modName, log, timer } = {}) {
+  // 不是 thenable：同步值直接返回（同步回调走的也是这条）。
+  if (!value || typeof value.then !== 'function') return { ok: true, value }
+  // 有效超时。
+  const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 0
+  // 无超时：直接等（作者显式关掉了保护）。
+  if (ms <= 0) {
+    try {
+      // 等结果。
+      return { ok: true, value: await value }
+    } catch (error) {
+      // 抛错照样隔离。
+      return { error }
+    }
+  }
+  // 定时器原语（缺省全局）。
+  const t = timer || { setTimeout: (fn, m) => setTimeout(fn, m), clearTimeout: (id) => clearTimeout(id) }
+  // 超时句柄。
+  let handle = null
+  // 竞速。
+  const winner = await Promise.race([
+    // 正常路径：包一层，异常也走"正常返回"，避免 Promise.race 因 reject 而短路掉另一个分支。
+    value.then(
+      (v) => ({ status: 'ok', value: v }),
+      (e) => ({ status: 'error', error: e }),
+    ),
+    // 超时路径。
+    new Promise((resolve) => {
+      // 起定时器。
+      handle = t.setTimeout(() => resolve({ status: 'timeout', ms }), ms)
+    }),
+  ])
+  // 清掉定时器（不 clear 会在测试里留下未完成的计时器；浏览器里也是无意义的持有）。
+  try { t.clearTimeout(handle) } catch { /* 忽略 */ }
+  // 超时：记一条 warn 并继续推进（**不抛**）。
+  if (winner.status === 'timeout') {
+    // 出声：指名 Mod 与钩子（否则一句"某钩子超时"没法排查）。
+    log?.warn?.(`异步钩子 ${name} 超时（${ms}ms，Mod ${modName || '未知'}）——已放弃这次等待并继续推进（超时的那段改动不会进轨迹）`)
+    // 返回。
+    return { timedOut: true, ms }
+  }
+  // 抛错：隔离（不让一个 Mod 的异常毁掉这一年）。
+  if (winner.status === 'error') {
+    // 出声。
+    log?.warn?.(`异步钩子 ${name} 抛错（Mod ${modName || '未知'}）：${winner.error?.message || winner.error}`)
+    // 返回。
+    return { error: winner.error }
+  }
+  // 正常。
+  return { ok: true, value: winner.value }
+}
+
+// #emitYearHooksAsync
+// **逐岁钩子的异步分发**（`life.nextAsync()` 用）：按注册顺序触发，只 await 被标记为
+// `async: true` 的回调，其余一律**同步调用**（保持"同步 Mod 行为不变"这条不变量）。
+//
+// 每条异步回调都套 `resolveWithTimeout` 的超时保护：慢/抛错都只出一条 warn，然后**继续推进**。
+//
+// @param {object} params
+// @param {object} params.bus - 钩子总线（createHookBus 的产物；需有 `meta`）
+// @param {string} params.name - 钩子名
+// @param {*} params.payload - 负载（**引用传递**：钩子改的就是引擎随后读的那个对象）
+// @param {object} [params.log] - 日志器
+// @param {number} [params.timeoutMs] - 单个异步钩子的超时（缺省 DEFAULT_ASYNC_TIMEOUT_MS）
+// @param {object} [params.timer] - 定时器适配器（测试注入）
+// @returns {Promise<Array>} 各回调返回值的数组（超时/抛错的那条不进结果）
+export async function emitYearHooksAsync({ bus, name, payload, log, timeoutMs, timer } = {}) {
+  // 没有 meta（例如 CLI 传进来的极简替身总线）：退回同步广播，保证"钩子照样会被调用"。
+  if (typeof bus?.meta !== 'function') {
+    // 同步。
+    bus?.emitSync?.(name, payload, log)
+    // 无结果可报。
+    return []
+  }
+  // 结果。
+  const results = []
+  // 逐条（按注册顺序）。
+  for (const entry of bus.meta(name)) {
+    // 同步回调：**与 next() 完全一样的调用方式**（没有额外的 await 点）。
+    if (!entry.async) {
+      // 异常隔离（与 emitSync 同一套语义）。
+      try {
+        // 调用。
+        results.push(entry.fn(payload))
+      } catch (e) {
+        // 记录。
+        log?.error?.(`钩子 ${name} 异常: ${e.message}`)
+      }
+      // 下一条。
+      continue
+    }
+    // 异步回调：先调用（拿到 thenable），再带超时等待。
+    let returned
+    try {
+      // 调用。
+      returned = entry.fn(payload)
+    } catch (e) {
+      // 同步抛出：隔离。
+      log?.warn?.(`异步钩子 ${name} 抛错（Mod ${entry.modName || '未知'}）：${e.message}`)
+      // 下一条。
+      continue
+    }
+    // 等（带超时；超时/抛错都只 warn）。
+    const r = await resolveWithTimeout(returned, timeoutMs === undefined ? DEFAULT_ASYNC_TIMEOUT_MS : timeoutMs, {
+      // 钩子名。
+      name,
+      // Mod 名。
+      modName: entry.modName,
+      // 日志器。
+      log,
+      // 定时器。
+      timer,
+    })
+    // 正常完成才收结果（超时/抛错的不进结果 —— 免得调用方把半截结果当完整的用）。
+    if (r.ok) results.push(r.value)
+  }
+  // 返回。
+  return results
 }
 
 // #createGameAPI
@@ -384,14 +564,22 @@ export function createHookBus() {
 //   可选 `onAction` / `offAction`）。缺省 → `gameAPI.ui.available === false`、
 //   注册调用抛可读错误 —— 见 `createUiBridge`
 // @param {object} [deps.log] - 日志器
+// @param {object} [deps.manifest] - 本 Mod 的 manifest（**异步逐岁介入的 opt-in 来源**：
+//   `async: true` + 可选 `asyncHooks` 决定本 Mod 的哪些逐岁钩子在 `nextAsync()` 里被 await，
+//   见 mod/manifest.js 的 `hooksToAwait`）。不传 = 不是异步 Mod（行为与以前逐位相同）。
 // @returns {object} gameAPI
-export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, property, asset, storage, uiSink, modName: _modName, log }) {
+export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, property, asset, storage, uiSink, manifest, modName: _modName, log }) {
   // 日志器。
   const logger = log || { debug: () => {}, error: () => {} }
   // Mod 名（storage 命名空间 + 日志前缀用）。
   const modName = _modName || 'anonymous'
   // 本实例注册过的钩子（dispose 用）。
   const registrations = []
+  // 本 Mod 的**异步逐岁策略**（2026-10 能力补齐 ④）：非异步 Mod → 空数组 → 注册的钩子
+  // 全部按同步调用（于是 `nextAsync()` 里它的行为与 `next()` 一模一样）。
+  const awaitHooks = hooksToAwait(manifest)
+  // 该 Mod 用了异步逐岁介入吗（日志用）。
+  const isAsyncMod = manifestAsync(manifest)
   // storage 键名：`mod:<Mod 名>:<键>`（与引擎自己的键隔离）。
   const storageKey = (key) => `mod:${modName}:${key}`
   // 钩子总线：注入外部实例（与 Life 共享）或自建。
@@ -429,16 +617,27 @@ export function createGameAPI({ data, hooks, ai, aiModFactory, params, host, pro
     logger.warn?.('gameAPI: property 桥挂在 Life 上，但 hooks 与 Life 的总线不是同一个对象 —— propertyChange 通知会发到 Life 的总线上，Mod 可能收不到')
   }
 
+  // 异步逐岁介入的接线自检（2026-10 能力补齐 ④）：声明了 `async: true` 就说明一句，
+  // 这样"我声明了异步但没人 await 我"这种失配能立刻在日志里看出来。
+  if (isAsyncMod) {
+    // 出声（info 级：这是正常的接线信息，不是问题）。
+    logger.info?.(`[mod:${modName}] 异步逐岁介入已启用（async: true；将被 await 的钩子：${awaitHooks.join(', ') || '无'}）`)
+  }
+
   // 返回 API。
   const api = {
     // 钩子系统（委托外部总线）。
     // `on` 会**记下本实例注册过的回调**，供 `dispose()` 一次性摘掉 —— 2026-10 能力补齐：
     // 以前 Mod 想卸载只能自己保存注销函数，漏摘就留下"幽灵钩子"。
+    //
+    // 异步逐岁介入（2026-10 能力补齐 ④）：本 Mod 声明了 `async: true` 且这个钩子名在
+    // `asyncHooks`（或未细化 = 全部逐岁钩子）里 → 给这条回调打上 `async: true` 标记，
+    // `life.nextAsync()` 就会 await 它（同步的 `life.next()` 一个字都不变）。
     on: (name, fn) => {
       // 登记（便于 dispose）。
       registrations.push([name, fn])
-      // 委托总线。
-      return bus.on(name, fn)
+      // 委托总线（带元信息：谁注册的、要不要 await）。
+      return bus.on(name, fn, { modName, async: awaitHooks.includes(name) })
     },
     // 注销钩子（同步从登记表里去掉）。
     off: (name, fn) => {

@@ -27,31 +27,62 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runWithAI, makeAIConfig, loadModData } from './smoke.cli.js'
 import { makeCliLogger, noContentError } from './cli-util.js'
+// 批量场景的**跳过策略**（async / 非确定性 Mod 不可逐位复现；2026-10 能力补齐 ④）。
+import { modsToSkip } from '../mod/manifest.js'
+// Node 文件源 + 扫描（只扫描 manifest，不加载数据 —— 一致性必须与 sim 用同一套判定）。
+import { createNodeSource } from '../mod/source-node.js'
+import { scanMods } from '../mod/loader.js'
 
 // #silentLog
 // 静默日志器（子进程/进程内一致化，避免污染 JSON）。
 const silentLog = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }
 
+// #consistencySkipPolicy
+// 一致性检查的**跳过策略**（2026-10 能力补齐 ④）：`async: true`（异步逐岁钩子等外部世界）
+// 与 `deterministic: false` 的 Mod 不可逐位复现 → 既不参与本检查，也不该被断言"一致"。
+//
+// 为什么要**只扫描**再判定：判定只需要 manifest（scanMods 不读数据、不执行 code.js），
+// 代价小；而且这样"跳过了谁、为什么"能拿到确定的名字列表（不许静默丢）。
+//
+// @param {object} params
+// @param {string} params.modsDir - Mods 目录
+// @param {object} [params.log] - 日志器（扫描日志）
+// @returns {Promise<Array<{name: string, reasons: string[]}>>} 被跳过的 Mod（含理由）
+export async function consistencySkipPolicy({ modsDir, log } = {}) {
+  // 没有目录 → 没有策略（prepareRun 会另行报"没有内容来源"）。
+  if (!modsDir) return []
+  // 只扫描。
+  const { mods } = await scanMods({ source: createNodeSource(modsDir), log: log || silentLog })
+  // 策略（与 sim 共用 mod/manifest.js 的同一处实现）。
+  return modsToSkip(mods).notReproducible
+}
+
 // #prepareRun
 // 构建一次运行的输入（数据 + 钩子总线）。
 // 所有运行（进程内/子进程/electron）必须用同一构造，保证输入一致。
 //
+// **跳过策略**：`async: true` / `deterministic: false` 的 Mod 先被剔除（见 consistencySkipPolicy），
+// 否则"同 seed 输出 diff 为零"这条断言对不可复现的 Mod 根本不成立。
+//
 // @param {object} params
 // @param {string} [params.modsDir] - mods 目录（**必需**：引擎不内置内容，见 noContentError）
 // @param {boolean} [params.mockAi] - 是否启用确定性 mock AI
-// @returns {Promise<{data: object, bus: object|null}>}
+// @param {Array<{name: string, reasons: string[]}>} [params.skipped] - 已算好的跳过清单（省一次扫描）
+// @returns {Promise<{data: object, bus: object|null, skipped: Array<{name: string, reasons: string[]}>}>}
 // @throws {Error} 未给 modsDir 时抛「没有内容来源」错误
-export async function prepareRun({ modsDir, mockAi = false } = {}) {
+export async function prepareRun({ modsDir, mockAi = false, skipped } = {}) {
   // 没有数据源：明确报错（以前这里用测试 fixture 兜底）。
   if (!modsDir) {
     throw noContentError('请用 --mods <dir> 指定 Mod 目录，例如：node src/cli/consistency.cli.js --seed 42 --mods ../../mods')
   }
+  // 跳过策略（不可逐位复现的 Mod）；调用方已算好就用它的（同一份判定，省一次目录扫描）。
+  const skipList = skipped || (await consistencySkipPolicy({ modsDir }))
   // AI 配置（mock 为确定性客户端）。
   const aiConfig = mockAi ? makeAIConfig(['--mock-ai']) : null
   // 加载 mods 数据 + 钩子。
   const r = await loadModData({ modsDir, aiConfig, log: silentLog })
   // 返回。
-  return { data: r.data, bus: aiConfig ? r.bus : null }
+  return { data: r.data, bus: aiConfig ? r.bus : null, skipped: skipList }
 }
 
 // #runOnce
@@ -62,10 +93,11 @@ export async function prepareRun({ modsDir, mockAi = false } = {}) {
 // @param {number} [params.years] - 年数
 // @param {string} [params.modsDir]
 // @param {boolean} [params.mockAi]
+// @param {Array} [params.skipped] - 已算好的跳过清单（省一次扫描）
 // @returns {Promise<string>} 轨迹 JSON
-export async function runOnce({ seed, years = 20, modsDir, mockAi = false } = {}) {
+export async function runOnce({ seed, years = 20, modsDir, mockAi = false, skipped } = {}) {
   // 输入构造。
-  const { data, bus } = await prepareRun({ modsDir, mockAi })
+  const { data, bus } = await prepareRun({ modsDir, mockAi, skipped })
   // 跑局。
   const trace = await runWithAI({ seed, data, aiBus: bus, years })
   // 序列化（统一顺序）。
@@ -123,7 +155,7 @@ function spawnRunner({ command, runner, env, cwd }) {
 // @param {string} [params.electronBin] - electron 可执行文件（可选，跨运行时对比）
 // @param {string} [params.cwd] - 子进程工作目录（默认 game-engine 根）
 // @param {object} [params.log] - 日志器
-// @returns {Promise<{ok: boolean, outputs: Array<string>, checked: Array<string>}>}
+// @returns {Promise<{ok: boolean, outputs: Array<string>, checked: Array<string>, skipped: Array<{name: string, reasons: string[]}>}>}
 export async function runConsistency({
   seed = 7,
   runs = 3,
@@ -136,14 +168,16 @@ export async function runConsistency({
 } = {}) {
   // 日志器。
   const logger = log || makeCliLogger([], 'consistency')
+  // 跳过策略（async / 非确定性 Mod；**报告里要如实说明**，不许静默丢）。
+  const skipped = await consistencySkipPolicy({ modsDir, log: logger })
   // 运行收集。
   const outputs = []
   // 检查项。
   const checked = []
   // ==== 1. 进程内多次运行 ====
   for (let i = 0; i < runs; i++) {
-    // 跑局。
-    outputs.push(await runOnce({ seed, years, modsDir, mockAi }))
+    // 跑局（跳过清单已算好，复用）。
+    outputs.push(await runOnce({ seed, years, modsDir, mockAi, skipped }))
   }
   // 进程内一致性。
   const inProc = outputs.every((o) => o === outputs[0])
@@ -193,8 +227,15 @@ export async function runConsistency({
   })
   // 总结。
   logger.info(`\n结论: ${ok ? '四平台同 seed 输出 diff 为零 ✅' : '存在差异 ✗'}`)
+  // 脚注：被跳过的 Mod（**必须写出来**：否则"diff 为零"看起来像是覆盖了它们，
+  // 而实际上它们根本没参与 —— 这正是"警告必须一路带到报告"那条约定）。
+  if (skipped.length > 0) {
+    // 逐条。
+    logger.info('\n脚注（未参与本次检查的 Mod）：')
+    for (const x of skipped) logger.info(`  · ${x.name} —— ${(x.reasons || []).join('；')}（不可逐位复现，已跳过；本结论不覆盖它）`)
+  }
   // 返回。
-  return { ok, outputs, checked }
+  return { ok, outputs, checked, skipped }
 }
 
 // 仅直接运行时执行。
@@ -226,7 +267,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].rep
   log.info(`seed=${seed} runs=${runs} years=${years} mods=${modsDir || '（未给！）'} mockAi=${mockAi} electron=${electronBin || '无'}`)
   // 执行。
   try {
-    // 运行。
+    // 运行（被跳过的 Mod 由 runConsistency 打进脚注；它们不算失败 —— 是"不适用"，不是"不一致"）。
     const { ok } = await runConsistency({ seed, runs, years, modsDir, mockAi, electronBin, cwd, log })
     // 退出码。
     process.exit(ok ? 0 : 1)

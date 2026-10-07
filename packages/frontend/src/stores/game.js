@@ -130,6 +130,19 @@ export const useGameStore = defineStore('game', {
     // 本局各 Mod 的**界面桥**（2026-10 能力补齐 ③；markRaw）。
     // 渲染 `{ t: 'action', id }` 按钮时按 id 查"谁注册过这个动作"（`hasAction` / `trigger`）。
     modUiBridges: null,
+    // ==== 异步逐岁介入（2026-10 能力补齐 ④）====
+    // 本集合里有没有 `async: true` 的 Mod（**opt-in 开关**：没有就一切照旧走同步 `next()`）。
+    hasAsyncMods: false,
+    // 异步 Mod 清单（名字 + 它们会被 await 的钩子；报告/日志里能看到"为什么走了异步路径"）。
+    asyncMods: [],
+    // 各 Mod 的 manifest（按 Mod 名；`executeModCodes` 据此给钩子打 async 标记）。
+    modManifests: null,
+    // 单个异步钩子的超时毫秒（缺省 3000；慢后端不能把游戏卡死）。
+    asyncTimeoutMs: 3000,
+    // **正在异步推进**（页面据此显示"生成中"，不白屏、不看起来卡死）。
+    advancing: false,
+    // 轨迹令牌（异步推进的**取消**判定）：换局/清轨迹时 +1，晚到的异步结果据此丢弃。
+    traceToken: 0,
   }),
 
   // 计算属性。
@@ -192,7 +205,13 @@ export const useGameStore = defineStore('game', {
     // @param {object} [options.assetReader] - Mod 资源读取能力（阶段一产出的惰性读取器）
     // @param {object} [options.assetSource] - Mod 文件源（界面侧按路径读资源字节用）
     // @param {object} [options.assetUrlApi] - 注入的 URL 原语（缺省全局；测试用）
-    async init(data, { seed, hooks, modCodes, modRequires, assetReader, assetSource, assetUrlApi } = {}) {
+    // @param {boolean} [options.hasAsyncMods] - 本集合里有没有 `async: true` 的 Mod
+    //   （由 `loadModBundle` 带出；**这是异步逐岁路径的 opt-in 开关**）
+    // @param {Array<{name: string, hooks: string[]}>} [options.asyncMods] - 异步 Mod 清单（报告用）
+    // @param {Array<{name: string, manifest: object}>} [options.manifests] - 各 Mod 的 manifest
+    //   （`executeModCodes` 据此给钩子打"要 await"的标记）
+    // @param {number} [options.asyncTimeoutMs] - 单个异步钩子的超时毫秒（缺省 3000）
+    async init(data, { seed, hooks, modCodes, modRequires, assetReader, assetSource, assetUrlApi, hasAsyncMods = false, asyncMods = [], manifests = null, asyncTimeoutMs = 3000 } = {}) {
       // 重置单局状态：从主页重新开始时，不能残留上一局的进度标记与选择。
       this.started = false
       this.talentsConfirmed = false
@@ -204,6 +223,12 @@ export const useGameStore = defineStore('game', {
       this.characterBase = { CHR: 0, INT: 0, STR: 0, MNY: 0 }
       this.characterExtraPoints = 0
       this.uniqueUnlocked = false
+      // 异步逐岁介入：换局时重置（新一局的集合可能完全不同）。
+      this.hasAsyncMods = Boolean(hasAsyncMods)
+      this.asyncMods = Array.isArray(asyncMods) ? [...asyncMods] : []
+      this.asyncTimeoutMs = Number.isFinite(asyncTimeoutMs) && asyncTimeoutMs > 0 ? asyncTimeoutMs : 3000
+      // 上一局若正在异步推进，这一局的标记要清掉（否则页面永远显示"生成中"）。
+      this.advancing = false
       this.clearTrace()
       // 上一局的成就提示也不该带到新一局。
       this.clearAchievementToasts()
@@ -295,6 +320,8 @@ export const useGameStore = defineStore('game', {
           // 界面注册表（`gameAPI.ui.*` → stores/extensions.js 的 append；
           // `gameAPI.ui.addStatistic` → Life 的统计登记，让 Mod 统计键真的产生）。
           uiSink: extStore.uiSink({ life: this.life }),
+          // 各 Mod 的 manifest（异步逐岁介入 ④ 的 opt-in 判定源：`async` / `asyncHooks`）。
+          manifests,
         })
         // 记下注册表 + 清空 URL 缓存（旧缓存指向上一局的 blob）。
         // ⚠️ Map 必须 markRaw：Vue 会深度代理 Map 的**值**，而我们往里面存的是 Promise
@@ -332,6 +359,13 @@ export const useGameStore = defineStore('game', {
       this.modCodes = Array.isArray(modCodes) ? modCodes : null
       this.modHooks = hookBus
       this.modRequires = modRequires || null
+      // 各 Mod 的 manifest（重开一局要重建"这条钩子要不要 await"的标记）。
+      this.modManifests = Array.isArray(manifests) ? manifests : null
+      // 异步 Mod 提示（走异步路径时说明一句；纯同步集合不打日志，保持既有输出不变）。
+      if (this.hasAsyncMods) {
+        // 日志。
+        this.pushLog('info', `[UI][mods] 检测到异步 Mod：${this.asyncMods.map((m) => `${m.name}（${m.hooks.join('/')}）`).join('、')} → 推进走 nextAsync()（单个异步钩子超时 ${this.asyncTimeoutMs}ms）`)
+      }
       // 同步属性。
       this.sync()
     },
@@ -359,6 +393,11 @@ export const useGameStore = defineStore('game', {
         assetReader: this.assetSource ? createSourceAssetReader(this.assetSource) : null,
         // 资源文件源（界面侧解析占位符用）。
         assetSource: this.assetSource,
+        // 异步逐岁介入：同一批 Mod → 同样的判定（重开一局仍走同一条推进路径）。
+        hasAsyncMods: this.hasAsyncMods,
+        asyncMods: this.asyncMods,
+        manifests: this.modManifests,
+        asyncTimeoutMs: this.asyncTimeoutMs,
       })
       // 成功。
       return true
@@ -451,9 +490,15 @@ export const useGameStore = defineStore('game', {
       this.sync()
     },
 
-    // 推进一年。
+    // 推进一年（**同步路径**）。
+    //
+    // ⚠️ 这是"没有异步 Mod"时的唯一路径，语义一个字都没变（既有复现用例钉着它）：
+    //    `life.next()` 同步返回 → 当场记轨迹 → 返回结果。
+    //    走异步路径的是 `nextAsync()`（见 `advanceYear()` 与 `hasAsyncMods`）。
+    //
+    // @returns {object} 引擎返回值
     next() {
-      // 引擎推进。
+      // 引擎推进（**同步**）。
       const result = this.life.next()
       // 同步属性。
       this.sync()
@@ -473,6 +518,68 @@ export const useGameStore = defineStore('game', {
       // 轨迹里的资源占位符（`{{asset:路径}}`）解析成 URL（异步；不阻塞逐年推进）。
       this.trackAssets()
       // 返回结果（供组件渲染事件卡片）。
+      return result
+    },
+
+    // #nextAsync
+    // 推进一年（**异步路径**，2026-10 能力补齐 ④）。
+    //
+    // 只有"启用集合里存在 `async: true` 的 Mod"时才会走到这里（见 `advanceYear`）：
+    //   · 引擎用 `life.nextAsync()` —— 逐岁钩子被 await，异步 Mod 的内容**当场**进当年轨迹；
+    //   · 单个异步钩子超时（缺省 3000ms）由引擎记 warn 并继续推进（慢后端不会卡死游戏）；
+    //   · 轨迹快照（`history`）在 await **之后**做，所以异步注入的内容一定被记进去。
+    //
+    // 取消/离开页面：`store.clearTrace()`（换局/回主页）会把 `traceToken` +1，晚到的结果
+    // 发现 token 变了就**丢弃**（不留半截轨迹，也不留下没人处理的 Promise）。
+    //
+    // @returns {Promise<object|null>} 引擎返回值；被取消/无引擎时为 null
+    async nextAsync() {
+      // 无引擎（刷新后直进页面的双保险）。
+      if (!this.life) return null
+      // 本轮令牌（取消判定）。
+      const token = this.traceToken
+      // 标记"正在生成"（页面据此显示可见状态，不白屏）。
+      this.advancing = true
+      // 推进（引擎内部对每个异步钩子做超时保护）。
+      let result
+      try {
+        // **await 逐岁钩子**（异步 Mod 在这里真的被等到）。
+        result = await this.life.nextAsync({ timeoutMs: this.asyncTimeoutMs })
+      } catch (e) {
+        // 引擎理论上不抛（异常被隔离），真抛了也要让用户看见、并且别把页面卡在"生成中"。
+        this.pushLog('error', `[UI][game] 异步推进失败：${e.message}`)
+        // 清标记。
+        this.advancing = false
+        // 返回。
+        return null
+      }
+      // 清标记（无论后面是否被取消）。
+      this.advancing = false
+      // 已取消/已换局 → 丢弃这次结果（轨迹里不留半截）。
+      if (token !== this.traceToken) {
+        // 日志（trace 级：换局时安静地丢弃是正常行为）。
+        this.pushLog('trace', '[UI][game] 异步推进的结果已被取消（已换局/已离开页面），本次结果丢弃')
+        // 返回。
+        return null
+      }
+      // 同步属性。
+      this.sync()
+      // 记录当前这岁流水。
+      this.content = result.content
+      // 结束标志。
+      this.isEnd = result.isEnd
+      // 累积到完整轨迹（与同步路径同一套快照规则）。
+      this.history.push({
+        // 年龄。
+        age: result.age,
+        // 该岁是否结束。
+        isEnd: result.isEnd,
+        // 条目快照。
+        items: (result.content || []).map((c) => ({ ...c })),
+      })
+      // 资源占位符。
+      this.trackAssets()
+      // 返回。
       return result
     },
 
@@ -774,8 +881,13 @@ export const useGameStore = defineStore('game', {
     },
 
     // 清空人生轨迹（开局/重开/回主页时调用）。
+    // **同时作废进行中的异步推进**（令牌 +1）：晚到的结果会被丢弃，不会往新一局的轨迹里写。
     // @returns {void}
     clearTrace() {
+      // 作废在途的异步推进。
+      this.traceToken++
+      // 清"正在生成"标记（否则取消后页面永远显示生成中）。
+      this.advancing = false
       // 当前一岁流水。
       this.content = []
       // 完整轨迹。
@@ -787,12 +899,26 @@ export const useGameStore = defineStore('game', {
     // 把这条规则放在 store 而不是组件里：视图只负责渲染，
     // 「结束后不再推进」这条约束就可以被单测直接钉住（曾出现死亡后仍继续推进）。
     //
-    // @returns {boolean} 本次推进后是否仍可继续（已结束/未初始化 → false，且不推进）
-    advanceYear() {
+    // **异步 Mod 的 opt-in 分叉点就在这里**（2026-10 能力补齐 ④）：
+    //   `hasAsyncMods === false`（默认）→ 同步 `next()`，与历史逐位相同；
+    //   `hasAsyncMods === true` → `nextAsync()`（await 逐岁钩子）。
+    // 手动按钮、自动播放（`utils/auto-play.js` 的 onTick）与 `restartWithSeed` 都经这里，
+    // 所以**不会出现"某条路径退回同步"**。
+    //
+    // @param {object} [options]
+    // @param {boolean} [options.forceSync] - 强制同步（测试与"显式要同步"的调用方用）
+    // @returns {Promise<boolean>} 本次推进后是否仍可继续（已结束/未初始化 → false，且不推进）
+    async advanceYear({ forceSync = false } = {}) {
       // 未初始化或已结束：不推进，返回 false。
       if (!this.life || this.isEnd) return false
-      // 推进一年。
-      this.next()
+      // 选择推进方式。
+      if (!forceSync && this.hasAsyncMods) {
+        // 异步路径。
+        await this.nextAsync()
+      } else {
+        // 同步路径（**默认**；没有异步 Mod 时永远不会走到上面那一支）。
+        this.next()
+      }
       // 结束后返回 false（自动播放据此停止）。
       return !this.isEnd
     },

@@ -30,6 +30,10 @@ export const DEFAULT_MOD_LIST = [
   // 示例 Mod（教学）：默认禁用 —— 它是给人读代码/照抄用的样板，不该悄悄改变所有人的游戏数据。
   // 想试就在「Mod 管理」页启用它（或点「查看数据」看它装了什么）。
   { name: 'example-mod', enabled: false, system: false, description: '示例 Mod（教学）：演示 5 张数据表、三个钩子与 gameAPI 的用法', permissions: ['hooks', 'storage'] },
+  // 异步逐岁介入的教学样板（2026-10 能力补齐 ④）：`async: true` + onBeforeYear/onAfterYear。
+  // **必须登记且默认禁用**：清单外的发现项默认 enabled=true（第三方 Mod 装上就生效），
+  // 而这个示例一旦被启用，这一局就会走 `nextAsync()`（异步路径）——教学 Mod 不该有这种副作用。
+  { name: 'example-async-mod', enabled: false, system: false, description: '示例 Mod（教学）：演示异步介入逐岁流程（async: true + onBeforeYear/onAfterYear）', permissions: ['hooks'] },
   // AI Mod：系统内置、默认禁用（需配置 API Key）。
   { name: 'ai-mod', enabled: false, system: true, description: 'AI 增强 Mod（系统内置，可通过 gameAPI.ai 调用生成天赋/事件）', permissions: ['ai', 'network', 'storage', 'hooks'] },
 ]

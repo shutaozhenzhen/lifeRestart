@@ -20,6 +20,9 @@ import { DEFAULT_STRATEGY, normalizeStrategy, resolveAllocation, resolveTalents 
 // 引擎实例与种子随机源（createSimulation 用）。
 import Life from '../modules/life.js'
 import { createRng } from '../functions/util.js'
+// 批量场景的**跳过策略**（`async: true` / `deterministic: false` 的 Mod 不可逐位复现；
+// 2026-10 能力补齐 ④）—— 与 consistency.cli.js 共用同一处实现，避免两份策略分叉。
+import { modsToSkip } from '../mod/manifest.js'
 
 // #MAX_YEARS
 // 单局推进上限（数据覆盖 501 岁；这里留足余量并防止异常数据导致死循环）。
@@ -342,6 +345,39 @@ export function summarize(results = [], meta = {}) {
     // 最长寿一局。
     longest,
   }
+}
+
+// #skipPolicyWarning
+// 把**跳过策略**变成一条给用户看的警告（2026-10 能力补齐 ④）。
+//
+// 为什么必须有这条（而不是"悄悄跳过"）：批量模拟的结论是"寿命分布 / 收集率"，而
+// `async: true` 的 Mod 逐岁等外部世界 → 不可逐位复现；`deterministic: false` 同理。
+// 静默跳过会让报告里的数字**少了一块却没人知道**（旧约定：警告必须一路带到
+// `stats.warnings` / 报告 / 页面）。
+//
+// @param {object} params
+// @param {Array<{name: string, reasons: string[]}>} [params.skipped] - modsToSkip() 的 notReproducible
+// @param {object} [params.simulator] - 模拟器（有则把警告并进它的逐局结果 → summarize 带上）
+// @param {Array} [params.results] - 单局结果数组（没有 simulator 时用它）
+// @param {object} [params.log] - 日志器（出声）
+// @returns {string[]} 警告文本（空数组 = 没有跳过任何东西）
+export function skipPolicyWarning({ skipped = [], simulator = null, results = null, log } = {}) {
+  // 没有要跳过的。
+  if (!Array.isArray(skipped) || skipped.length === 0) return []
+  // 警告文本（逐 Mod 一行、带上理由 —— "为什么少了一个 Mod"必须自解释）。
+  const warnings = skipped.map((x) => `批量模拟已跳过 Mod ${x.name}（${(x.reasons || []).join('；')}）—— 异步/不确定行为无法逐位复现，它的数据与代码未参与本报告`)
+  // 并进逐局结果（summarize 会把它们去重汇总到 stats.warnings；页面的"每局警告"也能看到）。
+  if (simulator && Array.isArray(simulator.results)) {
+    // 逐局补。
+    for (const r of simulator.results) r.warnings = [...(r.warnings || []), ...warnings]
+  } else if (Array.isArray(results)) {
+    // 直接给的结果数组。
+    for (const r of results) r.warnings = [...(r.warnings || []), ...warnings]
+  }
+  // 出声。
+  for (const w of warnings) log?.warn?.(w)
+  // 返回。
+  return warnings
 }
 
 // #createSimulation

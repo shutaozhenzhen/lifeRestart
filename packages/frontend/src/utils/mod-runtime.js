@@ -22,6 +22,9 @@ import { createHookBus, createGameAPI } from 'game-engine/src/mod/gameapi.js'
 import { createAssetBridge, createUnavailableAssetBridge } from 'game-engine/src/mod/asset-bridge.js'
 // 运行时模块注册表（依赖随包分发、运行期解析；见引擎的 mod/modules.js）。
 import { createModuleRegistry, createDenyRequire } from 'game-engine/src/mod/modules.js'
+// 异步逐岁介入（2026-10 能力补齐 ④）：`async: true` / `asyncHooks` 的语义只在引擎的
+// manifest.js 定义一次（前端不复制一份判定）。
+import { manifestAsync, hooksToAwait } from 'game-engine/src/mod/manifest.js'
 import { createAIClient } from 'game-engine/src/ai/ai-client.js'
 import { createAIMod } from 'game-engine/src/ai/ai-mod.js'
 
@@ -571,15 +574,33 @@ export async function discoverMods({ baseUrl = MODS_BASE_URL, fetchImpl, log, st
 // @param {string} [params.baseUrl] - Mod 根路径
 // @param {Function} [params.fetchImpl] - fetch 实现（测试注入）
 // @param {string[]} [params.enabled] - 启用的 Mod 名（缺省全加载）
+// @param {boolean} [params.skipAsync] - 是否**跳过** `async: true` 的 Mod（批量模拟用；
+//   2026-10 能力补齐 ④：异步 = 不可逐位复现，sim/consistency 一律跳过）。缺省 false（正常玩不跳）。
+//   被跳过的名字与理由在返回值 `skippedAsync` 里（**不静默丢**）。
 // @param {object} [params.log] - 日志器
-// @returns {Promise<{data: object, codes: Array<{name: string, code: string}>, loaded: string[], disabled: string[], errors: string[], hooks: object, assetReader: object, assetSource: object}>} 结果
-export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enabled, log, store } = {}) {
+// @returns {Promise<{data: object, codes: Array, manifests: Array, requires: object, loaded: string[], disabled: string[], errors: string[], hooks: object, assetReader: object, assetSource: object, asyncMods: Array<{name: string, hooks: string[]}>, hasAsync: boolean, skippedAsync: Array<{name: string, hooks: string[]}>}>} 结果
+export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enabled, log, store, skipAsync = false } = {}) {
   // 钩子总线（一次游戏一个：所有 Mod 共享，Life 也注入它）。
   const hooks = createHookBus()
   // 文件源（本地已安装优先 → HTTP）。
   const source = createBrowserModSource({ baseUrl, fetchImpl, store, log })
   // 加载器（只加载启用的 Mod）。
-  const loader = await createModLoader({ source, log, only: enabled })
+  //
+  // 异步逐岁介入（2026-10 能力补齐 ④）：`skipAsync` 时用**判据**（`skipIf`）在加载器内部
+  // 一次扫描里把 `async: true` 的 Mod 剔掉 —— 判定只读 manifest，不读数据、不执行 code.js。
+  // 被跳过的名字与理由随返回值带出（**不许静默丢**）。
+  const loader = await createModLoader({
+    // 文件源。
+    source,
+    // 日志。
+    log,
+    // 启用集合。
+    only: enabled,
+    // 跳过判据（批量模拟专用）。
+    skipIf: skipAsync ? (m) => manifestAsync(m.manifest) : null,
+  })
+  // 被跳过的异步 Mod（连它们本来会被 await 的钩子一起带出，报告里能自解释）。
+  const skippedAsync = loader.skipped.map((x) => ({ name: x.name, hooks: hooksToAwait(x.manifest) }))
   // 加载数据与代码（**不**执行 code：浏览器要等 Life 建好拿 params）。
   const { data, codeList, errors } = await loader.loadAll()
   // 只保留有代码的项。
@@ -627,6 +648,16 @@ export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enable
     loaded: [...loader.order],
     // 被启用开关挡掉的。
     disabled: [...loader.disabled],
+    // **声明了异步逐岁介入的 Mod**（`async: true`）—— 前端据此决定推进时走
+    // `life.nextAsync()` 还是同步 `life.next()`（2026-10 能力补齐 ④ 的 opt-in 开关）。
+    // 没有它时 `hasAsync` 为 false → 一切照旧。
+    asyncMods: loader.mods
+      .filter((m) => manifestAsync(m.manifest))
+      .map((m) => ({ name: m.name, hooks: hooksToAwait(m.manifest) })),
+    // 本集合里有没有异步 Mod（页面/自动播放据此选推进方式）。
+    hasAsync: loader.mods.some((m) => manifestAsync(m.manifest)),
+    // 被**跳过策略**挡掉的异步 Mod（`skipAsync: true` 时非空；报告里要写明理由）。
+    skippedAsync,
     // 扫描/排序/解析/模块错误（不致命，报告里可见）。
     errors: [...loader.errors, ...errors, ...moduleErrors],
     // 共享钩子总线。
@@ -653,9 +684,13 @@ export async function loadModBundle({ baseUrl = MODS_BASE_URL, fetchImpl, enable
 // @param {object} [params.uiSink] - **界面注册表**（2026-10 能力补齐 ③）：`gameAPI.ui.*`
 //   的注册落点。前端传 `stores/extensions.js` 的 append + Life 的统计登记（见 stores/game.js）。
 //   不传 → `gameAPI.ui.available === false`，注册调用**抛可读错误**（不静默丢弃）
+// @param {Array<{name: string, manifest: object}>} [params.manifests] - 各 Mod 的 manifest
+//   （`loadModBundle` 的 `manifests`）。**异步逐岁介入的接线**（2026-10 能力补齐 ④）：
+//   传了它，`gameAPI.on` 才知道这个 Mod 声明了 `async: true` / `asyncHooks`，从而给
+//   `onBeforeYear` / `onYearAdvance` / `onAfterYear` 的回调打上"要 await"的标记。
 // @param {object} [params.log] - 日志器
 // @returns {{executed: string[], errors: string[], assetRegistry: object, uiBridges: object}} 结果
-export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig = null, requires = null, assetReader = null, assetRegistry = null, assetUrlApi = null, uiSink = null, log } = {}) {
+export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig = null, requires = null, assetReader = null, assetRegistry = null, assetUrlApi = null, uiSink = null, manifests = null, log } = {}) {
   // 结果。
   const executed = []
   const errors = []
@@ -664,6 +699,8 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
   // 资源注册表：外部给了就用它（界面与 Mod 代码必须操作**同一份**桥，
   // 否则界面拿到的 blob URL 与 Mod 拿到的不是同一个，且 dispose 会各管一半）。
   const registry = assetRegistry || createAssetRegistry({ log })
+  // Mod 名 → manifest（异步逐岁介入的 opt-in 来源；见 createGameAPI 的 `manifest` 参数）。
+  const manifestByName = new Map((manifests || []).map((m) => [m.name, m.manifest || {}]))
   // 逐个执行（异常隔离：单个 Mod 崩掉不影响其它，也不影响游戏）。
   for (const { name, code } of codes) {
     // 为该 Mod 构造 gameAPI（与 Life 共享参数注册表 + 钩子总线）。
@@ -704,6 +741,8 @@ export function executeModCodes({ codes = [], hooks, life, data = {}, aiConfig =
       // 界面注册表（2026-10 能力补齐 ③）：`gameAPI.ui.addPage/addPanel/...` 的落点。
       // 界面与 Mod 代码必须操作**同一份**注册表（与 assetRegistry 同一个道理）。
       uiSink,
+      // 本 Mod 的 manifest（异步逐岁介入 ④ 的 opt-in 判定源：`async` / `asyncHooks`）。
+      manifest: manifestByName.get(name),
       // Mod 名（storage 命名空间与日志前缀）。
       modName: name,
       // 日志。

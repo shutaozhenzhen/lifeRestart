@@ -110,7 +110,22 @@ async function startGame() {
   // （构造时不读任何字节；只有 Mod 真的用 `gameAPI.asset`，或轨迹里出现
   //  `{{asset:路径}}` 占位符时，才去读那一个文件）。
   const bundle = await buildData()
-  await store.init(bundle.data, { seed: seedInput.value, hooks: bundle.hooks, modCodes: bundle.modCodes, modRequires: bundle.modRequires, assetReader: bundle.assetReader, assetSource: bundle.assetSource })
+  await store.init(bundle.data, {
+    // 种子（留空 = 自动生成）。
+    seed: seedInput.value,
+    // 钩子总线 / 待执行代码 / 运行时模块。
+    hooks: bundle.hooks,
+    modCodes: bundle.modCodes,
+    modRequires: bundle.modRequires,
+    // 资源能力（惰性）。
+    assetReader: bundle.assetReader,
+    assetSource: bundle.assetSource,
+    // 异步逐岁介入（2026-10 能力补齐 ④）：**opt-in 判定**由 loadModBundle 算好 ——
+    // 集合里有 `async: true` 的 Mod 时，`store.advanceYear()` 才会走 nextAsync()。
+    hasAsyncMods: bundle.mods?.hasAsync ?? false,
+    asyncMods: bundle.mods?.asyncMods || [],
+    manifests: bundle.mods?.manifests || null,
+  })
   // 日志：本局种子（复现的关键信息）。
   store.pushLog('info', `[UI][home] 本局随机种子：${store.seed}`)
   // 跳转：名人模式先去选名人（名人自带属性与天赋），自定义模式去抽天赋。

@@ -54,6 +54,9 @@ const age = computed(() => Math.max(0, Number(store.propertys.AGE) || 0))
 
 // 播放中标志（按钮文案/禁用态用；与 player.running 同步维护）。
 const playing = ref(false)
+// **正在异步推进**（2026-10 能力补齐 ④）：有 `async: true` 的 Mod 时，`advanceYear()` 是异步的
+// （它要 await Mod 的逐岁钩子）。这个标志让界面显示可见的"生成中"状态 —— 不白屏、不看起来卡死。
+const generating = computed(() => store.advancing)
 // 播放速度档位（localStorage 持久化）。
 const speed = ref(localStorage.getItem('playSpeed') || DEFAULT_SPEED)
 // 速度选项。
@@ -63,29 +66,53 @@ const speeds = PLAY_SPEEDS
 const listEl = ref(null)
 // 是否跟随最新（用户往上翻时暂停自动滚动，避免"抢滚动"）。
 const stick = ref(true)
+// 组件是否还活着（卸载后忽略晚到的异步结果 —— 不留未处理的 Promise 后续动作）。
+let alive = true
 
 // #advance
 // 推进一年（手动按钮与自动播放共用；守卫在 store.advanceYear 内）。
 //
-// @returns {void}
-function advance() {
+// `store.advanceYear()` 是 **async**（2026-10 能力补齐 ④）：没有异步 Mod 时它内部走同步
+// `next()`，有异步 Mod 时走 `nextAsync()` —— 两条路径都由它选，界面不重复判断。
+//
+// @returns {Promise<boolean>} 是否还能继续（false = 已结束）
+async function advance() {
   // 推进（store 记录流水 + 累积轨迹；已结束会自行返回 false 且不推进）。
-  store.advanceYear()
+  const keepGoing = await store.advanceYear()
+  // 卸载后不再做任何界面动作。
+  if (!alive) return false
+  // 返回。
+  return keepGoing
 }
 
 // #onTick
 // 自动播放的每次推进：返回 false 表示停止（人生结束）。
 //
+// 自动播放**走同一条选择逻辑**（`store.advanceYear()`）—— 不会退回同步。
+// 异步推进期间跳过本次 tick（上一年的 await 还没回来，连着推进会打乱年份顺序）。
+//
 // @returns {boolean} 是否继续
 function onTick() {
-  // 推进一年并询问是否还能继续。
-  const keepGoing = store.advanceYear()
-  // 结束：同步按钮状态并停止播放。
-  if (!keepGoing) {
-    playing.value = false
-    return false
-  }
-  // 继续。
+  // 上一次推进还没回来（只在异步 Mod 下可能）：这一拍先跳过，等它完成。
+  if (generating.value) return true
+  // 推进一年（异步；守卫在 store 内）。
+  const pending = advance()
+  // 等它落地后再判断是否停止。
+  pending.then((keepGoing) => {
+    // 卸载后什么也不做。
+    if (!alive) return
+    // 结束：同步按钮状态并停止播放。
+    if (!keepGoing) {
+      // 同步标志。
+      playing.value = false
+      // 停。
+      player.stop()
+    }
+  }).catch(() => {
+    // 兜底：绝不留下未处理的 Promise（真正的错误已经在 store 里记了日志）。
+    if (alive) playing.value = false
+  })
+  // 继续（是否停止由上面那次推进的结果决定）。
   return true
 }
 
@@ -278,7 +305,11 @@ onMounted(() => {
 })
 
 // 卸载：停止播放（避免离开页面后定时器继续推进人生）。
+// 2026-10 能力补齐 ④：异步推进可能还在 await Mod 的钩子 → 用 `alive` 忽略它回来后的界面动作
+// （store 侧的 `traceToken` 会丢弃它的结果，两条一起保证"离开页面不留尾巴"）。
 onBeforeUnmount(() => {
+  // 标记已卸载。
+  alive = false
   // 停止。
   player.stop()
 })
@@ -322,10 +353,13 @@ function summary() {
       </div>
 
       <div class="hud-row actions">
-        <button class="btn primary" :disabled="isEnd || playing" @click="advance">下一年</button>
+        <button class="btn primary" :disabled="isEnd || playing || generating" @click="advance">下一年</button>
         <button class="btn play" :class="{ on: playing }" :disabled="isEnd && !playing" @click="togglePlay">
           {{ playing ? '⏸ 暂停' : '▶ 自动播放' }}
         </button>
+        <!-- 异步 Mod 正在逐岁取内容（2026-10 能力补齐 ④）：给人的必须是**可见**的状态，
+             而不是"点了没反应"或白屏。 -->
+        <span v-if="generating" class="generating" role="status">⏳ 生成中…（等 Mod 的异步钩子）</span>
         <span class="speed">
           <button
             v-for="s in speeds"
@@ -514,6 +548,22 @@ function summary() {
 .chip.active {
   background: #0f3460;
   color: #fff;
+}
+/* 「生成中」提示（异步 Mod 的逐岁等待；2026-10 能力补齐 ④）。
+   颜色刻意与其它胶囊区分：它是"正在等外部世界"，不是游戏内的一个数值。 */
+.generating {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #2a2340;
+  color: #d8b4fe;
+  font-size: 11px;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
 }
 /* 轨迹区 */
 .trace {

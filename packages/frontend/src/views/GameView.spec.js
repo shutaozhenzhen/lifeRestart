@@ -329,8 +329,7 @@ describe('GameView', () => {
     expect(store.assetUrl('assets/logo.png')).toBeNull()
   })
 
-  test('状态栏显示本局随机种子，点击可复制（用于复现）', async () => {
-    // 准备。
+  test('状态栏显示本局随机种子，点击可复制（用于复现）', async () => {    // 准备。
     const store = await readyStore()
     // 挂载。
     const { wrapper } = mountView(GameView)
@@ -364,5 +363,125 @@ describe('GameView', () => {
     expect(store.allocation).toEqual({ CHR: 0, INT: 0, STR: 0, MNY: 0 })
     // 回主页。
     expect(router.currentRoute.value.path).toBe('/')
+  })
+})
+
+// ==================== 异步逐岁介入（2026-10 能力补齐 ④）====================
+//
+// 轨迹页这一侧的义务有三条：
+//   ① 异步推进期间**有可见状态**（不白屏、不看起来卡死）；
+//   ② "下一年"按钮在生成中不可重复点（一次只推进一年）；
+//   ③ 自动播放（`utils/auto-play.js` 的 onTick）**走同一条选择逻辑**（不退回同步）。
+describe('GameView 异步逐岁介入（能力补齐 ④）', () => {
+  // #ASYNC_MOD_CODE
+  // 异步 Mod：`onBeforeYear` 里 await 一个真 Promise，然后把内容塞进当年轨迹。
+  const ASYNC_MOD_CODE = `
+gameAPI.on('onBeforeYear', async (p) => {
+  if (p.nextAge !== 1) return
+  await new Promise(function (r) { setTimeout(r, 1) })
+  p.pending.push({ type: 'EVT', description: '_ASYNC_INJECTED_' })
+})
+`
+  // #ASYNC_MANIFEST
+  // 异步 Mod 的 manifest（前端据此选 nextAsync）。
+  const ASYNC_MANIFEST = { name: 'async-demo', version: '1.0.0', async: true }
+
+  // #asyncReadyStore
+  // 建一个**带异步 Mod** 的就绪 store（轨迹页挂载时会 begin）。
+  //
+  // @returns {Promise<object>} store
+  async function asyncReadyStore() {
+    // store。
+    const store = useGameStore()
+    // 初始化（**带异步 Mod**：hasAsyncMods 为 true → 推进走 nextAsync()）。
+    await store.init(buildFixtureData(), {
+      // 代码。
+      modCodes: [{ name: 'async-demo', code: ASYNC_MOD_CODE }],
+      // 各 Mod 的 manifest（异步标记的来源）。
+      manifests: [{ name: 'async-demo', manifest: ASYNC_MANIFEST }],
+      // 判定。
+      hasAsyncMods: true,
+      asyncMods: [{ name: 'async-demo', hooks: ['onBeforeYear'] }],
+      // 小超时（用例不依赖它，但别让失败挂 3 秒）。
+      asyncTimeoutMs: 1000,
+    })
+    // 天赋确认 + 分配（轨迹页挂载时会 begin）。
+    store.confirmTalents()
+    store.allocation = { CHR: 5, INT: 5, STR: 5, MNY: 5 }
+    // 返回。
+    return store
+  }
+
+  test('异步推进期间显示「生成中」，结束后消失（不白屏、不看起来卡死）', async () => {
+    // 准备（带异步 Mod）。
+    const store = await asyncReadyStore()
+    // 挂载（onMounted 会 begin 并启动自动播放）。
+    const { wrapper } = mountView(GameView)
+    await flushPromises()
+    // 初始状态：没有"生成中"。
+    expect(wrapper.find('.generating').exists()).toBe(false)
+    // 手动推进：用**原生 click**（`trigger('click')` 会等到下一个 tick 才返回，那时推进
+    // 已经结束、"生成中"这一段就再也观察不到了 —— 这个用例要观察的正是**中间态**）。
+    const btn = findButton(wrapper, '下一年')
+    // 播放中该按钮是禁用的（本用例只想看"点一下之后"的状态，所以先停掉自动播放）。
+    await findButton(wrapper, '暂停').trigger('click')
+    await flushPromises()
+    // 点击前：可点。
+    expect(findButton(wrapper, '下一年').attributes('disabled')).toBeUndefined()
+    // 原生点击（同步派发 → 处理器随即开始 await）。
+    findButton(wrapper, '下一年').element.click()
+    // 推进已经开始（store 侧标记）。
+    expect(store.advancing).toBe(true)
+    // **可见的生成中状态**（这正是"不许白屏 / 不许看起来卡死"的落点）。
+    await nextTick()
+    expect(wrapper.find('.generating').exists()).toBe(true)
+    expect(wrapper.find('.generating').text()).toContain('生成中')
+    // 生成中不能重复点（一次只推进一年）。
+    expect(findButton(wrapper, '下一年').attributes('disabled')).toBeDefined()
+    // 等推进落地。
+    await flushPromises()
+    await nextTick()
+    // 状态消失。
+    expect(wrapper.find('.generating').exists()).toBe(false)
+    // 这一年已经进了轨迹（异步路径真的走通了）。
+    expect(store.history.length).toBe(1)
+    expect(store.advancing).toBe(false)
+    // 卸载（`onBeforeUnmount` 会停播放器；否则本文件"只假造 setInterval"的做法会让它的
+    // 定时器活到下一个用例里，搅乱那里的自动播放 —— 实测踩过）。
+    wrapper.unmount()
+  })
+
+  test('自动播放走同一条选择逻辑（异步集合下也走 nextAsync，不退回同步）', async () => {
+    // 准备（带异步 Mod）。
+    const store = await asyncReadyStore()
+    // 挂载（onMounted 会 begin + 启动自动播放）。
+    const { wrapper } = mountView(GameView)
+    await flushPromises()
+    // 生命拉满（fixture 里 0 岁就可能死）。
+    keepAlive(store)
+    // 钉住"没有退回同步"：自动播放的推进也必须走异步路径。
+    const syncSpy = vi.spyOn(store.life, 'next')
+    // 自动播放每一拍（真实间隔 800ms；这里手动推进假定时器）。
+    // ⚠️ 用 `advanceTimersByTimeAsync`（它会连微任务一起清）而不是同步的 `advanceTimersByTime`：
+    //    异步推进跨了好几个微任务 / 真实定时器，同步推进定时器的话下一拍会撞上"上一拍还没回来"。
+    for (let i = 0; i < 3; i++) {
+      // 走一拍。
+      await vi.advanceTimersByTimeAsync(800)
+      // 等异步推进落地（真实定时器 1ms + 微任务）。
+      await new Promise((r) => setTimeout(r, 20))
+      await flushPromises()
+      await nextTick()
+    }
+    // 前三年都推进了（第 1 岁那年就是异步注入的那年）。
+    expect(store.history.length).toBeGreaterThanOrEqual(2)
+    // 异步注入的内容出现在**当年**轨迹（而且是自动播放路径推出来的）。
+    const year1 = store.history.find((h) => h.age === 1)
+    expect(year1).toBeTruthy()
+    expect(year1.items.some((c) => String(c.description).includes('_ASYNC_INJECTED_'))).toBe(true)
+    // 同步 next() 一次都没被调用。
+    expect(syncSpy).not.toHaveBeenCalled()
+    // 清理。
+    syncSpy.mockRestore()
+    wrapper.unmount()
   })
 })

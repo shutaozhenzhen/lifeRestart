@@ -23,7 +23,9 @@ import { exportSimulation, formatStrategy } from '../sim/exporters.js'
 // 文件写入（--out 时）。
 import { writeFileSync } from 'node:fs'
 // 模拟内核（推荐入口）。
-import { createSimulation } from '../sim/simulator.js'
+import { createSimulation, skipPolicyWarning } from '../sim/simulator.js'
+// 批量场景的跳过策略（`async: true` / `deterministic: false` 的 Mod 见 mod/manifest.js）。
+import { modsToSkip } from '../mod/manifest.js'
 // Mod 加载（可选：真实数据 + 钩子）。
 import { createNodeModLoader } from '../mod/loader-node.js'
 import { createGameAPI, createHookBus } from '../mod/gameapi.js'
@@ -45,13 +47,22 @@ export function memoryStorage() {
 // #loadModData
 // 用 Mod 加载器取数据（Data Mod → 原版真实数据；其它 Mod 的钩子也会挂上，但模拟不注入 AI）。
 //
+// **跳过策略**（2026-10 能力补齐 ④）：批量模拟要"同 seed 同输入 → 逐位复现"，而
+// `async: true`（异步逐岁钩子等外部世界）与 `deterministic: false` 的 Mod 天然不满足这一点
+// → 先用一次**只扫描**（不加载）算出跳过名单，再把这些名字传给加载器（`skip`），
+// 理由一路带到 `stats.warnings` / 报告（**不许静默丢**）。
+//
 // @param {object} params
 // @param {string} params.modsDir - mods 目录
 // @param {object} params.log - 日志器
-// @returns {object} 合并后的数据
+// @returns {Promise<{data: object, skipped: Array<{name: string, reasons: string[]}>}>} 数据 + 跳过清单
 export async function loadModData({ modsDir, log }) {
-  // 加载器（Node 文件源）。
-  const loader = await createNodeModLoader({ modsDir, log })
+  // 只扫描（拿 manifest；不加载数据、不执行 code.js）—— 跳过判定只需要 manifest。
+  const probe = await createNodeModLoader({ modsDir, log })
+  // 策略（纯函数，有单测）。
+  const policy = modsToSkip(probe.mods)
+  // 加载器（跳过名单生效）。
+  const loader = await createNodeModLoader({ modsDir, log, skip: policy.skipped })
   // 共享钩子总线。
   const bus = createHookBus()
   // 加载 + 执行 code.js（未配置 AI → ai-mod 只注册不调用）。
@@ -59,8 +70,8 @@ export async function loadModData({ modsDir, log }) {
     // 注入 gameAPI（无 AI 配置）。
     createAPI: (name, mergedData) => createGameAPI({ data: mergedData, hooks: bus, log }),
   })
-  // 返回数据。
-  return data
+  // 返回数据 + 跳过清单。
+  return { data, skipped: policy.notReproducible }
 }
 
 // #formatReport
@@ -156,7 +167,17 @@ export function formatReport(stats, { elapsedMs, talentName } = {}) {
 // @throws {Error} 既没给 data 也没给 modsDir 时抛「没有内容来源」错误
 export async function simulateCli({ runs = 50, seed = null, modsDir = null, data = null, strategy, chunk = 10, onProgress, log } = {}) {
   // 数据源：调用方直给 / Mod 加载器；两者都没有 → 明确报错（引擎不内置内容）。
-  const gameData = data || (modsDir ? await loadModData({ modsDir, log }) : null)
+  let gameData = data
+  // 跳过策略的理由（`--mods` 路径才有；**一路带到 stats.warnings**）。
+  let skipped = []
+  // 走 Mod 加载器。
+  if (!gameData && modsDir) {
+    // 加载（内部已按跳过策略剔除不可复现的 Mod）。
+    const loaded = await loadModData({ modsDir, log })
+    // 取数据与跳过清单。
+    gameData = loaded.data
+    skipped = loaded.skipped
+  }
   // 没有内容来源。
   if (!gameData) {
     throw noContentError('请用 --mods <dir> 指定 Mod 目录（例如 --mods ../../mods），或给 simulateCli 传 data')
@@ -174,10 +195,12 @@ export async function simulateCli({ runs = 50, seed = null, modsDir = null, data
     // 进度回调。
     if (typeof onProgress === 'function') onProgress(simulator.progress(), runs, simulator.results[simulator.results.length - 1])
   }
+  // 把跳过理由并进每一局（summarize 会去重汇总到 stats.warnings）。
+  skipPolicyWarning({ skipped, simulator, log })
   // 聚合。
   const stats = simulator.summarize({ seed })
   // 返回（带上 data：报告里要把固定特性 ID 渲染成名称）。
-  return { stats, results: simulator.results, elapsedMs: Date.now() - startedAt, data }
+  return { stats, results: simulator.results, elapsedMs: Date.now() - startedAt, data: gameData, skipped }
 }
 
 // #parseStrategy

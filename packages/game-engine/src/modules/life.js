@@ -11,8 +11,17 @@
  *   4. 事件总线 $$event → 注入 emit(tag, data)。
  *
  * 公开 API（供前端/CLI/gameAPI 调用）：
- *   initial / config / remake / start / next / summary / statistics / achievements
+ *   initial / config / remake / start / next / nextAsync / summary / statistics / achievements
  *   request / check / clone / random / talentRandom / characterRandom / format
+ *
+ * `next()` vs `nextAsync()`（2026-10 能力补齐 ④：Mod 能异步介入逐岁流程）：
+ *   · `next()`  —— **同步**，语义与历史完全一致（任何改动都会破坏复现与既有用例）。
+ *   · `nextAsync()` —— 同一条流程，但**逐岁钩子**用 await：`onBeforeYear`（推进之前，
+ *     可改数据）/ `onYearAdvance`（与同步路径同一个钩子）/ `onAfterYear`（推进之后）。
+ *     只有声明了 `async: true` 的 Mod 的回调会被 await（见 mod/gameapi.js 的 `emitYearHooksAsync`），
+ *     其余回调仍是同步调用 —— 所以"没有异步 Mod"时两者行为逐位相同。
+ *   · 取舍：`onTalentPoolGenerate` / `onEventRender` 在 `nextAsync()` 里**仍走 emitSync** ——
+ *     它们是"抽卡时机"与"渲染时机"，调用方当场就要结果（卡池 / 文本），异步没有意义。
  */
 
 // 导入模块与工具。
@@ -24,6 +33,8 @@ import Character from './character.js'
 import { clone as cloneUtil, weightRandom } from '../functions/util.js'
 import { check as checkCondition } from '../condition/index.js'
 import { SILENT_LOGGER } from '../functions/logger.js'
+// 异步逐岁钩子的分发（超时 + 异常隔离；2026-10 能力补齐 ④）。
+import { emitYearHooksAsync, DEFAULT_ASYNC_TIMEOUT_MS } from '../mod/gameapi.js'
 // 内置默认评价分档（config 未显式传入 propertyConfig 时使用）。
 import { DEFAULT_JUDGE_CONFIG } from '../params/judge-config.js'
 
@@ -353,10 +364,89 @@ class Life {
   // 推进一年：触发天赋 + 随机事件。
   // 触发 onYearAdvance 钩子（payload 引用传递，钩子可向 content 注入额外内容）。
   //
+  // ⚠️ **同步**函数，语义（含随机数消耗顺序）是复现契约的一部分，不得改动。
+  //    要异步介入逐岁流程请用 `nextAsync()`（opt-in：需要 `async: true` 的 Mod）。
+  //
   // @returns {{age: number, content: Array, isEnd: boolean}}
   next() {
     // trace 入口。
     this.#log.trace('→ next()')
+    // 本岁产出（与 nextAsync 共用同一次推进 —— 随机数消耗顺序只在这里定义一次）。
+    const year = this.#advanceYear()
+    // 抽出各字段（保持历史形状）。
+    const { age, content, isEnd } = year
+    // Mod 钩子：翻年时机（可注入 AI 生成事件/天赋）。
+    this.#hooks.emitSync('onYearAdvance', { age, content, isEnd })
+    // 收尾（本岁产出摘要 + trace 退出）。
+    this.#logYear(age, content, isEnd)
+    // 返回。
+    return { age, content, isEnd }
+  }
+
+  // #nextAsync
+  // 推进一年（**异步逐岁入口**，2026-10 能力补齐 ④）。
+  //
+  // 与 `next()` 的差异只有一处：**逐岁钩子走 await**，并且多了两个只能在异步点用的钩子：
+  //   · `onBeforeYear`  —— 年龄自增**之前**触发（`{ age, content: [], isEnd: false, pending: [] }`）。
+  //     这时还能改"这一年要读的数据"（例如按后端结果往数据表里补一条事件，让这一岁抽到它）。
+  //     `payload.pending` 里的条目会被引擎在天赋/事件之后并入当年 `content`。
+  //   · `onYearAdvance` —— 与同步路径同一个钩子，但**被 await**（异步生成的内容当场进轨迹，
+  //     而不是像 `next()` 里那样"晚于引擎读取"）。
+  //   · `onAfterYear`   —— 推进完成之后触发（`{ age, content, isEnd }`），可往 `content` 追加。
+  //
+  // 三条硬约束：
+  //   ① **随机数消耗顺序与 `next()` 完全一致** —— 两者共用 `#advanceYear()`，随机调用只在
+  //      那里面发生，await 点不消耗任何随机数。所以同种子下 `next()` 与 `nextAsync()` 的
+  //      **游戏内容逐字节相同**（钩子不做额外随机时）。
+  //   ② **超时保护**：单个异步钩子超过 `timeoutMs`（缺省 3000）→ 记一条 warn（带 Mod 名与
+  //      钩子名）并**继续推进**。慢后端不能把游戏卡死。
+  //   ③ **抛错/超时都不污染轨迹**：超时的那条回调的返回值不进结果；已发生的同步改动无法回滚
+  //      （JS 没有事务），所以约定是"要么整段 await 完成、要么整段被放弃"——不会写出半截数据。
+  //
+  // ⚠️ 只有声明了 `async: true` 的 Mod 的回调会被 await（见 mod/gameapi.js 的
+  //    `emitYearHooksAsync`）；因此没有异步 Mod 时，本方法与 `next()` 行为逐位相同。
+  //    某 Mod 自己引入的不确定性（网络、时钟）是它自己的事，不再由引擎保证可复现。
+  //
+  // @param {object} [options]
+  // @param {number} [options.timeoutMs] - 单个异步钩子的超时毫秒（缺省 3000；<=0 表示不设超时）
+  // @param {object} [options.log] - 日志器（缺省用 Life 自己的）
+  // @param {object} [options.timer] - 定时器适配器 `{ setTimeout, clearTimeout }`（测试注入）
+  // @returns {Promise<{age: number, content: Array, isEnd: boolean}>} 本岁轨迹
+  async nextAsync({ timeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, log, timer } = {}) {
+    // trace 入口。
+    this.#log.trace('→ nextAsync()')
+    // 日志器（超时/抛错的警告走它）。
+    const logger = log || this.#log
+    // 推进之前的年龄（onBeforeYear 的语义是"这一岁开始之前"，此时 AGE 还是上一岁的值）。
+    const beforeAge = this.#property.get(this.PropertyTypes.AGE)
+    // onBeforeYear 的 payload（pending 是给钩子的一个明确入口：同步/异步都能用）。
+    // `age` = 当前年龄，`nextAge` = 这一岁推进后会变成的年龄（"提前准备下一年"用它最直观）。
+    const pending = []
+    // 钩子：翻年之前（可异步准备数据 / 加内容）。
+    await emitYearHooksAsync({ bus: this.#hooks, name: 'onBeforeYear', payload: { age: beforeAge, nextAge: beforeAge + 1, content: [], isEnd: false, pending }, log: logger, timeoutMs, timer })
+    // 本岁产出（与 next() 严格同一段代码 → 随机数顺序一致）。
+    const { age, content, isEnd } = this.#advanceYear()
+    // 把 onBeforeYear 攒下的条目并进当年轨迹（引擎自己的条目在前，注入的在后）。
+    for (const item of pending) content.push(item)
+    // 钩子：翻年时机（**await** —— 异步生成的内容当场进轨迹）。
+    await emitYearHooksAsync({ bus: this.#hooks, name: 'onYearAdvance', payload: { age, content, isEnd }, log: logger, timeoutMs, timer })
+    // 钩子：翻年之后（收尾；可往 content 追加结算类条目）。
+    await emitYearHooksAsync({ bus: this.#hooks, name: 'onAfterYear', payload: { age, content, isEnd }, log: logger, timeoutMs, timer })
+    // 收尾（与同步路径同一套摘要 + trace）。
+    this.#logYear(age, content, isEnd)
+    // 返回（新对象；形状与 next() 一致）。
+    return { age, content, isEnd }
+  }
+
+  // #advanceYear
+  // **一次推进的核心**（`next()` 与 `nextAsync()` 共用的唯一实现）。
+  //
+  // 为什么要把这段抽出来：随机数消耗顺序是复现契约（`_准则_Mod设计.md` E1）。两份复制粘贴的
+  // 实现迟早会漂移（加一行 `this.#random()` 就悄悄改掉整条序列），而共用一个函数就**不可能**
+  // 让"同种子下同步/异步走出不同的人生"。钩子不在这里触发（同步/异步各按自己的方式发）。
+  //
+  // @returns {{age: number, content: Array, isEnd: boolean}} 本岁产出（**不含**钩子注入的内容）
+  #advanceYear() {
     // 年龄+1，读取该年数据。
     const { age, event, talent } = this.#property.ageNext()
     // 触发天赋。
@@ -367,17 +457,27 @@ class Life {
     const isEnd = this.#property.isEnd()
     // 汇总流水。
     const content = [talentContent, eventContent].flat()
-    // Mod 钩子：翻年时机（可注入 AI 生成事件/天赋）。
-    this.#hooks.emitSync('onYearAdvance', { age, content, isEnd })
     // 轨迹成就检测。
     this.#achievement.achieve(this.AchievementOpportunity.TRAJECTORY)
-    // 本岁产出摘要（debug）。
-    this.#log.debug(`[${age}岁] 天赋 ${talentContent.length} 条 / 事件 ${eventContent.length} 条 / isEnd=${isEnd}`)
     // 返回。
-    const result = { age, content, isEnd }
+    return { age, content, isEnd }
+  }
+
+  // #logYear
+  // 一岁收尾的日志（同步/异步共用，保证两边日志逐行相同）。
+  //
+  // ⚠️ 文案（`← next →`）是**日志契约**：`life.spec.js` 的 trace 用例逐字断言它，
+  //    外部排障脚本也靠这两行定位"哪一年开始的"（改文案等于改接口）。
+  //
+  // @param {number} age - 年龄
+  // @param {Array} content - 本岁轨迹
+  // @param {boolean} isEnd - 是否结束
+  // @returns {void}
+  #logYear(age, content, isEnd) {
+    // 本岁产出摘要（debug；与历史文案逐字一致）。
+    this.#log.debug(`[${age}岁] 天赋 ${content.filter((c) => c?.type === this.PropertyTypes.TLT).length} 条 / 事件 ${content.filter((c) => c?.type === this.PropertyTypes.EVT).length} 条 / isEnd=${isEnd}`)
     // trace 退出（摘要，content 只记条数防刷屏）。
     this.#log.trace(`← next → ${JSON.stringify({ age, content: content.length, isEnd })}`)
-    return result
   }
 
   // #talentReplace

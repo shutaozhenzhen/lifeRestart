@@ -361,7 +361,9 @@ describe('gameStore 人生轨迹累积', () => {
     store.begin({ CHR: 5 })
     // 拉满生命：还能继续。
     store.life.request('PROPERTY').set('LIF', 100)
-    expect(store.advanceYear()).toBe(true)
+    // 2026-10 能力补齐 ④：`advanceYear()` 现在是 **async**（有异步 Mod 时走 nextAsync；
+    // 本用例没有异步 Mod → 内部走同步 next()，行为与以前逐位相同）。
+    expect(await store.advanceYear()).toBe(true)
     // 轨迹 +1。
     expect(store.history.length).toBe(1)
     // 模拟死亡（生命归零）。
@@ -369,11 +371,11 @@ describe('gameStore 人生轨迹累积', () => {
     store.sync()
     expect(store.isEnd).toBe(true)
     // 结束后：返回 false，且**不再推进**（轨迹条数不变）→ 自动播放 onTick 收到 false 即停。
-    expect(store.advanceYear()).toBe(false)
+    expect(await store.advanceYear()).toBe(false)
     expect(store.history.length).toBe(1)
     // 未初始化时同样安全。
     const fresh = useGameStore()
-    expect(fresh.advanceYear()).toBe(false)
+    expect(await fresh.advanceYear()).toBe(false)
   })
 
   test('O：重开次数跨局持久化（回归：未注入 storage → 永远是 0）', async () => {
@@ -1054,5 +1056,158 @@ describe('gameStore 名人模式', () => {
     for (const key of ['CHR', 'INT', 'STR', 'MNY']) {
       expect(typeof store.characterBase[key]).toBe('number')
     }
+  })
+})
+
+// ==================== 异步逐岁介入（2026-10 能力补齐 ④）====================
+//
+// 这一组钉的是**前端怎么选路径**与**异步内容真的进了轨迹**：
+//   · 有异步 Mod → `advanceYear()` 走 `life.nextAsync()`，`onBeforeYear` 里 await 出来的
+//     内容出现在当年轨迹（以前做不到：Promise 被丢弃，晚到的改动不进当年）；
+//   · 没有异步 Mod → 仍走同步 `life.next()`（**最关键的那条**：不能因为新增能力改掉老路径）；
+//   · 取消/换局 → 在途的异步结果被丢弃（不留半截轨迹）。
+describe('gameStore 异步逐岁介入（能力补齐 ④）', () => {
+  // #ASYNC_MOD_CODE
+  // 异步 Mod 的 code.js（真 await：微任务 + 宏任务都覆盖）。
+  const ASYNC_MOD_CODE = `
+gameAPI.on('onBeforeYear', async (p) => {
+  if (p.nextAge !== 1) return
+  await Promise.resolve()
+  await new Promise(function (r) { setTimeout(r, 1) })
+  p.pending.push({ type: 'EVT', description: '_ASYNC_INJECTED_' })
+})
+gameAPI.on('onAfterYear', async (p) => {
+  if (p.age !== 2) return
+  await new Promise(function (r) { setTimeout(r, 1) })
+  p.content.push({ type: 'EVT', description: '_ASYNC_AFTER_' })
+})
+`
+  // #ASYNC_MANIFEST
+  // 异步 Mod 的 manifest（判定源）。
+  const ASYNC_MANIFEST = { name: 'async-demo', version: '1.0.0', async: true }
+
+  // #initStore
+  // 建一个已开局、生命拉满的 store。
+  //
+  // @param {object} [options]
+  // @param {boolean} [options.async] - 是否注入异步 Mod
+  // @param {number} [options.timeoutMs] - 异步钩子超时（测试用小值）
+  // @returns {Promise<object>} store
+  async function initStore({ async: withAsync = false, timeoutMs = 3000, maxYears = 6 } = {}) {
+    // 全新 pinia。
+    setActivePinia(createPinia())
+    // store。
+    const store = useGameStore()
+    // 初始化（**同步集合**：与生产里"没有异步 Mod"时逐位相同）。
+    await store.init(buildData(), withAsync
+      ? {
+          // 异步 Mod 的代码 + 判定 + manifest。
+          modCodes: [{ name: 'async-demo', code: ASYNC_MOD_CODE }],
+          manifests: [{ name: 'async-demo', manifest: ASYNC_MANIFEST }],
+          hasAsyncMods: true,
+          asyncMods: [{ name: 'async-demo', hooks: ['onBeforeYear', 'onAfterYear'] }],
+          asyncTimeoutMs: timeoutMs,
+        }
+      : {})
+    // 开局。
+    store.begin({ CHR: 5, INT: 5, STR: 5, MNY: 5 })
+    // 生命拉满（fixture 里 0 岁就可能死）。
+    store.life.request('PROPERTY').set('LIF', 100)
+    // 同步镜像。
+    store.sync()
+    // 返回（maxYears 只是给调用方的建议，这里不推进）。
+    void maxYears
+    // 返回。
+    return store
+  }
+
+  test('AA：有异步 Mod → advanceYear 走 nextAsync()，await 出来的内容进**当年**轨迹', async () => {
+    // store（带异步 Mod）。
+    const store = await initStore({ async: true })
+    // 走的是异步路径（标记存在）。
+    expect(store.hasAsyncMods).toBe(true)
+    // 钉住"没有退回同步"：同步 next 一次都不该被调用。
+    const syncSpy = vi.spyOn(store.life, 'next')
+    // 第 0 岁（钩子 nextAge=0 不动手）。
+    expect(await store.advanceYear()).toBe(true)
+    // 第 1 岁：异步注入在**当年**。
+    expect(await store.advanceYear()).toBe(true)
+    // 同步路径完全没被用。
+    expect(syncSpy).not.toHaveBeenCalled()
+    // 轨迹里出现了异步注入的内容（这就是以前做不到的事）。
+    const year1 = store.history.find((h) => h.age === 1)
+    expect(year1).toBeTruthy()
+    expect(year1.items.some((c) => String(c.description).includes('_ASYNC_INJECTED_'))).toBe(true)
+    // 第 2 岁：onAfterYear 的注入也在当年。
+    expect(await store.advanceYear()).toBe(true)
+    const year2 = store.history.find((h) => h.age === 2)
+    expect(year2.items.some((c) => String(c.description).includes('_ASYNC_AFTER_'))).toBe(true)
+    // 推进期间/结束后都不是"卡在生成中"。
+    expect(store.advancing).toBe(false)
+    // 复原（避免影响别的用例）。
+    syncSpy.mockRestore()
+  })
+
+  test('AB：没有异步 Mod → 仍然走同步 next()（老路径一个字不改）', async () => {
+    // store（**没有**异步 Mod）。
+    const store = await initStore({ async: false })
+    // 判定为同步集合。
+    expect(store.hasAsyncMods).toBe(false)
+    // 钉住同步路径：`next` 被调用、`nextAsync` 完全没被碰。
+    const syncSpy = vi.spyOn(store.life, 'next')
+    const asyncSpy = vi.spyOn(store.life, 'nextAsync')
+    // 推进。
+    expect(await store.advanceYear()).toBe(true)
+    // 同步路径。
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    // 异步路径没被用。
+    expect(asyncSpy).not.toHaveBeenCalled()
+    // 轨迹照旧累积。
+    expect(store.history.length).toBe(1)
+    // 还原。
+    syncSpy.mockRestore()
+    asyncSpy.mockRestore()
+  })
+
+  test('AC：同步集合下 advanceYear 内部是同步的（await 之前轨迹就已经记好）', async () => {
+    // store（同步集合）。
+    const store = await initStore({ async: false })
+    // 起一次推进（不 await）。
+    const pending = store.advanceYear()
+    // 同步路径 → 调用返回时轨迹已经更新（`await` 只是形式）。
+    expect(store.history.length).toBe(1)
+    // 等它收尾。
+    expect(await pending).toBe(true)
+  })
+
+  test('AD：换局（clearTrace）会丢弃在途的异步结果（不留半截轨迹）', async () => {
+    // store（带异步 Mod）。
+    const store = await initStore({ async: true })
+    // 起一次异步推进（不 await：它要等 mod 的 await 点）。
+    const pending = store.advanceYear()
+    // 立刻换局（模拟"用户点了重开/离开页面"）。
+    store.clearTrace()
+    // 等那次推进回来（结果必须被丢弃）。
+    await pending
+    // 轨迹仍是空的（没有把旧一岁的条目写进新一局）。
+    expect(store.history.length).toBe(0)
+    // 也不该卡在"生成中"。
+    expect(store.advancing).toBe(false)
+  })
+
+  test('AE：异步钩子超时 → warn + 继续推进（慢后端不卡死游戏）', async () => {
+    // store（异步 Mod + 极小超时）。
+    const store = await initStore({ async: true, timeoutMs: 5 })
+    // 手工挂一个**永不 resolve** 的异步钩子（模拟"后端不响应"）。
+    // ⚠️ 必须带 `async: true` 标记 —— 没有标记的回调在 nextAsync 里是同步调用的（不 await）。
+    store.modHooks.on('onBeforeYear', () => new Promise(() => {}), { modName: 'never-mod', async: true })
+    // 推进（必须在有限时间内返回）。
+    expect(await store.advanceYear()).toBe(true)
+    // 这一年照样记进轨迹（超时不会让引擎丢掉这一年）。
+    expect(store.history.length).toBeGreaterThan(0)
+    // 出声（日志面板里能看到 Mod 名与钩子名）。
+    expect(store.logBuffer.some((l) => l.includes('onBeforeYear') && l.includes('never-mod') && l.includes('超时'))).toBe(true)
+    // 不卡在生成中。
+    expect(store.advancing).toBe(false)
   })
 })
