@@ -23,7 +23,7 @@
 - **G1** 引擎（`packages/core`）只负责：年份自增、按序调用 Mod 钩子、维护状态、提供随机源与输出通道。
 - **G2** 一局可**确定性复现**：同一 seed + 同一 Mod 集合 ⇒ 同一状态快照。
 - **G3** 状态变更**可追踪**：每次写入记录 `{year, path, modId}`，冲突当场暴露。
-- **G4** 浏览器里用一套最小内容 Mod 就能完整玩一局（出生 → 逐年 → 死亡 → 结算）。
+- **G4** 浏览器里用一套最小内容 Mod（**仅两个事件：无事发生／死亡**）能跑完一局（开始 → 逐年 → 结算）。
 
 ## 3. 非目标（本期不做）
 
@@ -47,7 +47,8 @@
 - **C2** 单机、无后端。浏览器端不引入服务端依赖。
 - **C3** ESM only；`packages/core` **零运行时依赖**，测试用 `node --test`（不自带 vitest 依赖）。
 - **C4** 钩子可返回 Promise，但**每年严格串行 await**（确定性优先）。
-- **C5** 前端仍然 Vue + Vite（零成本延续），但**只读 state、只消费事件流**。
+- **C5** 前端本期为**零依赖静态页**（原生 ESM + HTML，`python -m http.server` 即可打开），
+  不引入 Vue/Vite/任何 npm 依赖，也不需要联网安装；Vue 推迟到确有需要时。
 
 ## 6. 备选方案与选择
 
@@ -72,8 +73,8 @@ packages/core/src/
   bus.js        emit/log：事件流（唯一输出通道）
   ctx.js        门面：每个 Mod 一个实例，锁死内部对象
   runtime.js    宿主：加载、依赖排序、生命周期、全局副作用检测
-packages/mods/base/      属性、逐年规则、死亡判定（内容）
-packages/frontend/       Vue 渲染：只读 state + 消费事件流
+packages/frontend/       零依赖静态页：index.html + app.js（只读 state + 消费事件流）
+packages/mods/base/      内容：仅两个事件 —— 无事发生 / 死亡
 ```
 
 ### 7.2 一年时序
@@ -154,6 +155,8 @@ state 是**单一 JSON 树**，路径一律 `namespace.key`，namespace 取 Mod 
 - 事件 payload 不做 schema 校验，只要求 JSON 可序列化。
 - 冲突检测粒度：同一 `(year, path)` 被两个 Mod 写入 → `emit('core:conflict')`。
 - 前端首版三屏：开局（seed + 开始）、逐年（事件流）、结算（`summary`）；不做动画与主题。
+- `base` mod 只含两个事件：`nothing`（这一年无事发生）与 `death`（`ctx.end('death')`），
+  每年用 `ctx.rng` 二选一 —— 目的是证明推进核与前端通路，不是复刻玩法。
 - 结算通过 `summary` 事件传递，前端不读任何 Mod 专属 state 路径。
 - 存档本期只做 API + 快照往返测试，不做界面入口。
 - 前端本期不引入 vitest，只做浏览器手测；自动化测试集中在 `packages/core`。
