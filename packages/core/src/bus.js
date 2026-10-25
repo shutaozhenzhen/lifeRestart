@@ -25,6 +25,7 @@ export function createBus() {
         entry[key] = JSON.parse(JSON.stringify(raw[key]))
       }
     }
+    Object.freeze(entry)
     list.push(entry)
     return entry
   }

@@ -8,10 +8,15 @@ function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 }
 
+const FORBIDDEN = new Set(['__proto__', 'prototype', 'constructor'])
+
 function splitPath(path) {
   if (typeof path !== 'string' || path === '') throw new TypeError('path 必须是非空字符串')
   const parts = path.split('.')
   if (parts.some((p) => p === '')) throw new TypeError(`非法 path: ${path}`)
+  for (const part of parts) {
+    if (FORBIDDEN.has(part)) throw new TypeError(`path 不允许使用 ${part}: ${path}`)
+  }
   return parts
 }
 
@@ -32,7 +37,7 @@ export function createState(initial = {}) {
   function get(path) {
     let node = tree
     for (const part of splitPath(path)) {
-      if (node === null || typeof node !== 'object' || !(part in node)) return undefined
+      if (node === null || typeof node !== 'object' || !Object.hasOwn(node, part)) return undefined
       node = node[part]
     }
     return clone(node)
@@ -43,7 +48,7 @@ export function createState(initial = {}) {
     assertJson(value, path)
     let node = tree
     for (const part of parts.slice(0, -1)) {
-      if (node[part] === null || typeof node[part] !== 'object' || Array.isArray(node[part])) {
+      if (!Object.hasOwn(node, part) || node[part] === null || typeof node[part] !== 'object' || Array.isArray(node[part])) {
         node[part] = {}
       }
       node = node[part]
@@ -54,15 +59,16 @@ export function createState(initial = {}) {
     changes.push({ year: meta.year ?? null, path, modId: meta.modId ?? null, oldValue })
   }
 
+  // 必须走 api.set（而不是闭包里的 set）：runtime 会替换 api.set 来挂冲突检测。
   function update(path, fn, meta = {}) {
-    set(path, fn(get(path)), meta)
+    api.set(path, fn(get(path)), meta)
   }
 
   function keys(prefix = '') {
     return flatten(tree, '', []).filter((k) => k.startsWith(prefix)).sort()
   }
 
-  return {
+  const api = {
     get,
     set,
     update,
@@ -77,4 +83,5 @@ export function createState(initial = {}) {
       return changes
     },
   }
+  return api
 }

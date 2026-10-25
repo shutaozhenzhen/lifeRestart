@@ -13,7 +13,7 @@
 ## 跑起来
 
 ```bash
-# 测试（46 个，零依赖，node 22+）
+# 测试（61 个，零依赖，node 22+）
 cd packages/core && node --test
 
 # 浏览器（无需安装任何依赖）

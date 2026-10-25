@@ -65,7 +65,8 @@ export function createRuntime({ mods = [], seed = 'default', initial = {}, failF
   let rng = createRng(seed)
   let clock
 
-  const build = (startYear) => createClock({ mods: ordered, state, bus, rng, failFast, startYear })
+  const build = (startYear, startEnded = false, startReason = undefined) =>
+    createClock({ mods: ordered, state, bus, rng, failFast, startYear, startEnded, startReason })
 
   // 冲突检测：同 (year, path) 被不同 mod 写入 → core:conflict。
   const rawSet = state.set
@@ -96,16 +97,28 @@ export function createRuntime({ mods = [], seed = 'default', initial = {}, failF
       seed,
       rng: rng.state(),
       year: clock.year,
+      ended: clock.ended,
+      reason: clock.endedReason,
       state: state.snapshot(),
       mods: ordered.map((m) => ({ id: m.manifest.id, version: m.manifest.version })),
     }),
+    // 所有校验都做完才动内部状态：读档失败必须让运行时保持原样。
     load(snap) {
       if (!snap || snap.version !== 1) throw new TypeError('不支持快照版本')
       if (snap.seed !== seed) throw new Error('快照 seed 与运行时不一致')
+      if (!Number.isInteger(snap.year) || snap.year < 0) throw new TypeError('快照 year 必须是非负整数')
+      const nextRng = rngFromState(snap.rng)
+      const expected = ordered.map((m) => `${m.manifest.id}@${m.manifest.version}`)
+      const actual = (snap.mods ?? []).map((m) => `${m.id}@${m.version}`)
+      if (expected.join(',') !== actual.join(',')) {
+        throw new Error(`快照的 mod 集合与当前不一致：${actual.join(',')} ≠ ${expected.join(',')}`)
+      }
       state.load(snap.state)
-      rng = rngFromState(snap.rng)
-      clock = build(snap.year)
+      rng = nextRng
+      bus.clear()
+      clock = build(snap.year, Boolean(snap.ended), snap.reason)
     },
+    dispose: () => clock.dispose(),
     get events() {
       return bus.events
     },
