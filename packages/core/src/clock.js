@@ -5,8 +5,8 @@ import { createCtx } from './ctx.js'
 
 const PHASES = ['onYearBefore', 'onYear', 'onYearAfter']
 
-export function createClock({ mods, state, bus, rng, failFast = false }) {
-  let year = 0
+export function createClock({ mods, state, bus, rng, failFast = false, startYear = 0 }) {
+  let year = startYear
   let ended = false
   let endedReason = undefined
 
