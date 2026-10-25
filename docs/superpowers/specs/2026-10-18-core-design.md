@@ -31,6 +31,8 @@
 - AI 生成内容、在线 Mod 安装/文档站、i18n、命令行批量模拟（`sim`/`cli`）。
 - 旧存档兼容、旧 Mod 的 API 向后兼容（后续可用 shim 单独做）。
 - 性能优化（如并行批量跑局）。
+- **玩家选择（选天赋 / 分配属性 / 任何分支）**：留给后续的 Mod 与其配套扩展实现，
+  本期引擎**不含输入通道**，`advance()` 是单向推进；一局完全由 seed 决定。
 
 ## 4. 反目标（出现即视为设计失败）
 
@@ -103,8 +105,11 @@ ctx.log(text)                     // = emit('log', { text })
 ctx.end(reason, detail?)          // 宣告结束
 ```
 
-**不提供**：state 原始对象、`Math.random`、`Date.now`、文件系统、网络。
+**不提供**：state 原始对象、`Math.random`、`Date.now`、文件系统、网络、玩家输入。
 `runtime` 在开发模式检测 Mod 直接使用 `Math.random`/`Date.now` 并告警。
+
+**后续扩展点（不在本期契约内）**：将来要做玩家选择，最自然的加法是 `runtime` 暴露
+`awaitInput(request)`（emit 请求 → 挂起 → 前端提交答案），接口形状预留但不实现。
 
 ### 7.4 状态：全局共享 + 命名前缀（我的判断，可推翻）
 
@@ -122,30 +127,46 @@ state 是**单一 JSON 树**，路径一律 `namespace.key`，namespace 取 Mod 
 ```
 
 - 快照 = `year + rng 状态 + state`，因为 state 只含 JSON，`JSON.stringify` 即完整存档。
-- 回放判据：同 seed、同 Mod 集合，跑 N 年到快照的 hash 必须一致（黄金测试）。
+- 回放判据：同 seed、同 Mod 集合，跑 N 年后的 **state 快照 + 事件流** canonical JSON 的 hash 必须一致（黄金测试）。
+  只对 state 取 hash 会漏掉「状态一样、叙事变了」这类回归。
 - 变更日志用于调试与冲突检测，不进入存档。
 
 ### 7.6 事件流与前端渲染契约
 
-首期只有四种 kind：`log`（叙事文本）、`stat`（属性变化提示）、`stage`（人生阶段切换）、
-`year:end`。前端按 kind 渲染；**Mod 永远不碰 DOM**。`manifest.ui` 之类声明式 UI 本期不做。
+首期 kind：`log`（叙事）、`stat`（属性/数值变化，带 `delta`）、`stage`（阶段切换）、
+`summary`（结算，payload 为通用 JSON，前端按结构渲染，**不让前端读某个 Mod 的专属 state 路径**）、
+`year:end`、`core:error`、`core:conflict`。
+
+每条 entry 形如 `{ kind, year, modId, text?, payload?, delta? }`；`stat` 由 Mod 自己 emit，
+引擎**不**在 `ctx.set` 时自动发事件（引擎不懂属性的含义）。前端按 kind 渲染；
+**Mod 永远不碰 DOM**。`manifest.ui` 之类声明式 UI 本期不做。
 
 ### 7.7 Mod 生命周期与隔离
 
 `init(ctx)` → 每年三段钩子 → `dispose()`。钩子抛错：记录并 `emit('core:error')`，
 默认**继续**（一局不因单个 Mod 崩溃而丢），开发模式可设为 fail-fast。
 
-## 8. 留给构建者的判断（已按此执行）
+**顺序**：manifest 的显式 `order`（数字）→ `requires` 拓扑排序 → `id` 字典序兜底；
+依赖成环直接抛错。`init` 执行顺序与钩子顺序一致，保证不同机器上结果相同。
 
-- 事件 payload 暂不做 schema 校验，只要求 JSON。
+## 8. 已定的实现级判断
+
+- 事件 payload 不做 schema 校验，只要求 JSON 可序列化。
 - 冲突检测粒度：同一 `(year, path)` 被两个 Mod 写入 → `emit('core:conflict')`。
-- 前端首版只做三屏：开局、逐年、结算（不做动画与主题）。
+- 前端首版三屏：开局（seed + 开始）、逐年（事件流）、结算（`summary`）；不做动画与主题。
+- 结算通过 `summary` 事件传递，前端不读任何 Mod 专属 state 路径。
+- 存档本期只做 API + 快照往返测试，不做界面入口。
+- 前端本期不引入 vitest，只做浏览器手测；自动化测试集中在 `packages/core`。
+- **禁用词表**（只扫 `packages/core/src` 的非注释代码）：`constitution` `intelligence`
+  `strength` `charm` `money` `talent` `achievement` `grade` `event`（作为游戏事件池含义时）
+  `death`（作为死亡判定时）。宿主概念 `year` `age` `stage` `stat` `log` `end` `advance` 允许。
+- 玩家选择不在本期（见 §3），引擎不提供输入通道。
 
 ## 9. 验收标准
 
 1. 不加载任何 Mod 跑 100 年：产出 100 条 `year:end`，不崩。
 2. `packages/core` 源码中 grep 不到语义词（脚本自动断言）。
-3. 同 seed 跑两次，快照 hash 相同；换 seed 则不同。
+3. 同 seed 跑两次，**state + 事件流**的 hash 相同；换 seed 则不同。
 4. `base` Mod 在浏览器中完整玩一局（出生 → 死亡 → 结算）。
 5. `core` 自带测试覆盖：调度顺序、JSON 校验、RNG 确定性、快照往返、错误隔离、冲突告警。
 
