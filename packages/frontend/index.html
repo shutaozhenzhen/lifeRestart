@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>人生重开模拟器 v2</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>人生重开模拟器 <small>v2 内核演示</small></h1>
+      <div class="bar">
+        <label for="seed">seed</label>
+        <input id="seed" value="life" />
+        <button id="start">开始</button>
+        <span class="year">第 <b id="year">0</b> 年</span>
+      </div>
+    </header>
+    <section id="log" aria-live="polite"></section>
+    <section id="summary" hidden></section>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

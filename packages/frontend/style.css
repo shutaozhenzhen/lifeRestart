@@ -1,0 +1,22 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px;
+  font: 15px/1.6 system-ui, -apple-system, "Noto Sans CJK SC", sans-serif;
+  background: #14161a; color: #e6e6e6;
+}
+main { max-width: 720px; margin: 0 auto; }
+h1 { font-size: 18px; margin: 0 0 12px; }
+h1 small { color: #8a8f98; font-weight: 400; font-size: 12px; }
+.bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+input { width: 120px; padding: 6px 8px; border-radius: 6px; border: 1px solid #3a3f46; background: #1b1e24; color: inherit; }
+button { padding: 6px 14px; border-radius: 6px; border: 1px solid #3a3f46; background: #2a2f37; color: inherit; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.year { margin-left: auto; color: #8a8f98; font-variant-numeric: tabular-nums; }
+#log { margin-top: 16px; }
+.line { padding: 3px 0; border-bottom: 1px solid #22262c; }
+.line .n { display: inline-block; width: 3.2em; color: #6a7078; font-variant-numeric: tabular-nums; }
+.line.stat { color: #ff9f6b; }
+.line.err { color: #ff6b6b; }
+#summary { margin-top: 20px; padding: 14px 16px; border: 1px solid #3a3f46; border-radius: 8px; background: #1b1e24; }
+#summary h2 { font-size: 15px; margin: 0 0 8px; }
