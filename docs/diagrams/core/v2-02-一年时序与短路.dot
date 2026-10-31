@@ -1,0 +1,50 @@
+/**
+ * 图 v2-02 · 一年时序：advance() 的完整控制流
+ * 说明：对应 clock.js 的 advance()（第 82-95 行），外加错误隔离与守卫两处横切。
+ * 渲染：dot -Tsvg v2-02-一年时序与短路.dot -o v2-02-一年时序与短路.svg
+ */
+digraph V2Year {
+  graph [rankdir=TB, fontname="Microsoft YaHei", fontsize=13,
+         label="图 v2-02 · 一年时序 —— advance() 的控制流（三段钩子 × 逐 Mod 串行，ctx.end 短路）",
+         labelloc=t, nodesep=0.4, ranksep=0.35, bgcolor="white", pad=0.35]
+  node [shape=box style="rounded,filled" fontname="Microsoft YaHei" fontsize=10 fillcolor="#eef3fb" color="#5b7db1"]
+  edge [fontname="Microsoft YaHei" fontsize=9 color="#7a8aa0"]
+
+  start [shape=oval fillcolor="#e3f5e3" color="#2e7d32" label="await advance()"]
+  q1    [shape=diamond fillcolor="#fff6d6" color="#c9a227" label="已结束？\n（ended）"]
+  r1    [fillcolor="#f6f6f6" color="#888888" label="直接返回\n{ year, ended: true, reason }\n（幂等：年份不变、不再发事件）"]
+  boot  [fillcolor="#dbe9ff" color="#1b4f9c" label="boot()\n· booted 标志保证 init 只跑一次\n· 逐 mod：await runAs(i, init(ctx))\n· init 可能改状态，但此时 year 还是上一年"]
+  y     [fillcolor="#dbe9ff" color="#1b4f9c" label="year += 1\n（自增发生在所有钩子之前 → 钩子读到的 ctx.year 已是新年）"]
+  phase [fillcolor="#dbe9ff" color="#1b4f9c" label="for phase of [onYearBefore, onYear, onYearAfter]"]
+  mods  [fillcolor="#dbe9ff" color="#1b4f9c" label="for i of 有序 mods（严格串行：await 完一个再下一个）"]
+  call  [fillcolor="#fff1e0" color="#b06a00" label="callHook(i, phase)\ntry { await runAs(i, () => mod[phase](ctx)) }\nrunAs 期间 activeId = 该 mod 的 id"]
+  q2    [shape=diamond fillcolor="#fde8e8" color="#b71c1c" label="钩子里调了\nctx.end()？"]
+  q3    [shape=diamond fillcolor="#fde8e8" color="#b71c1c" label="钩子抛错？"]
+  end1  [fillcolor="#fde8e8" color="#b71c1c" label="ctx.end(reason, detail?)\n· 幂等（第二次返回 false）\n· 先校验 reason 非空 + detail 是 JSON 再落闸\nclock 侧：ended = true, endedReason = reason\n→ emit summary { reason, detail, years }"]
+  short [fillcolor="#fde8e8" color="#b71c1c" penwidth=2 label="立刻 break\n· 当年余下的 mod 不再调用\n· 后续两个 phase 整体跳过（for 外层也 break）"]
+  err   [fillcolor="#fde8e8" color="#b71c1c" label="emit core:error { phase, message }\n· 只留 message，不留 stack\n  （stack 含绝对路径 → 同 seed 的 hash 跨机器不一致）\n· 继续下一个 mod；failFast: true 才重新抛"]
+  next  [fillcolor="#eef3fb" color="#5b7db1" label="下一个 mod / 下一个 phase\n（未定义某段的 mod 直接 return）\n循环顶部重新检查 ended：抛错前若已 end，也会退出"]
+  ye    [fillcolor="#fff6d6" color="#c9a227" penwidth=2 label="无条件 emit year:end { year, modId: 'core' }\n（即使当年 ctx.end 提前结束，这条也发）"]
+  ret   [shape=oval fillcolor="#e3f5e3" color="#2e7d32" label="return ended ? { year, ended: true, reason }\n               : { year, ended: false }"]
+
+  guard [shape=note fillcolor="#fff6d6" color="#c9a227" label="横切：守卫（ctx.js 的 guard）\n每个 ctx 写操作都先查 isActive()\nactiveId 只在该 mod 自己的钩子里等于它\n→ 钩子外（定时器 / Promise 回调里）调用\n  抛出「mod x 在钩子之外调用 ctx.set（会破坏确定性）」"]
+  serial [shape=note fillcolor="#f6f6f6" color="#888888" label="横切：为什么必须串行\n三个钩子共享同一棵 state 树，\nA 在 onYear 写的值 B 在 onYearAfter 要读\n→ 并发执行会让「谁先谁后」变成非确定性\n所以逐 mod await，一个都不并行"]
+
+  start -> q1
+  q1 -> r1 [label="是"]
+  q1 -> boot [label="否"]
+  boot -> y -> phase -> mods -> call
+  call -> q3
+  q3 -> err [label="是"]
+  err -> next
+  q3 -> q2 [label="否"]
+  q2 -> end1 [label="是"]
+  end1 -> short
+  short -> ye [label="跳出全部循环"]
+  q2 -> next [label="否"]
+  next -> mods [label="还有下一个", style=dashed]
+  next -> ye [label="三个阶段都跑完"]
+  ye -> ret
+  guard -> call [style=dashed color="#c9a227"]
+  serial -> mods [style=dashed color="#888888"]
+}

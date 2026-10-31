@@ -1,0 +1,58 @@
+/**
+ * 图 v2-01 · v2 内核结构：内容层 / 宿主层 / 门面层 / 基础设施
+ * 说明：v2 是零依赖 ES module 实现（packages/core，61 个 node --test 用例）。
+ *       引擎只做「年份+1 后按序问各 Mod」，不认识任何游戏概念。
+ * 渲染：dot -Tsvg v2-01-模块结构与边界.dot -o v2-01-模块结构与边界.svg
+ *       dot -Tpng -Gdpi=130 v2-01-模块结构与边界.dot -o v2-01-模块结构与边界.png
+ */
+digraph V2Structure {
+  graph [rankdir=TB, fontname="Microsoft YaHei", fontsize=13,
+         label="图 v2-01 · v2 内核结构 —— 门面式 Mod 契约，引擎零游戏语义（packages/core，8 个源文件 / 61 个测试）",
+         labelloc=t, nodesep=0.35, ranksep=0.55, bgcolor="white", pad=0.35]
+  node [shape=box style="rounded,filled" fontname="Microsoft YaHei" fontsize=10 fillcolor="#eef3fb" color="#5b7db1"]
+  edge [fontname="Microsoft YaHei" fontsize=9 color="#7a8aa0"]
+
+  subgraph cluster_content {
+    label="内容层 · Mod（唯一知道「游戏」是什么的地方）" fontsize=11 color="#2e7d32" style="rounded"
+    base [fillcolor="#e3f5e3" color="#2e7d32" label="packages/mods/base/index.js（22 行，全部内容）\nexport const manifest = { id: 'base', name: '最小内容', version: '0.1.0', order: 0 }\nexport function init() {}\nexport function onYear(ctx) {\n  ctx.rng.int(10) === 0\n    ? (ctx.emit('stat', { text: '生命结束' }), ctx.end('death', { year: ctx.year }))\n    : ctx.log('这一年无事发生')\n}\nexport function dispose() {}"]
+    other [fillcolor="#f2f9f2" color="#2e7d32" style="dashed,rounded" label="任何别的 Mod 同形：一个 ES module\n换 mods 数组 = 换一套玩法\n（本期只有 base：无事发生 / 死亡两个事件）"]
+  }
+
+  subgraph cluster_host {
+    label="宿主层 · 装配与生命周期（runtime → clock）" fontsize=11 color="#1b4f9c" style="rounded"
+    runtime [fillcolor="#dbe9ff" color="#1b4f9c" penwidth=2 label="runtime.js（132 行）· createRuntime({ mods, seed, initial, failFast })\nresolveOrder：显式 order → requires 拓扑 → id 字典序（成环抛错）\n包装 state.set 挂冲突检测（同一年 + 同一路径 + 不同 mod → core:conflict）\nsnapshot() / load(snap) / dispose()"]
+    clock [fillcolor="#dbe9ff" color="#1b4f9c" penwidth=2 label="clock.js（117 行）· createClock({ mods, state, bus, rng, failFast, startYear, startEnded })\n一年 = onYearBefore → onYear → onYearAfter，逐 mod 严格串行 await\nctx.end() 立刻中止当年余下钩子与后续阶段\n错误隔离：emit core:error 后继续下一个 mod（failFast 才抛）\n无条件 emit year:end"]
+  }
+
+  subgraph cluster_facade {
+    label="边界层 · 门面（Mod 能碰到的全部）" fontsize=11 color="#b06a00" style="rounded"
+    ctx [fillcolor="#fff1e0" color="#b06a00" penwidth=2 label="ctx.js（76 行）· Object.freeze(ctx) + Object.freeze(ctx.rng)\nctx.year｜get(path)｜set(path, value)｜update(path, fn)｜keys(prefix)\nctx.rng.int(n)｜float()｜pick(xs)｜weighted(entries)\nctx.emit(kind, payload)｜log(text)｜end(reason, detail?)\n守卫 isActive()：钩子之外调用写操作 → 抛「会破坏确定性」"]
+  }
+
+  subgraph cluster_infra {
+    label="基础设施 · 不对外（Mod 拿不到本体）" fontsize=11 color="#6a6a6a" style="rounded" labeljust=l labelloc=b
+    state [fillcolor="#f6f6f6" color="#888888" label="state.js（87 行）\n单一 JSON 树 + 点路径\nbase.attrs.constitution 式命名\nget 返回深拷贝 / set 校验 JSON\n禁 __proto__ / prototype / constructor\n变更日志 { year, path, modId, oldValue }"]
+    rng [fillcolor="#f6f6f6" color="#888888" label="rng.js（68 行）\nsfc32 + cyrb128 展开 seed\n状态 = 4 个 32 位整数\n→ 存档即续跑（JSON 可序列化）\nint / next / pick / weighted"]
+    bus [fillcolor="#fff6d6" color="#c9a227" label="bus.js（42 行）\n唯一输出通道\nentry 必须 { kind, year, modId }\n可选 text / payload / delta（必须 JSON）\nentry 冻结，events 返回副本\nkind：log / stat / summary / year:end\ncore:error / core:conflict / 自定义"]
+    json [fillcolor="#f6f6f6" color="#888888" label="json.js\nassertJson：只允许 JSON 值\n（拒绝函数 / undefined / NaN / Date）"]
+  }
+
+  front [fillcolor="#f3e5f5" color="#7b1fa2" label="packages/frontend/app.js（76 行，零依赖 ES module）\ncreateRuntime({ mods: [base], seed })\n每 140ms await runtime.advance()\n只按 runtime.events 增量渲染（不碰任何游戏逻辑）"]
+
+  boundary [shape=note fillcolor="#fde8e8" color="#b71c1c" label="边界清单（Mod 拿不到的东西）\n· state / bus / rng 本体（只有门面）\n· Math.random / Date.now（确定性靠 sfc32）\n· 文件系统 / 网络 / 玩家输入\n· 钩子之外的任何时机（setTimeout 里写状态会抛错）"]
+  zero [shape=note fillcolor="#e3f5e3" color="#2e7d32" label="引擎零游戏语义的机器守卫\nno-semantics.test.js 用 grep 断言\npackages/core/src 的非注释代码\n不含 constitution / talent / death /\nachievement 等语义词"]
+
+  front -> runtime [label="createRuntime"]
+  runtime -> clock [label="build(0) / build(snapshot.year)"]
+  clock -> ctx [label="每个 mod 一个实例"]
+  base -> ctx [label="只在钩子内调用"]
+  other -> ctx [style=dashed]
+  ctx -> state [label="get / set / update / keys"]
+  ctx -> rng [label="唯一随机源"]
+  ctx -> bus [label="emit / log"]
+  state -> json [style=dashed label="校验 / 克隆"]
+  clock -> bus [label="core:error / summary / year:end"]
+  runtime -> state [style=dashed label="包装 set：冲突检测"]
+  ctx -> boundary [style=dashed color="#b71c1c"]
+  clock -> zero [style=dashed color="#2e7d32"]
+}

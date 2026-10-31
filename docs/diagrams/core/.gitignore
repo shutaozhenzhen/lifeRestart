@@ -1,0 +1,3 @@
+# PNG 是本地产物（渲染预览用），不入库；只提交 .dot 源与 .svg。
+# 需要时在本地跑：dot -Tpng -Gdpi=130 x.dot -o x.png
+*.png

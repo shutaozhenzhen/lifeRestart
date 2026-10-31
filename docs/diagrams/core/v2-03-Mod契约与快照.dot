@@ -1,0 +1,77 @@
+/**
+ * 图 v2-03 · Mod 契约 + ctx 门面 + 快照/读档 + 三条硬约束
+ * 说明：契约原文见 docs/superpowers/specs/2026-10-18-core-design.md §7.3；
+ *       快照形状见 runtime.js 的 snapshot() / load()；硬约束见 ctx.js 与 clock.js。
+ * 版式：两列（左 = 契约与约束，右 = 门面 → 快照 → 读档），避免横向拉成细条。
+ * 渲染：dot -Tsvg v2-03-Mod契约与快照.dot -o v2-03-Mod契约与快照.svg
+ */
+digraph V2Contract {
+  graph [rankdir=TB, fontname="Microsoft YaHei", fontsize=13,
+         label="图 v2-03 · Mod 契约、ctx 门面、快照往返与三条硬约束",
+         labelloc=t, nodesep=0.5, ranksep=0.7, bgcolor="white", pad=0.35]
+  node [shape=box style="rounded,filled" fontname="Microsoft YaHei" fontsize=10 fillcolor="#eef3fb" color="#5b7db1"]
+  edge [fontname="Microsoft YaHei" fontsize=9 color="#7a8aa0"]
+
+  mod [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#2e7d32">
+    <TR><TD BGCOLOR="#2e7d32" COLSPAN="2"><FONT COLOR="white">Mod = 一个 ES module（除 manifest 外全部可选）</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT" BALIGN="LEFT"><B>manifest</B></TD><TD ALIGN="LEFT" BALIGN="LEFT">id（唯一）/ name / version；可选 order（缺省 Infinity）、requires[]</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>init(ctx)</B></TD><TD ALIGN="LEFT">开局前一次（boot 内，按序）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>onYearBefore(ctx)</B></TD><TD ALIGN="LEFT">每年第一段（如结算上一年遗留效果）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>onYear(ctx)</B></TD><TD ALIGN="LEFT">每年主逻辑（内容 Mod 的主战场）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>onYearAfter(ctx)</B></TD><TD ALIGN="LEFT">每年第三段（如统一收尾 / 检查结束条件）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>dispose(ctx)</B></TD><TD ALIGN="LEFT">结束时逆序调用（runtime.dispose）</TD></TR>
+  </TABLE>>]
+
+  ctx [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#b06a00">
+    <TR><TD BGCOLOR="#b06a00" COLSPAN="2"><FONT COLOR="white">ctx 门面：Mod 能碰到的全部（冻结对象）</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>ctx.year</B></TD><TD ALIGN="LEFT">只读数字（钩子内已是新年）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>get(path)</B></TD><TD ALIGN="LEFT">点路径读取，返回深拷贝</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>set(path, value)</B></TD><TD ALIGN="LEFT">写；值必须 JSON 可序列化，否则抛错</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>update(path, fn)</B></TD><TD ALIGN="LEFT">原子读改写（走 api.set，所以也参与冲突检测）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>keys(prefix)</B></TD><TD ALIGN="LEFT">前缀枚举（调试 / 迁移用）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>rng.int(n)</B></TD><TD ALIGN="LEFT">0..n-1 整数</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>rng.float()</B></TD><TD ALIGN="LEFT">0..1 浮点（内部 next）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>rng.pick(xs)</B></TD><TD ALIGN="LEFT">从非空数组取一个</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>rng.weighted(es)</B></TD><TD ALIGN="LEFT">[[值, 权重], ...]，权重和必须大于 0</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>emit(kind, payload)</B></TD><TD ALIGN="LEFT">发事件（payload 必须 JSON）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>log(text)</B></TD><TD ALIGN="LEFT">等于 emit('log', { text })</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>end(reason, detail?)</B></TD><TD ALIGN="LEFT">宣告结束（幂等；先校验再落闸）</TD></TR>
+  </TABLE>>]
+
+  snap [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#1b4f9c">
+    <TR><TD BGCOLOR="#1b4f9c" COLSPAN="2"><FONT COLOR="white">快照 = 完整存档（JSON.stringify 即落盘）</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>version</B></TD><TD ALIGN="LEFT">1（其他值 load 直接抛）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>seed</B></TD><TD ALIGN="LEFT">必须与运行时一致</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>rng</B></TD><TD ALIGN="LEFT">[a, b, c, d] 四个 32 位整数（sfc32 状态）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>year</B></TD><TD ALIGN="LEFT">非负整数</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>ended / reason</B></TD><TD ALIGN="LEFT">结束态也要存（读档后仍是结束态）</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>state</B></TD><TD ALIGN="LEFT">整棵 JSON 树</TD></TR>
+    <TR><TD ALIGN="LEFT"><B>mods</B></TD><TD ALIGN="LEFT">[{ id, version }]，load 时逐个 id@version 比对</TD></TR>
+  </TABLE>>]
+
+  load [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7b1fa2">
+    <TR><TD BGCOLOR="#7b1fa2" COLSPAN="2"><FONT COLOR="white">load(snap)：全部通过才动内部状态</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">1</TD><TD ALIGN="LEFT">snap 是对象且 version === 1</TD></TR>
+    <TR><TD ALIGN="LEFT">2</TD><TD ALIGN="LEFT">seed 与运行时相同</TD></TR>
+    <TR><TD ALIGN="LEFT">3</TD><TD ALIGN="LEFT">year 是非负整数</TD></TR>
+    <TR><TD ALIGN="LEFT">4</TD><TD ALIGN="LEFT">rngFromState([4 个整数])（形状不对直接抛）</TD></TR>
+    <TR><TD ALIGN="LEFT">5</TD><TD ALIGN="LEFT">mods 的 id@version 序列与当前完全一致</TD></TR>
+    <TR><TD ALIGN="LEFT">6</TD><TD ALIGN="LEFT">state.load + 换 rng + bus.clear() + 重建 clock 与全部 ctx</TD></TR>
+    <TR><TD ALIGN="LEFT">✗</TD><TD ALIGN="LEFT">任一步失败：运行时保持原样（有 I2 用例）</TD></TR>
+  </TABLE>>]
+
+  rules [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#b71c1c">
+    <TR><TD BGCOLOR="#b71c1c" COLSPAN="2"><FONT COLOR="white">三条硬约束（贯穿 ctx / clock / runtime，都有测试）</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT" BALIGN="LEFT"><B>① 守卫</B></TD><TD ALIGN="LEFT" BALIGN="LEFT">钩子之外调用 ctx.set / emit / log / rng.* / end 一律抛错（isActive 检查）<BR/>→ 异步续作不能偷偷改状态</TD></TR>
+    <TR><TD ALIGN="LEFT" BALIGN="LEFT"><B>② 冲突检测</B></TD><TD ALIGN="LEFT" BALIGN="LEFT">同一年 + 同一路径被不同 mod 写入 → emit core:conflict { path, mods: [旧, 新] }<BR/>只报不拦（全局共享 KV，覆盖是允许的）</TD></TR>
+    <TR><TD ALIGN="LEFT" BALIGN="LEFT"><B>③ 错误隔离</B></TD><TD ALIGN="LEFT" BALIGN="LEFT">单个钩子抛错 → core:error { phase, message }，其他 mod 继续<BR/>只留 message 不留 stack：stack 含绝对路径，会让跨机 hash 不一致</TD></TR>
+  </TABLE>>]
+
+  { rank=same; mod; ctx }
+  { rank=same; rules; snap }
+  mod -> ctx [label="钩子收到的唯一参数"]
+  ctx -> snap [label="ctx.set 写 state\nsnapshot() 出档"]
+  snap -> load [label="读档"]
+  rules -> ctx [style=dashed color="#b71c1c" label="约束"]
+  load -> ctx [style=invis]
+}
