@@ -1,0 +1,63 @@
+# lifeRestart/ —— 仓库级忽略规则（v2 分支）
+#
+# 原则：只忽略「能由命令重新生成的东西」和「本机环境产物」。
+# 判据自查：`git ls-files -z | git check-ignore -z --stdin` 必须没有输出
+# ——已跟踪的文件永远不该命中忽略规则；一旦命中，说明规则写得太宽。
+
+# ── 依赖与包管理器 ──────────────────────────────────────────
+node_modules/
+.pnpm-store/
+.pnpm/
+.yarn/
+.pnp.*
+pnpm-debug.log*
+
+# ── 构建产物（可重新生成）──────────────────────────────────
+dist/
+dist-web/
+build/
+out/
+release/
+www/
+nodejs-build/
+coverage/
+*.tsbuildinfo
+
+# ── 平台侧的大体积下载物 / 现场生成物 ──────────────────────
+# nodejs-mobile 运行时：每个 ABI 一个 libnode.so，合计约 188 MB
+platforms/mobile/.libnode/
+# `cap add android` 现场生成的 Android 工程（模板在 android-patch/）
+platforms/mobile/android/
+platforms/mobile/.tmp/
+# web 平台打包时从 packages/frontend/dist 复制过来的前端副本
+platforms/web/public/
+
+# ── 测试与工具缓存 ────────────────────────────────────────
+.cache/
+.vitest/
+.eslintcache
+
+# ── 日志与临时文件 ────────────────────────────────────────
+*.log
+*.tmp
+.tmp/
+
+# ── 本机环境变量（密钥只放本机，不入库）──────────────────
+.env
+.env.*
+!.env.example
+
+# ── 编辑器 / 操作系统垃圾文件 ─────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── 本仓库特有的生成物 ────────────────────────────────────
+# scripts/sync-mods.mjs 把 mods/ 复制并索引到前端 public 下（生成物；来源仍是 mods/）
+packages/frontend/public/mods/
+# 图表集只提交 .dot 源与 .svg；PNG 是本地产物（渲染预览用）
+docs/diagrams/**/*.png
